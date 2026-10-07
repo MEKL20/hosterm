@@ -7,6 +7,12 @@ Built with Tauri v2 (Rust backend + web UI). Spawns the real OS `ssh` binary in 
 embedded terminal, so everything in your `~/.ssh/config` is honored exactly as the
 command line would honor it (ProxyJump, IdentityFile, forwarding, Match blocks, etc.).
 
+![hosterm — host sidebar and embedded terminal](docs/screenshot-main.png)
+
+![hosterm — edit a host, written back to ~/.ssh/config](docs/screenshot-edit.png)
+
+> Screenshots use sample hosts; the app reads your real `~/.ssh/config`.
+
 ## Features
 
 - Sidebar listing every `Host` entry from `~/.ssh/config`
