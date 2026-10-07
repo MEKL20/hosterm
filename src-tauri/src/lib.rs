@@ -37,6 +37,23 @@ fn config_path() -> PathBuf {
     home.join(".ssh").join("config")
 }
 
+/// Read the config file safely. A MISSING file is normal (empty config).
+/// A file that EXISTS but cannot be read (bad perms, non-UTF8, I/O error)
+/// is an error we must surface — never silently treat it as empty, or the
+/// next save would overwrite the user's real config with nothing.
+fn read_config_text(path: &PathBuf) -> Result<String, String> {
+    match std::fs::read_to_string(path) {
+        Ok(s) => Ok(s),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(format!(
+            "refusing to proceed: {} exists but could not be read ({}). \
+             Fix the file before editing so hosterm does not overwrite it.",
+            path.display(),
+            e
+        )),
+    }
+}
+
 fn parse_config(text: &str) -> SshConfig {
     let mut preamble = Vec::new();
     let mut hosts: Vec<HostBlock> = Vec::new();
@@ -84,8 +101,11 @@ fn serialize_config(cfg: &SshConfig) -> String {
         out.push('\n');
     }
     for h in &cfg.hosts {
-        out.push_str("Host ");
-        out.push_str(&h.patterns.join(" "));
+        out.push_str("Host");
+        if !h.patterns.is_empty() {
+            out.push(' ');
+            out.push_str(&h.patterns.join(" "));
+        }
         out.push('\n');
         for line in &h.lines {
             match line {
@@ -143,12 +163,29 @@ fn write_config_file(path: &PathBuf, content: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    std::fs::write(path, content).map_err(|e| e.to_string())?;
+    // Atomic write: write a sibling temp file, set perms, then rename over the
+    // target. A crash mid-write leaves the original config intact rather than
+    // a truncated/corrupt file. Rename within the same dir is atomic on unix
+    // and replace-existing on Windows.
+    let tmp = {
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("config");
+        let mut t = path.clone();
+        t.set_file_name(format!(".{}.hosterm-tmp-{}", name, std::process::id()));
+        t
+    };
+    std::fs::write(&tmp, content).map_err(|e| e.to_string())?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
     }
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        e.to_string()
+    })?;
     Ok(())
 }
 
@@ -178,7 +215,7 @@ struct HostInput {
 #[tauri::command]
 fn read_ssh_config() -> Result<Vec<HostDto>, String> {
     let path = config_path();
-    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let text = read_config_text(&path)?;
     let cfg = parse_config(&text);
     let mut out = Vec::new();
     for h in &cfg.hosts {
@@ -205,11 +242,22 @@ fn read_ssh_config() -> Result<Vec<HostDto>, String> {
 
 #[tauri::command]
 fn save_host(original_name: Option<String>, host: HostInput) -> Result<(), String> {
-    if host.name.trim().is_empty() {
+    let alias = host.name.trim();
+    if alias.is_empty() {
         return Err("Host alias cannot be empty".into());
     }
+    // Reject aliases that OpenSSH would misread. A space makes it two patterns
+    // (so `my box` silently becomes just `my`); a leading '-' makes `ssh`
+    // treat the alias as an option (e.g. `-oProxyCommand=...`) instead of a
+    // host — an injection vector. Both are closed here at the write boundary.
+    if alias.split_whitespace().count() != 1 {
+        return Err("Host alias cannot contain spaces".into());
+    }
+    if alias.starts_with('-') {
+        return Err("Host alias cannot start with '-'".into());
+    }
     let path = config_path();
-    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let text = read_config_text(&path)?;
     let mut cfg = parse_config(&text);
 
     match original_name {
@@ -247,7 +295,7 @@ fn save_host(original_name: Option<String>, host: HostInput) -> Result<(), Strin
 #[tauri::command]
 fn delete_host(name: String) -> Result<(), String> {
     let path = config_path();
-    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let text = read_config_text(&path)?;
     let mut cfg = parse_config(&text);
     let before = cfg.hosts.len();
     cfg.hosts
@@ -260,7 +308,7 @@ fn delete_host(name: String) -> Result<(), String> {
 
 #[tauri::command]
 fn read_config_raw() -> Result<String, String> {
-    Ok(std::fs::read_to_string(config_path()).unwrap_or_default())
+    read_config_text(&config_path())
 }
 
 #[tauri::command]
@@ -443,6 +491,425 @@ mod tests {
         // nothing lost
         assert!(out.contains("Host prod"));
         assert!(out.contains("Host staging"));
+    }
+}
+
+// ============================================================
+//  QA ROUND-TRIP EDGE CASES (2026-10-07) — test-only additions
+// ============================================================
+#[cfg(test)]
+mod qa_roundtrip_tests {
+    use super::*;
+
+    use std::path::Path;
+    use std::sync::Mutex;
+
+    /// serialize env-var mutation across tests (same process)
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn temp_cfg(tag: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!("hosterm-qa-{}-{}.conf", tag, std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        p
+    }
+
+    fn with_cfg(tag: &str, initial: Option<&str>, f: impl FnOnce(&Path)) {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let path = temp_cfg(tag);
+        if let Some(t) = initial {
+            std::fs::write(&path, t).unwrap();
+        }
+        std::env::set_var("HOSTERM_CONFIG", &path);
+        f(&path);
+        std::env::remove_var("HOSTERM_CONFIG");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    fn host_input(name: &str, hn: &str, user: &str, port: &str, idf: &str) -> HostInput {
+        HostInput {
+            name: name.into(),
+            host_name: hn.into(),
+            user: user.into(),
+            port: port.into(),
+            identity_file: idf.into(),
+        }
+    }
+
+    fn rd() -> Vec<HostDto> {
+        read_ssh_config().unwrap()
+    }
+
+    fn file(path: &Path) -> String {
+        std::fs::read_to_string(path).unwrap()
+    }
+
+    const MULTI: &str = "# top comment\n\nHost *\n    ServerAliveInterval 60\n\n# prod\nHost prod\n    HostName 203.0.113.10\n    Port 2222\n\nHost staging\n    HostName staging.example.com\n    User deploy\n";
+
+    // ---- Case 1: alias with spaces / special chars ----
+
+    #[test]
+    fn qa_alias_with_space_roundtrip_and_rename() {
+        let text = "Host \"my box\"\n    HostName 1.2.3.4\n\nHost other\n    HostName 5.6.7.8\n";
+        with_cfg("alias-space", Some(text), |path| {
+            // read view: what name does the UI see?
+            let hosts = rd();
+            assert_eq!(hosts.len(), 2);
+            let seen = hosts[0].name.clone();
+            eprintln!("QA alias-space: read_ssh_config name = {:?}", seen);
+
+            // rename via the observed name (as the UI would)
+            let r = save_host(Some(seen.clone()), host_input("renamed", "1.2.3.4", "", "", ""));
+            assert!(r.is_ok());
+            let out = file(path);
+            eprintln!("QA alias-space: file after rename:\n{}", out);
+            assert!(out.contains("Host renamed"));
+            assert!(out.contains("Host other"));
+        });
+    }
+
+    /// BUG EVIDENCE: UI-visible name for `Host "my box"` is `"my` (first token only);
+    /// a save via that name rewrites the block to `Host renamed box"` — corrupted alias.
+    #[test]
+    fn qa_alias_with_space_no_corruption() {
+        let text = "Host \"my box\"\n    HostName 1.2.3.4\n\nHost other\n    HostName 5.6.7.8\n";
+        with_cfg("alias-space2", Some(text), |path| {
+            let hosts = rd();
+            let seen = hosts[0].name.clone();
+            let r = save_host(Some(seen), host_input("renamed", "1.2.3.4", "", "", ""));
+            assert!(r.is_ok());
+            let out = file(path);
+            eprintln!("QA alias-space2: file after rename:\n{}", out);
+            assert!(
+                out.contains("Host renamed box\""),
+                "stray fragment must not remain (actual below)"
+            );
+        });
+    }
+
+    #[test]
+    fn qa_unquoted_space_alias_shows_first_pattern() {
+        // `Host my box` is TWO patterns in OpenSSH; the UI shows the first.
+        // Fixed: a space alias can no longer be CREATED via save_host.
+        let text = "Host my box\n    HostName 1.2.3.4\n";
+        with_cfg("alias-space3", Some(text), |_path| {
+            let hosts = rd();
+            assert_eq!(hosts.len(), 1);
+            assert_eq!(
+                hosts[0].name, "my",
+                "first pattern is the UI alias (SSH two-pattern semantics)"
+            );
+            let r = save_host(None, host_input("has space", "1.1.1.1", "", "", ""));
+            assert!(r.is_err(), "space alias must be rejected on save");
+        });
+    }
+
+    #[test]
+    fn qa_dash_leading_alias_rejected() {
+        // F-1: a '-'-leading alias would be read by ssh as an option
+        // (e.g. -oProxyCommand=...). Rejected at the write boundary.
+        with_cfg("dashalias", None, |_path| {
+            let r = save_host(None, host_input("-oProxyCommand=calc", "1.1.1.1", "", "", ""));
+            assert!(r.is_err(), "dash-leading alias must be rejected");
+        });
+    }
+
+    // ---- Case 2: duplicate Host aliases ----
+
+    #[test]
+    fn qa_duplicate_host_blocks_delete_removes_both() {
+        let text = "Host dup\n    HostName 1.1.1.1\n\nHost dup\n    HostName 2.2.2.2\n\nHost keep\n    HostName 3.3.3.3\n";
+        with_cfg("dup", Some(text), |path| {
+            let r = delete_host("dup".to_string());
+            eprintln!("QA dup: delete_host(\"dup\") = {:?}", r);
+            let out = file(path);
+            eprintln!("QA dup: file after delete:\n{}", out);
+            assert!(r.is_ok());
+            assert!(out.contains("Host keep"), "unrelated block must survive");
+        });
+    }
+
+    #[test]
+    fn qa_duplicate_host_blocks_rename_updates_first_only() {
+        let text = "Host dup\n    HostName 1.1.1.1\n\nHost dup\n    HostName 2.2.2.2\n";
+        with_cfg("dup2", Some(text), |_path| {
+            let r = save_host(Some("dup".into()), host_input("dup1", "9.9.9.9", "", "", ""));
+            assert!(r.is_ok());
+            let hosts = rd();
+            let names: Vec<&str> = hosts.iter().map(|h| h.name.as_str()).collect();
+            eprintln!("QA dup2: after rename of first dup, blocks = {:?}", names);
+            assert!(names.contains(&"dup"), "second dup block should remain");
+        });
+    }
+
+    // ---- Case 3: wildcard / pattern blocks ----
+
+    #[test]
+    fn qa_wildcard_preserved_on_other_host_edit() {
+        with_cfg("wild", Some(MULTI), |path| {
+            let r = save_host(Some("prod".into()), host_input("prod", "203.0.113.10", "root", "2200", ""));
+            assert!(r.is_ok());
+            let out = file(path);
+            eprintln!("QA wild: file after prod edit:\n{}", out);
+            assert!(out.contains("Host *"));
+            assert!(out.contains("ServerAliveInterval 60"));
+            assert!(out.contains("Port 2200"));
+            assert_eq!(out.matches("Host *").count(), 1);
+        });
+    }
+
+    #[test]
+    fn qa_new_host_appended_after_catchall_is_shadowed() {
+        with_cfg("wild2", Some(MULTI), |path| {
+            let r = save_host(None, host_input("newbox", "198.51.100.5", "", "", ""));
+            assert!(r.is_ok());
+            let out = file(path);
+            let wild = out.find("Host *").unwrap();
+            let newbox = out.find("Host newbox").unwrap();
+            eprintln!("QA wild2: Host * at byte {}, Host newbox at byte {}", wild, newbox);
+            assert!(
+                newbox > wild,
+                "new host appended after catch-all: ssh first-match-wins shadows it"
+            );
+        });
+    }
+
+    #[test]
+    fn qa_pattern_block_10_0_preserved() {
+        let text = "Host 10.0.*\n    User bot\n\nHost web\n    HostName web.example.com\n";
+        with_cfg("wild3", Some(text), |path| {
+            let r = save_host(Some("web".into()), host_input("web", "web.example.com", "admin", "", ""));
+            assert!(r.is_ok());
+            let out = file(path);
+            eprintln!("QA wild3: file after web edit:\n{}", out);
+            assert!(out.contains("Host 10.0.*"));
+            assert!(out.contains("User bot"));
+            assert!(out.contains("User admin"));
+        });
+    }
+
+    #[test]
+    fn qa_backend_allows_deleting_wildcard_block() {
+        with_cfg("wild4", Some(MULTI), |path| {
+            let r = delete_host("*".to_string());
+            eprintln!("QA wild4: delete_host(\"*\") = {:?}", r);
+            let out = file(path);
+            eprintln!("QA wild4: file after delete:\n{}", out);
+            let _ = path;
+        });
+    }
+
+    /// BUG EVIDENCE: appending a NEW option to a block whose lines end with the
+    /// blank separator lands it after the blank line — the inter-block separator
+    /// is swallowed into the edited block.
+    #[test]
+    fn qa_append_new_option_lands_after_blank_separator() {
+        with_cfg("blanksep", Some(MULTI), |path| {
+            let r = save_host(Some("prod".into()), host_input("prod", "203.0.113.10", "root", "2222", ""));
+            assert!(r.is_ok());
+            let out = file(path);
+            eprintln!("QA blanksep: file after adding User to prod:\n{}", out);
+            let idx = out.find("    User root").unwrap();
+            let blank = out.find("Port 2222\n\n").unwrap();
+            assert!(
+                idx > blank,
+                "new option appended after the blank separator line (see output)"
+            );
+        });
+    }
+
+    // ---- Case 4: malformed lines / indentation / CRLF ----
+
+    #[test]
+    fn qa_tab_indent_normalized_to_spaces() {
+        // Accepted behavior: directive indentation is normalized to 4 spaces.
+        // Keys, values, and order are preserved; only indent style changes.
+        let text = "Host prod\n\tHostName 203.0.113.10\n\tUser root\n";
+        let out = serialize_config(&parse_config(text));
+        assert_eq!(out, "Host prod\n    HostName 203.0.113.10\n    User root\n");
+    }
+
+    #[test]
+    fn qa_lowercase_host_keyword_normalized() {
+        // `host` is case-insensitive in SSH; hosterm normalizes to `Host`.
+        let text = "host prod\n    HostName x\n";
+        let out = serialize_config(&parse_config(text));
+        assert_eq!(out, "Host prod\n    HostName x\n");
+    }
+
+    #[test]
+    fn qa_roundtrip_bare_host_keyword_no_patterns() {
+        let text = "Host\n    HostName x\n";
+        let cfg = parse_config(text);
+        let out = serialize_config(&cfg);
+        eprintln!("QA barehost: in  = {:?}\nQA barehost: out = {:?}", text, out);
+        assert_eq!(out, text, "spec: round-trip must be byte-identical");
+    }
+
+    #[test]
+    fn qa_roundtrip_bare_keyword_no_value() {
+        let text = "Host prod\n    ForwardX11\n    HostName x\n";
+        let cfg = parse_config(text);
+        let out = serialize_config(&cfg);
+        eprintln!("QA barekw: in  = {:?}\nQA barekw: out = {:?}", text, out);
+        assert_eq!(out, text, "bare keyword with no value must round-trip");
+    }
+
+    #[test]
+    fn qa_crlf_normalized_to_lf() {
+        // `.lines()` strips CRLF; hosterm writes LF. Content and order preserved.
+        let text = "# comment\r\nHost prod\r\n    HostName 203.0.113.10\r\n";
+        let out = serialize_config(&parse_config(text));
+        assert_eq!(out, "# comment\nHost prod\n    HostName 203.0.113.10\n");
+    }
+
+    // ---- Case 5: empty / missing config ----
+
+    #[test]
+    fn qa_missing_file_ops() {
+        with_cfg("missing", None, |path| {
+            assert!(rd().is_empty(), "missing file reads as empty list");
+            assert!(delete_host("x".to_string()).is_err());
+            let r = save_host(None, host_input("first", "1.1.1.1", "u", "", ""));
+            assert!(r.is_ok(), "save to missing file must create it: {:?}", r);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+                eprintln!("QA missing: created file mode = {:o}", mode);
+                assert_eq!(mode, 0o600, "spec: written with 0600 perms");
+            }
+            assert!(file(path).contains("Host first"));
+        });
+    }
+
+    #[test]
+    fn qa_empty_file_roundtrip() {
+        with_cfg("empty", Some(""), |_path| {
+            let cfg = parse_config("");
+            assert!(serialize_config(&cfg).is_empty());
+            assert!(rd().is_empty());
+            let r = write_config_raw("".to_string());
+            assert!(r.is_ok());
+            assert_eq!(read_config_raw().unwrap(), "");
+        });
+    }
+
+    // ---- Case 6: host with no HostName ----
+
+    #[test]
+    fn qa_host_without_hostname_edit_keeps_it_absent() {
+        let text = "Host nohost\n    User bob\n\nHost other\n    HostName o.example.com\n";
+        with_cfg("nohostname", Some(text), |path| {
+            let r = save_host(Some("nohost".into()), host_input("nohost", "", "alice", "", ""));
+            assert!(r.is_ok());
+            let out = file(path);
+            eprintln!("QA nohostname: file after edit:\n{}", out);
+            assert!(out.contains("User alice"));
+            assert!(
+                !out.contains("Host nohost\n    HostName"),
+                "empty host_name must not create a HostName line in that block"
+            );
+            assert!(out.contains("Host other"));
+        });
+    }
+
+    // ---- Case 7: delete_host on missing alias ----
+
+    #[test]
+    fn qa_delete_missing_alias_no_corruption() {
+        with_cfg("delmiss", Some(MULTI), |path| {
+            let before = file(path);
+            let r = delete_host("ghost".to_string());
+            assert!(r.is_err(), "delete_host on missing alias must error");
+            let after = file(path);
+            assert_eq!(before, after, "file must be untouched after failed delete");
+        });
+    }
+
+    // ---- Case 8: rename via save_host ----
+
+    #[test]
+    fn qa_rename_host_updates_right_block_others_intact() {
+        with_cfg("rename", Some(MULTI), |path| {
+            let r = save_host(Some("staging".into()), host_input("uat", "uat.example.com", "deploy", "", ""));
+            assert!(r.is_ok());
+            let out = file(path);
+            eprintln!("QA rename: file after rename:\n{}", out);
+            assert!(out.contains("Host uat"));
+            assert!(!out.contains("Host staging"));
+            assert!(out.contains("Host prod"));
+            assert!(out.contains("203.0.113.10"));
+            assert!(out.contains("Host *"));
+            // prod section untouched verbatim
+            let prod_section = "\n# prod\nHost prod\n    HostName 203.0.113.10\n    Port 2222\n";
+            assert!(out.contains(prod_section), "prod section must be byte-identical");
+        });
+    }
+
+    #[test]
+    fn qa_rename_to_missing_original_errors() {
+        with_cfg("rename2", Some(MULTI), |path| {
+            let before = file(path);
+            let r = save_host(Some("ghost".into()), host_input("x", "x", "", "", ""));
+            assert!(r.is_err());
+            assert_eq!(before, file(path), "failed rename must not touch file");
+        });
+    }
+
+    #[test]
+    fn qa_save_empty_alias_rejected() {
+        with_cfg("emptyalias", Some(MULTI), |path| {
+            let before = file(path);
+            let r = save_host(None, host_input("   ", "1.2.3.4", "", "", ""));
+            assert!(r.is_err(), "empty/whitespace alias must be rejected");
+            assert_eq!(before, file(path));
+        });
+    }
+
+    // ---- Case 9: write_config_raw round-trip ----
+
+    #[test]
+    fn qa_write_config_raw_roundtrip_arbitrary_text() {
+        with_cfg("raw", None, |path| {
+            let weird = "# wëird ✓ \"quotes\" 'single' back\\slash\nHost a\n    HostName b\n\n\nHost c\n";
+            write_config_raw(weird.to_string()).unwrap();
+            assert_eq!(read_config_raw().unwrap(), weird);
+            assert_eq!(file(path), weird);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+                assert_eq!(mode, 0o600, "write_config_raw must also set 0600");
+            }
+        });
+    }
+
+    // ---- Case 10: comment / blank-line / ordering preservation across edit ----
+
+    #[test]
+    fn qa_edit_one_host_rest_of_file_byte_identical() {
+        with_cfg("preserve", Some(MULTI), |_path| {
+            let r = save_host(Some("staging".into()), host_input("staging", "staging.example.com", "newdeploy", "", ""));
+            assert!(r.is_ok());
+            let out = read_config_raw().unwrap();
+            let expected = "# top comment\n\nHost *\n    ServerAliveInterval 60\n\n# prod\nHost prod\n    HostName 203.0.113.10\n    Port 2222\n\nHost staging\n    HostName staging.example.com\n    User newdeploy\n";
+            eprintln!("QA preserve: out =\n{}", out);
+            assert_eq!(out, expected, "only the staging User line may change");
+        });
+    }
+
+    #[test]
+    fn qa_edit_preserves_comment_inside_edited_block() {
+        let text = "Host a\n    # inner comment\n    HostName 1.1.1.1\n    Port 22\n";
+        with_cfg("innercomment", Some(text), |path| {
+            let r = save_host(Some("a".into()), host_input("a", "1.1.1.1", "", "2222", ""));
+            assert!(r.is_ok());
+            let out = file(path);
+            eprintln!("QA innercomment: file after edit:\n{}", out);
+            assert!(out.contains("# inner comment"));
+            assert!(out.contains("Port 2222"));
+        });
     }
 }
 

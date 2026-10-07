@@ -1,0 +1,181 @@
+   Compiling hosterm v0.1.0 (/home/mekl/src/hosterm/src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.98s
+     Running unittests src/lib.rs (target/debug/deps/hosterm_lib-eadd952918d4fcbe)
+
+running 24 tests
+test qa_roundtrip_tests::qa_alias_with_space_no_corruption ... QA alias-space2: file after rename:
+Host renamed box"
+    HostName 1.2.3.4
+
+Host other
+    HostName 5.6.7.8
+
+ok
+test qa_roundtrip_tests::qa_alias_with_space_roundtrip_and_rename ... QA alias-space: read_ssh_config name = "\"my"
+QA alias-space: file after rename:
+Host renamed box"
+    HostName 1.2.3.4
+
+Host other
+    HostName 5.6.7.8
+
+ok
+test qa_roundtrip_tests::qa_backend_allows_deleting_wildcard_block ... QA wild4: delete_host("*") = Ok(())
+QA wild4: file after delete:
+# top comment
+
+Host prod
+    HostName 203.0.113.10
+    Port 2222
+
+Host staging
+    HostName staging.example.com
+    User deploy
+
+ok
+test qa_roundtrip_tests::qa_delete_missing_alias_no_corruption ... ok
+test qa_roundtrip_tests::qa_duplicate_host_blocks_delete_removes_both ... QA dup: delete_host("dup") = Ok(())
+QA dup: file after delete:
+Host keep
+    HostName 3.3.3.3
+
+ok
+test qa_roundtrip_tests::qa_duplicate_host_blocks_rename_updates_first_only ... QA dup2: after rename of first dup, blocks = ["dup1", "dup"]
+ok
+test qa_roundtrip_tests::qa_edit_one_host_rest_of_file_byte_identical ... QA preserve: out =
+# top comment
+
+Host *
+    ServerAliveInterval 60
+
+# prod
+Host prod
+    HostName 203.0.113.10
+    Port 2222
+
+Host staging
+    HostName staging.example.com
+    User newdeploy
+
+ok
+test qa_roundtrip_tests::qa_edit_preserves_comment_inside_edited_block ... QA innercomment: file after edit:
+Host a
+    # inner comment
+    HostName 1.1.1.1
+    Port 2222
+
+ok
+test qa_roundtrip_tests::qa_empty_file_roundtrip ... ok
+test qa_roundtrip_tests::qa_host_without_hostname_edit_keeps_it_absent ... QA nohostname: file after edit:
+Host nohost
+    User alice
+
+Host other
+    HostName o.example.com
+
+ok
+test qa_roundtrip_tests::qa_missing_file_ops ... QA missing: created file mode = 600
+ok
+test qa_roundtrip_tests::qa_new_host_appended_after_catchall_is_shadowed ... QA wild2: Host * at byte 15, Host newbox at byte 170
+ok
+test qa_roundtrip_tests::qa_pattern_block_10_0_preserved ... QA wild3: file after web edit:
+Host 10.0.*
+    User bot
+
+Host web
+    HostName web.example.com
+    User admin
+
+ok
+test qa_roundtrip_tests::qa_rename_host_updates_right_block_others_intact ... QA rename: file after rename:
+# top comment
+
+Host *
+    ServerAliveInterval 60
+
+# prod
+Host prod
+    HostName 203.0.113.10
+    Port 2222
+
+Host uat
+    HostName uat.example.com
+    User deploy
+
+ok
+test qa_roundtrip_tests::qa_rename_to_missing_original_errors ... ok
+test qa_roundtrip_tests::qa_roundtrip_bare_host_keyword_no_patterns ... QA barehost: in  = "Host\n    HostName x\n"
+QA barehost: out = "Host \n    HostName x\n"
+
+thread 'qa_roundtrip_tests::qa_roundtrip_bare_host_keyword_no_patterns' (148939) panicked at src/lib.rs:664:9:
+assertion `left == right` failed: spec: round-trip must be byte-identical
+  left: "Host \n    HostName x\n"
+ right: "Host\n    HostName x\n"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test qa_roundtrip_tests::qa_roundtrip_bare_keyword_no_value ... QA barekw: in  = "Host prod\n    ForwardX11\n    HostName x\n"
+QA barekw: out = "Host prod\n    ForwardX11\n    HostName x\n"
+ok
+test qa_roundtrip_tests::qa_roundtrip_crlf_not_byte_identical ... QA crlf: in  = "# comment\r\nHost prod\r\n    HostName 203.0.113.10\r\n"
+QA crlf: out = "# comment\nHost prod\n    HostName 203.0.113.10\n"
+
+thread 'qa_roundtrip_tests::qa_roundtrip_crlf_not_byte_identical' (148941) panicked at src/lib.rs:682:9:
+assertion `left == right` failed: spec: round-trip must be byte-identical (CRLF)
+  left: "# comment\nHost prod\n    HostName 203.0.113.10\n"
+ right: "# comment\r\nHost prod\r\n    HostName 203.0.113.10\r\n"
+FAILED
+test qa_roundtrip_tests::qa_roundtrip_lowercase_host_keyword_not_byte_identical ... QA lower: in  = "host prod\n    HostName x\n"
+QA lower: out = "Host prod\n    HostName x\n"
+
+thread 'qa_roundtrip_tests::qa_roundtrip_lowercase_host_keyword_not_byte_identical' (148942) panicked at src/lib.rs:655:9:
+assertion `left == right` failed: spec: round-trip must be byte-identical
+  left: "Host prod\n    HostName x\n"
+ right: "host prod\n    HostName x\n"
+FAILED
+test qa_roundtrip_tests::qa_roundtrip_tab_indent_not_byte_identical ... QA tab: in  = "Host prod\n\tHostName 203.0.113.10\n\tUser root\n"
+QA tab: out = "Host prod\n    HostName 203.0.113.10\n    User root\n"
+
+thread 'qa_roundtrip_tests::qa_roundtrip_tab_indent_not_byte_identical' (148943) panicked at src/lib.rs:646:9:
+assertion `left == right` failed: spec: round-trip must be byte-identical
+  left: "Host prod\n    HostName 203.0.113.10\n    User root\n"
+ right: "Host prod\n\tHostName 203.0.113.10\n\tUser root\n"
+FAILED
+test qa_roundtrip_tests::qa_save_empty_alias_rejected ... ok
+test qa_roundtrip_tests::qa_unquoted_space_alias_dto_name_lossy ... QA alias-space3: dto names = ["my"]
+
+thread 'qa_roundtrip_tests::qa_unquoted_space_alias_dto_name_lossy' (148945) panicked at src/lib.rs:549:13:
+assertion `left == right` failed: alias with space must survive the read view
+  left: "my"
+ right: "my box"
+FAILED
+test qa_roundtrip_tests::qa_wildcard_preserved_on_other_host_edit ... QA wild: file after prod edit:
+# top comment
+
+Host *
+    ServerAliveInterval 60
+
+# prod
+Host prod
+    HostName 203.0.113.10
+    Port 2200
+
+    User root
+Host staging
+    HostName staging.example.com
+    User deploy
+
+ok
+test qa_roundtrip_tests::qa_write_config_raw_roundtrip_arbitrary_text ... ok
+
+failures:
+
+failures:
+    qa_roundtrip_tests::qa_roundtrip_bare_host_keyword_no_patterns
+    qa_roundtrip_tests::qa_roundtrip_crlf_not_byte_identical
+    qa_roundtrip_tests::qa_roundtrip_lowercase_host_keyword_not_byte_identical
+    qa_roundtrip_tests::qa_roundtrip_tab_indent_not_byte_identical
+    qa_roundtrip_tests::qa_unquoted_space_alias_dto_name_lossy
+
+test result: FAILED. 19 passed; 5 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `--lib`
