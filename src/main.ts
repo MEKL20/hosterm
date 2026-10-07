@@ -10,12 +10,14 @@ interface HostDto {
   user: string;
   port: string;
   identity_file: string;
+  auth_method: string;
   options: [string, string][];
 }
 
 // ---------- state ----------
 let hosts: HostDto[] = [];
 let editingName: string | null = null; // null => adding new
+let identityFiles: string[] = [];
 
 interface Session {
   id: number;
@@ -79,14 +81,39 @@ function esc(s: string): string {
 }
 
 // ---------- host editor modal ----------
-function openEditor(h: HostDto | null) {
+async function refreshIdentityDropdown(selected: string) {
+  try {
+    identityFiles = await invoke<string[]>("list_identity_files");
+  } catch {
+    identityFiles = [];
+  }
+  const sel = $("#f-identity") as HTMLSelectElement;
+  const opts = ['<option value="">(none)</option>'];
+  const known = new Set(identityFiles);
+  if (selected && !known.has(selected)) known.add(selected); // keep an existing custom path
+  for (const p of known) {
+    opts.push(`<option value="${esc(p)}"${p === selected ? " selected" : ""}>${esc(p)}</option>`);
+  }
+  sel.innerHTML = opts.join("");
+  sel.value = selected || "";
+}
+
+function applyAuthMode(method: string) {
+  $("#row-identity").classList.toggle("hidden", method !== "key");
+  $("#row-password-note").classList.toggle("hidden", method !== "password");
+}
+
+async function openEditor(h: HostDto | null) {
   editingName = h ? h.name : null;
   $("#modal-title").textContent = h ? `Edit ${h.name}` : "Add host";
   ($("#f-name") as HTMLInputElement).value = h?.name ?? "";
   ($("#f-hostname") as HTMLInputElement).value = h?.host_name ?? "";
   ($("#f-user") as HTMLInputElement).value = h?.user ?? "";
   ($("#f-port") as HTMLInputElement).value = h?.port ?? "";
-  ($("#f-identity") as HTMLInputElement).value = h?.identity_file ?? "";
+  const method = h?.auth_method === "password" ? "password" : "key";
+  ($("#f-auth") as HTMLSelectElement).value = method;
+  applyAuthMode(method);
+  await refreshIdentityDropdown(h?.identity_file ?? "");
   $("#modal-err").textContent = "";
   $("#m-delete").classList.toggle("hidden", !h);
   $("#modal").classList.remove("hidden");
@@ -98,12 +125,14 @@ function closeEditor() {
 }
 
 async function saveHost() {
+  const method = ($("#f-auth") as HTMLSelectElement).value;
   const host = {
     name: ($("#f-name") as HTMLInputElement).value.trim(),
     host_name: ($("#f-hostname") as HTMLInputElement).value.trim(),
     user: ($("#f-user") as HTMLInputElement).value.trim(),
     port: ($("#f-port") as HTMLInputElement).value.trim(),
-    identity_file: ($("#f-identity") as HTMLInputElement).value.trim(),
+    identity_file: method === "key" ? ($("#f-identity") as HTMLSelectElement).value.trim() : "",
+    auth_method: method,
   };
   try {
     await invoke("save_host", { originalName: editingName, host });
@@ -111,6 +140,30 @@ async function saveHost() {
     await loadHosts();
   } catch (e) {
     $("#modal-err").textContent = String(e);
+  }
+}
+
+// ---------- create identity key from pasted text ----------
+function openKeyModal() {
+  ($("#k-name") as HTMLInputElement).value = "";
+  ($("#k-text") as HTMLTextAreaElement).value = "";
+  $("#key-err").textContent = "";
+  $("#key-modal").classList.remove("hidden");
+  ($("#k-name") as HTMLInputElement).focus();
+}
+
+async function saveKey() {
+  const name = ($("#k-name") as HTMLInputElement).value.trim();
+  const privateKey = ($("#k-text") as HTMLTextAreaElement).value;
+  try {
+    const path = await invoke<string>("create_identity_file", { name, privateKey });
+    $("#key-modal").classList.add("hidden");
+    // select the freshly-created key in the host editor dropdown
+    await refreshIdentityDropdown(path);
+    ($("#f-auth") as HTMLSelectElement).value = "key";
+    applyAuthMode("key");
+  } catch (e) {
+    $("#key-err").textContent = String(e);
   }
 }
 
@@ -269,5 +322,9 @@ window.addEventListener("DOMContentLoaded", () => {
   $("#m-delete").addEventListener("click", deleteHost);
   $("#raw-cancel").addEventListener("click", () => $("#raw-modal").classList.add("hidden"));
   $("#raw-save").addEventListener("click", saveRaw);
+  $("#f-auth").addEventListener("change", (e) => applyAuthMode((e.target as HTMLSelectElement).value));
+  $("#f-newkey").addEventListener("click", openKeyModal);
+  $("#k-cancel").addEventListener("click", () => $("#key-modal").classList.add("hidden"));
+  $("#k-save").addEventListener("click", saveKey);
   loadHosts();
 });

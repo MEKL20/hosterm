@@ -19,9 +19,27 @@ command line would honor it (ProxyJump, IdentityFile, forwarding, Match blocks, 
 - Click a host to open an embedded terminal tab (xterm.js); multiple tabs at once
 - Add / edit / delete hosts via a form — writes straight back to `~/.ssh/config`,
   **preserving comments, ordering, and unknown directives** (round-trip safe)
+- Choose auth per host: **key** (pick an `IdentityFile` from a dropdown) or
+  **password** (ssh prompts you on connect — no secret is ever stored)
+- **Create an identity key by pasting the private key text** — hosterm writes it
+  to `~/.ssh/<name>` at `0600`, then it appears in the key dropdown (Termius-style)
 - "Raw config" editor to hand-edit the file directly inside the app
-- File written with `0600` permissions on Unix
+- Config written atomically (temp + rename) and never overwritten with empty if
+  an existing file can't be read; files get `0600` permissions on Unix
 - No telemetry, no network calls except the SSH connections you start
+
+## Authentication
+
+OpenSSH's config format has no `Password` directive — passwords live only in a
+client's vault, which hosterm deliberately avoids (the whole point is a portable
+plain-text config). So:
+
+- **Key auth** writes `IdentityFile`. Pick an existing key from the dropdown, or
+  paste a new private key and hosterm saves it as a `0600` file beside the config.
+- **Password auth** writes `PreferredAuthentications password` +
+  `PubkeyAuthentication no`, and ssh prompts for the password in the embedded
+  terminal at connect time. Nothing secret is stored, so copying your
+  `~/.ssh/config` to another device stays safe and complete.
 
 ## How it stores config
 

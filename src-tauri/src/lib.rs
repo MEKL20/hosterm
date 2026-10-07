@@ -198,6 +198,7 @@ struct HostDto {
     user: String,
     port: String,
     identity_file: String,
+    auth_method: String,
     options: Vec<(String, String)>,
 }
 
@@ -208,6 +209,43 @@ struct HostInput {
     user: String,
     port: String,
     identity_file: String,
+    #[serde(default)]
+    auth_method: String,
+}
+
+/// Set the auth-related directives on a host block. There is no `Password`
+/// directive in OpenSSH config, so "password" mode makes ssh PROMPT at connect
+/// (no secret is ever stored — the config stays fully portable).
+fn apply_host_fields(hb: &mut HostBlock, host: &HostInput) {
+    set_opt(hb, "HostName", &host.host_name);
+    set_opt(hb, "User", &host.user);
+    set_opt(hb, "Port", &host.port);
+    match host.auth_method.as_str() {
+        "password" => {
+            set_opt(hb, "IdentityFile", "");
+            set_opt(hb, "PreferredAuthentications", "password");
+            set_opt(hb, "PubkeyAuthentication", "no");
+        }
+        _ => {
+            // Key auth (default): point at an IdentityFile and clear any
+            // password-forcing directives left from a previous password setup.
+            set_opt(hb, "IdentityFile", &host.identity_file);
+            set_opt(hb, "PreferredAuthentications", "");
+            set_opt(hb, "PubkeyAuthentication", "");
+        }
+    }
+}
+
+/// The directory holding keys + config. Keys live beside the config so the
+/// "copy the folder" portability story stays coherent.
+fn ssh_dir() -> PathBuf {
+    if let Ok(p) = std::env::var("HOSTERM_CONFIG") {
+        if let Some(parent) = PathBuf::from(&p).parent() {
+            return parent.to_path_buf();
+        }
+    }
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    home.join(".ssh")
 }
 
 // ---------- SSH config commands ----------
@@ -228,12 +266,25 @@ fn read_ssh_config() -> Result<Vec<HostDto>, String> {
                 _ => None,
             })
             .collect();
+        let prefers_password = get_opt(h, "PreferredAuthentications")
+            .split(',')
+            .next()
+            .map(|s| s.trim().eq_ignore_ascii_case("password"))
+            .unwrap_or(false);
+        let pubkey_off = get_opt(h, "PubkeyAuthentication").eq_ignore_ascii_case("no");
+        let auth_method = if prefers_password || pubkey_off {
+            "password"
+        } else {
+            "key"
+        }
+        .to_string();
         out.push(HostDto {
             name,
             host_name: get_opt(h, "HostName"),
             user: get_opt(h, "User"),
             port: get_opt(h, "Port"),
             identity_file: get_opt(h, "IdentityFile"),
+            auth_method,
             options,
         });
     }
@@ -272,20 +323,14 @@ fn save_host(original_name: Option<String>, host: HostInput) -> Result<(), Strin
             } else {
                 hb.patterns[0] = host.name.clone();
             }
-            set_opt(hb, "HostName", &host.host_name);
-            set_opt(hb, "User", &host.user);
-            set_opt(hb, "Port", &host.port);
-            set_opt(hb, "IdentityFile", &host.identity_file);
+            apply_host_fields(hb, &host);
         }
         None => {
             let mut hb = HostBlock {
                 patterns: vec![host.name.clone()],
                 lines: Vec::new(),
             };
-            set_opt(&mut hb, "HostName", &host.host_name);
-            set_opt(&mut hb, "User", &host.user);
-            set_opt(&mut hb, "Port", &host.port);
-            set_opt(&mut hb, "IdentityFile", &host.identity_file);
+            apply_host_fields(&mut hb, &host);
             cfg.hosts.push(hb);
         }
     }
@@ -314,6 +359,91 @@ fn read_config_raw() -> Result<String, String> {
 #[tauri::command]
 fn write_config_raw(content: String) -> Result<(), String> {
     write_config_file(&config_path(), &content)
+}
+
+// ---------- identity key management ----------
+
+/// List private-key files in the ssh dir, newest-friendly order. Returns the
+/// `~/.ssh/<name>` path form that goes straight into an IdentityFile directive.
+/// A ".pub" file or a file whose sibling has no private counterpart is skipped.
+#[tauri::command]
+fn list_identity_files() -> Result<Vec<String>, String> {
+    let dir = ssh_dir();
+    let mut out: Vec<String> = Vec::new();
+    let rd = match std::fs::read_dir(&dir) {
+        Ok(r) => r,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
+        Err(e) => return Err(e.to_string()),
+    };
+    for entry in rd.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+        // skip public keys, known_hosts, config, authorized_keys and temp files
+        if name.ends_with(".pub")
+            || name == "config"
+            || name == "known_hosts"
+            || name == "known_hosts.old"
+            || name == "authorized_keys"
+            || name.starts_with('.')
+        {
+            continue;
+        }
+        // treat as a key if the first line looks like a private key header,
+        // OR a matching <name>.pub exists next to it
+        let looks_private = std::fs::read_to_string(&path)
+            .map(|c| c.lines().next().map(|l| l.contains("PRIVATE KEY")).unwrap_or(false))
+            .unwrap_or(false);
+        let has_pub = dir.join(format!("{}.pub", name)).exists();
+        if looks_private || has_pub {
+            out.push(format!("~/.ssh/{}", name));
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+/// Write a pasted private key into the ssh dir at 0600 and return the
+/// `~/.ssh/<name>` path to drop into an IdentityFile directive. Termius-style:
+/// the user pastes key text, hosterm persists it as a real file (SSH needs a
+/// file on disk; there is no in-config key storage).
+#[tauri::command]
+fn create_identity_file(name: String, private_key: String) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Key name cannot be empty".into());
+    }
+    // keep it a bare filename — no path separators, no traversal
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err("Key name must be a plain filename (no path separators)".into());
+    }
+    if private_key.trim().is_empty() {
+        return Err("Private key text is empty".into());
+    }
+    let dir = ssh_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(name);
+    if path.exists() {
+        return Err(format!("A key named '{}' already exists", name));
+    }
+    // normalize to LF and guarantee a trailing newline (ssh is picky)
+    let mut body = private_key.replace("\r\n", "\n");
+    if !body.ends_with('\n') {
+        body.push('\n');
+    }
+    std::fs::write(&path, body).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(format!("~/.ssh/{}", name))
 }
 
 // ============================================================
@@ -424,6 +554,12 @@ fn pty_kill(state: State<PtyState>, id: u32) -> Result<(), String> {
     Ok(())
 }
 
+/// Shared across ALL test modules: HOSTERM_CONFIG is a process-global env var,
+/// so every test that sets it must serialize on ONE mutex. Per-module locks do
+/// not serialize across modules and let concurrent tests clobber each other.
+#[cfg(test)]
+static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -502,10 +638,9 @@ mod qa_roundtrip_tests {
     use super::*;
 
     use std::path::Path;
-    use std::sync::Mutex;
 
-    /// serialize env-var mutation across tests (same process)
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    /// serialize env-var mutation across ALL test modules (shared, same process)
+    use super::TEST_ENV_LOCK as ENV_LOCK;
 
     fn temp_cfg(tag: &str) -> PathBuf {
         let mut p = std::env::temp_dir();
@@ -533,6 +668,7 @@ mod qa_roundtrip_tests {
             user: user.into(),
             port: port.into(),
             identity_file: idf.into(),
+            auth_method: "key".into(),
         }
     }
 
@@ -913,6 +1049,118 @@ mod qa_roundtrip_tests {
     }
 }
 
+#[cfg(test)]
+mod auth_key_tests {
+    use super::*;
+    use super::TEST_ENV_LOCK as ENV_LOCK;
+
+    fn tmp(tag: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!("hosterm-auth-{}-{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p.join("config")
+    }
+
+    fn hi(name: &str, method: &str, idf: &str) -> HostInput {
+        HostInput {
+            name: name.into(),
+            host_name: "1.2.3.4".into(),
+            user: "".into(),
+            port: "".into(),
+            identity_file: idf.into(),
+            auth_method: method.into(),
+        }
+    }
+
+    #[test]
+    fn password_auth_writes_prompt_directives_no_secret() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = tmp("pw");
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        save_host(None, hi("pwbox", "password", "")).unwrap();
+        let out = std::fs::read_to_string(&cfg).unwrap();
+        std::env::remove_var("HOSTERM_CONFIG");
+        assert!(out.contains("PreferredAuthentications password"));
+        assert!(out.contains("PubkeyAuthentication no"));
+        assert!(!out.contains("IdentityFile"));
+        // round-trips back as password auth in the read view
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        let hosts = read_ssh_config().unwrap();
+        std::env::remove_var("HOSTERM_CONFIG");
+        assert_eq!(hosts[0].auth_method, "password");
+    }
+
+    #[test]
+    fn switching_password_to_key_clears_password_directives() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = tmp("switch");
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        save_host(None, hi("box", "password", "")).unwrap();
+        // now edit the same host to key auth
+        save_host(Some("box".into()), hi("box", "key", "~/.ssh/id_ed25519")).unwrap();
+        let out = std::fs::read_to_string(&cfg).unwrap();
+        std::env::remove_var("HOSTERM_CONFIG");
+        assert!(out.contains("IdentityFile ~/.ssh/id_ed25519"));
+        assert!(!out.contains("PreferredAuthentications"));
+        assert!(!out.contains("PubkeyAuthentication"));
+    }
+
+    #[test]
+    fn create_identity_file_writes_key_0600_and_lists_it() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = tmp("key");
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        let body = "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----";
+        let path = create_identity_file("id_test".into(), body.into()).unwrap();
+        assert_eq!(path, "~/.ssh/id_test");
+        let on_disk = cfg.parent().unwrap().join("id_test");
+        let content = std::fs::read_to_string(&on_disk).unwrap();
+        assert!(content.ends_with('\n'), "trailing newline added");
+        assert!(content.starts_with("-----BEGIN"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&on_disk).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+        let listed = list_identity_files().unwrap();
+        std::env::remove_var("HOSTERM_CONFIG");
+        assert!(listed.contains(&"~/.ssh/id_test".to_string()));
+    }
+
+    #[test]
+    fn create_identity_file_rejects_bad_name_and_duplicate() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = tmp("badkey");
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        assert!(create_identity_file("../evil".into(), "x".into()).is_err());
+        assert!(create_identity_file("a/b".into(), "x".into()).is_err());
+        assert!(create_identity_file("".into(), "x".into()).is_err());
+        assert!(create_identity_file("ok".into(), "".into()).is_err());
+        create_identity_file("dup".into(), "PRIVATE KEY\n".into()).unwrap();
+        assert!(create_identity_file("dup".into(), "PRIVATE KEY\n".into()).is_err());
+        std::env::remove_var("HOSTERM_CONFIG");
+    }
+
+    #[test]
+    fn list_identity_files_skips_pub_and_config() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = tmp("skip");
+        let dir = cfg.parent().unwrap();
+        std::fs::write(dir.join("id_x"), "-----BEGIN OPENSSH PRIVATE KEY-----\n").unwrap();
+        std::fs::write(dir.join("id_x.pub"), "ssh-ed25519 AAAA\n").unwrap();
+        std::fs::write(dir.join("known_hosts"), "h\n").unwrap();
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        let listed = list_identity_files().unwrap();
+        std::env::remove_var("HOSTERM_CONFIG");
+        assert!(listed.contains(&"~/.ssh/id_x".to_string()));
+        assert!(!listed.iter().any(|p| p.ends_with(".pub")));
+        assert!(!listed.iter().any(|p| p.ends_with("known_hosts")));
+        assert!(!listed.iter().any(|p| p.ends_with("config")));
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -923,6 +1171,8 @@ pub fn run() {
             delete_host,
             read_config_raw,
             write_config_raw,
+            list_identity_files,
+            create_identity_file,
             pty_spawn,
             pty_write,
             pty_resize,

@@ -108,3 +108,17 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 .err { color: var(--danger); font-size: 12px; min-height: 14px; margin: 0; }
 #raw-text { flex: 1; resize: none; font-family: ui-monospace, "Cascadia Code", Menlo, monospace; line-height: 1.5; }
 .modal-box.wide { display: flex; }
+.modal-box select {
+  background: var(--bg2); color: var(--fg); border: 1px solid var(--border);
+  padding: 8px 10px; border-radius: 6px; font-size: 13px; width: 100%;
+}
+.modal-box select:focus { outline: none; border-color: var(--accent); }
+.id-row { display: flex; gap: 6px; align-items: stretch; }
+.id-row select { flex: 1; }
+.id-row button { white-space: nowrap; }
+.note { font-size: 12px; color: var(--muted); margin: 0; line-height: 1.5; }
+.note code {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: 4px; padding: 1px 4px; font-size: 11px;
+}
+#k-text { min-height: 180px; resize: vertical; font-family: ui-monospace, "Cascadia Code", Menlo, monospace; font-size: 12px; line-height: 1.4; }
