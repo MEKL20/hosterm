@@ -447,6 +447,154 @@ fn create_identity_file(name: String, private_key: String) -> Result<String, Str
 }
 
 // ============================================================
+//  SFTP  (drives the real OS `sftp` binary, honors ssh config)
+// ============================================================
+//
+// Design: we spawn `sftp -b` (batch mode) per operation rather than linking an
+// SSH library. The real binary resolves ~/.ssh/config exactly like `ssh` does
+// (ProxyJump, Match, IdentityFile) — the whole point of hosterm. Batch mode is
+// non-interactive, so this path covers KEY/AGENT auth; password-auth hosts need
+// the persistent-session variant (a later increment).
+
+#[derive(Serialize)]
+struct SftpEntry {
+    name: String,
+    is_dir: bool,
+    is_link: bool,
+    size: u64,
+}
+
+/// Guard a value that becomes an argv element or a batch-command token.
+/// A leading '-' would be read by sftp as an option; a newline would inject a
+/// second batch command. Both are rejected.
+fn sftp_safe(value: &str, what: &str) -> Result<(), String> {
+    if value.starts_with('-') {
+        return Err(format!("{} cannot start with '-'", what));
+    }
+    if value.contains('\n') || value.contains('\r') {
+        return Err(format!("{} cannot contain newlines", what));
+    }
+    Ok(())
+}
+
+/// Parse `sftp` long-listing (`ls -la`) output into entries. Pure function so
+/// it is unit-testable without a server. Skips the `total N` header, command
+/// echoes, blank lines, and the `.`/`..` entries.
+fn parse_sftp_ls(output: &str) -> Vec<SftpEntry> {
+    let mut out = Vec::new();
+    for line in output.lines() {
+        let line = line.trim_end();
+        if line.is_empty() || line.starts_with("sftp>") || line.starts_with("total ") {
+            continue;
+        }
+        let perms = match line.split_whitespace().next() {
+            Some(p) => p,
+            None => continue,
+        };
+        let first = match perms.chars().next() {
+            Some(c) => c,
+            None => continue,
+        };
+        // only accept lines whose first token looks like a mode string
+        if !matches!(first, 'd' | '-' | 'l' | 'b' | 'c' | 'p' | 's') || perms.len() < 10 {
+            continue;
+        }
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() < 9 {
+            continue;
+        }
+        let size = fields.get(4).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+        // name = everything after the 8th field (handles spaces in names);
+        // for symlinks ls appends " -> target" which we trim off.
+        let mut name = fields[8..].join(" ");
+        if first == 'l' {
+            if let Some(idx) = name.find(" -> ") {
+                name.truncate(idx);
+            }
+        }
+        if name == "." || name == ".." || name.is_empty() {
+            continue;
+        }
+        out.push(SftpEntry {
+            name,
+            is_dir: first == 'd',
+            is_link: first == 'l',
+            size,
+        });
+    }
+    out
+}
+
+/// Run an sftp batch script against `host`, return (stdout, stderr, success).
+fn run_sftp_batch(host: &str, script: &str) -> Result<(String, String, bool), String> {
+    use std::process::{Command, Stdio};
+    sftp_safe(host, "Host")?;
+    let mut child = Command::new("sftp")
+        .arg("-o")
+        .arg("BatchMode=yes")
+        .arg("-b")
+        .arg("-") // read batch commands from stdin
+        .arg(host)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("failed to launch sftp: {}", e))?;
+    {
+        let stdin = child.stdin.as_mut().ok_or("no stdin")?;
+        stdin.write_all(script.as_bytes()).map_err(|e| e.to_string())?;
+    }
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    Ok((
+        String::from_utf8_lossy(&out.stdout).to_string(),
+        String::from_utf8_lossy(&out.stderr).to_string(),
+        out.status.success(),
+    ))
+}
+
+#[tauri::command]
+fn sftp_list(host: String, path: String) -> Result<Vec<SftpEntry>, String> {
+    let dir = if path.trim().is_empty() { ".".to_string() } else { path };
+    sftp_safe(&dir, "Path")?;
+    let script = format!("ls -la {}\n", dir);
+    let (stdout, stderr, ok) = run_sftp_batch(&host, &script)?;
+    if !ok {
+        return Err(format!("sftp ls failed: {}", stderr.trim()));
+    }
+    Ok(parse_sftp_ls(&stdout))
+}
+
+#[tauri::command]
+fn sftp_upload(host: String, local_path: String, remote_path: String) -> Result<(), String> {
+    sftp_safe(&local_path, "Local path")?;
+    sftp_safe(&remote_path, "Remote path")?;
+    if !PathBuf::from(&local_path).is_file() {
+        return Err("local file does not exist".into());
+    }
+    let script = format!("put \"{}\" \"{}\"\n", local_path, remote_path);
+    let (_o, stderr, ok) = run_sftp_batch(&host, &script)?;
+    if !ok {
+        return Err(format!("upload failed: {}", stderr.trim()));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn sftp_download(host: String, remote_path: String, local_path: String) -> Result<(), String> {
+    sftp_safe(&remote_path, "Remote path")?;
+    sftp_safe(&local_path, "Local path")?;
+    let script = format!("get \"{}\" \"{}\"\n", remote_path, local_path);
+    let (_o, stderr, ok) = run_sftp_batch(&host, &script)?;
+    if !ok {
+        return Err(format!("download failed: {}", stderr.trim()));
+    }
+    if !PathBuf::from(&local_path).exists() {
+        return Err("download reported success but local file is missing".into());
+    }
+    Ok(())
+}
+
+// ============================================================
 //  PTY ENGINE  (spawns the real OS `ssh`, honors ssh config)
 // ============================================================
 
@@ -1161,6 +1309,80 @@ mod auth_key_tests {
     }
 }
 
+#[cfg(test)]
+mod sftp_tests {
+    use super::*;
+
+    /// Live end-to-end test of the REAL sftp_* commands. Skipped unless
+    /// HOSTERM_LIVE_SFTP=1 so normal `cargo test` never depends on a server.
+    /// Requires a reachable `testbox` host alias in ~/.ssh/config.
+    #[test]
+    fn live_sftp_roundtrip() {
+        if std::env::var("HOSTERM_LIVE_SFTP").as_deref() != Ok("1") {
+            return; // skipped in normal runs
+        }
+        let dir = std::env::temp_dir().join(format!("hosterm-live-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let local = dir.join("upload_me.txt");
+        std::fs::write(&local, "hosterm live sftp test\n").unwrap();
+        let remote = format!("{}/landed.txt", dir.display());
+
+        // upload -> list shows it -> download to a new path -> contents match
+        sftp_upload("testbox".into(), local.display().to_string(), remote.clone()).unwrap();
+        let entries = sftp_list("testbox".into(), dir.display().to_string()).unwrap();
+        assert!(
+            entries.iter().any(|e| e.name == "landed.txt" && !e.is_dir),
+            "uploaded file must appear in listing: {:?}",
+            entries.iter().map(|e| &e.name).collect::<Vec<_>>()
+        );
+        let back = dir.join("came_back.txt");
+        sftp_download("testbox".into(), remote, back.display().to_string()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&back).unwrap(),
+            "hosterm live sftp test\n"
+        );
+    }
+
+    #[test]
+    fn parse_ls_basic_entries() {
+        let out = "sftp> ls -la .\n\
+total 20\n\
+drwxr-xr-x    5 user user     4096 Oct  7 10:00 .\n\
+drwxr-xr-x    3 root root     4096 Oct  1 09:00 ..\n\
+-rw-r--r--    1 user user      142 Oct  7 10:01 notes.txt\n\
+drwxr-xr-x    2 user user     4096 Oct  7 10:02 projects\n\
+lrwxrwxrwx    1 user user       11 Oct  7 10:03 link -> notes.txt\n";
+        let e = parse_sftp_ls(out);
+        let names: Vec<&str> = e.iter().map(|x| x.name.as_str()).collect();
+        assert_eq!(names, vec!["notes.txt", "projects", "link"]);
+        assert!(!e[0].is_dir && !e[0].is_link);
+        assert_eq!(e[0].size, 142);
+        assert!(e[1].is_dir);
+        assert!(e[2].is_link && e[2].name == "link"); // " -> target" trimmed
+    }
+
+    #[test]
+    fn parse_ls_name_with_spaces() {
+        let out = "-rw-r--r--    1 u u    10 Oct  7 10:00 my file.txt\n";
+        let e = parse_sftp_ls(out);
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0].name, "my file.txt");
+    }
+
+    #[test]
+    fn parse_ls_ignores_noise() {
+        let out = "sftp> cd /tmp\nsftp> ls -la\ntotal 0\n\n";
+        assert!(parse_sftp_ls(out).is_empty());
+    }
+
+    #[test]
+    fn sftp_safe_rejects_option_and_newline_injection() {
+        assert!(sftp_safe("-oProxyCommand=calc", "Host").is_err());
+        assert!(sftp_safe("ok\nrm -rf x", "Path").is_err());
+        assert!(sftp_safe("/home/user/file.txt", "Path").is_ok());
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1173,6 +1395,9 @@ pub fn run() {
             write_config_raw,
             list_identity_files,
             create_identity_file,
+            sftp_list,
+            sftp_upload,
+            sftp_download,
             pty_spawn,
             pty_write,
             pty_resize,

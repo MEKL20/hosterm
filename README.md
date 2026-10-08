@@ -17,6 +17,10 @@ command line would honor it (ProxyJump, IdentityFile, forwarding, Match blocks, 
 
 - Sidebar listing every `Host` entry from `~/.ssh/config`
 - Click a host to open an embedded terminal tab (xterm.js); multiple tabs at once
+- **SFTP file browser** per host (⇅ tab): browse remote directories, upload and
+  download files — powered by the real `sftp` binary, so it honors your ssh
+  config (ProxyJump, IdentityFile, …). Requires key/agent auth; password-auth
+  hosts still work in the terminal tab (persistent-session SFTP is planned).
 - Add / edit / delete hosts via a form — writes straight back to `~/.ssh/config`,
   **preserving comments, ordering, and unknown directives** (round-trip safe)
 - Choose auth per host: **key** (pick an `IdentityFile` from a dropdown) or

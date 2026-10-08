@@ -108,6 +108,26 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 .err { color: var(--danger); font-size: 12px; min-height: 14px; margin: 0; }
 #raw-text { flex: 1; resize: none; font-family: ui-monospace, "Cascadia Code", Menlo, monospace; line-height: 1.5; }
 .modal-box.wide { display: flex; }
+
+/* ---------- sftp browser ---------- */
+.sftp-wrap { display: flex; flex-direction: column; height: 100%; padding: 10px 12px; gap: 8px; box-sizing: border-box; }
+.sftp-toolbar { display: flex; gap: 6px; }
+.sftp-toolbar input.sftp-path { flex: 1; }
+.sftp-list { flex: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--bg2); }
+.sftp-row { display: flex; align-items: center; gap: 10px; padding: 6px 10px; cursor: pointer; border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent); }
+.sftp-row:hover { background: color-mix(in srgb, var(--fg) 6%, transparent); }
+.sftp-row .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sftp-row .sz { color: var(--muted); font-size: 12px; min-width: 70px; text-align: right; }
+.sftp-row .dl { padding: 0 6px; border-radius: 4px; color: var(--accent); }
+.sftp-row .dl:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+.sftp-foot { display: flex; gap: 6px; }
+.sftp-foot input.sftp-local { flex: 1; }
+.sftp-status { font-size: 12px; color: var(--muted); min-height: 16px; }
+.sftp-status.ok { color: var(--green, #9ece6a); }
+button.sftp-go, button.sftp-refresh, button.sftp-upload, button.sftp-up { background: var(--panel); border: 1px solid var(--border); color: var(--fg); border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+button.sftp-go:hover, button.sftp-refresh:hover, button.sftp-upload:hover, button.sftp-up:hover { background: var(--bg2); }
+.h-act { margin-left: 8px; font-size: 11px; padding: 1px 6px; border-radius: 4px; color: var(--muted); }
+.h-act:hover { background: color-mix(in srgb, var(--fg) 12%, transparent); color: var(--fg); }
 .modal-box select {
   background: var(--bg2); color: var(--fg); border: 1px solid var(--border);
   padding: 8px 10px; border-radius: 6px; font-size: 13px; width: 100%;
