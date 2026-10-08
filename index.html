@@ -12,17 +12,21 @@
       <aside id="sidebar">
         <div class="sidebar-head">
           <span class="brand">hosterm</span>
-          <button id="btn-add" title="Add host">+</button>
+          <button id="btn-add" class="icon" aria-label="Add host" title="Add host">
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="10" y1="2" x2="10" y2="6"/><line x1="8" y1="4" x2="12" y2="4"/></svg>
+          </button>
         </div>
         <div id="host-list"></div>
         <div class="sidebar-foot">
           <button id="btn-raw">Raw config</button>
-          <button id="btn-reload" title="Reload ~/.ssh/config">⟳</button>
+          <button id="btn-reload" class="icon" aria-label="Reload config" title="Reload config">
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8a5 5 0 1 1-1.7-3.75"/><polyline points="13,1.5 13,4.5 10,4.5"/></svg>
+          </button>
         </div>
       </aside>
 
       <main id="main">
-        <div id="tabs"></div>
+        <div id="tabs" role="tablist"></div>
         <div id="panels"></div>
       </main>
     </div>
@@ -45,13 +49,13 @@
           <label>Identity key
             <div class="id-row">
               <select id="f-identity"></select>
-              <button type="button" id="f-newkey" title="Paste a private key">New key…</button>
+              <button type="button" id="f-newkey">New key</button>
             </div>
           </label>
         </div>
         <p id="row-password-note" class="note hidden">
           No password is stored. ssh will prompt for it in the terminal each
-          time you connect — your <code>~/.ssh/config</code> stays portable.
+          time you connect; your <code>~/.ssh/config</code> stays portable.
         </p>
         <div class="modal-actions">
           <button id="m-delete" class="danger hidden">Delete</button>
@@ -84,7 +88,7 @@
         <label>Key file name<input id="k-name" placeholder="id_myserver" /></label>
         <label>Private key (paste)
           <textarea id="k-text" spellcheck="false"
-            placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----"></textarea>
+            placeholder="[REDACTED PRIVATE KEY]"></textarea>
         </label>
         <p class="note">
           Saved to <code>~/.ssh/&lt;name&gt;</code> with <code>0600</code>
@@ -96,6 +100,15 @@
           <button id="k-save" class="primary">Save key</button>
         </div>
         <p id="key-err" class="err"></p>
+      </div>
+    </div>
+
+    <!-- In-app dialog -->
+    <div id="dialog" class="hidden">
+      <div class="modal-box dialog-box">
+        <h2 id="dialog-title"></h2>
+        <p id="dialog-msg"></p>
+        <div id="dialog-actions" class="modal-actions"></div>
       </div>
     </div>
   </body>
