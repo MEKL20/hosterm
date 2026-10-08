@@ -146,6 +146,31 @@ check("collapse: persisted", stored === "1");
 await page.locator("#btn-expand").click();
 check("expand: class removed", await page.evaluate(() => !document.body.classList.contains("sb-collapsed")));
 
+// 9d. delete button present on host rows, opens confirm dialog, cancel keeps host
+const delBtn = page.locator(".host-item .h-del");
+check("delete button on host row", (await delBtn.count()) === 1);
+await delBtn.click();
+await page.waitForTimeout(250);
+const dlgText = await page.evaluate(() => document.querySelector(".dialog-box, [role=alertdialog], #dialog")?.textContent || "");
+check("delete dialog names the host", dlgText.includes("prod-web"), dlgText.slice(0, 60));
+// focused button should be Cancel (destructive action guard)
+const focusedLabel = await page.evaluate(() => (document.activeElement?.textContent || "").trim());
+check("delete dialog focuses Cancel", focusedLabel === "Cancel", `focus=${focusedLabel}`);
+await page.keyboard.press("Enter"); // activates focused Cancel
+await page.waitForTimeout(250);
+check("cancel keeps host", (await page.locator(".host-item").count()) === 1);
+
+// 9e. terminal right-click paste handler attached (no context menu, no errors)
+await page.locator(".host-item .h-name").click();
+await page.waitForTimeout(400);
+const rcHandled = await page.evaluate(() => {
+  const el = document.querySelector(".term-host");
+  const ev = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+  el.dispatchEvent(ev);
+  return ev.defaultPrevented;
+});
+check("terminal right-click handled (no native menu)", rcHandled);
+
 check("no console/page errors", errors.length === 0, errors.slice(0, 3).join(" | "));
 
 console.log(results.join("\n"));
@@ -154,3 +179,6 @@ console.log(`\n${results.length - fails}/${results.length} passed`);
 await browser.close();
 server.close();
 process.exit(fails ? 1 : 0);
+
+// v0.4.1 checks appended: delete button on host rows + right-click paste handler
+import { chromium as _c } from "playwright";

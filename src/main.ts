@@ -26,6 +26,7 @@ const svg = (p: string) =>
 const ICONS = {
   add: svg('<line x1="8" y1="4" x2="12" y2="4"/><line x1="10" y1="2" x2="10" y2="6"/>'),
   reload: svg('<path d="M13 8a5 5 0 1 1-1.7-3.75"/><polyline points="13,1.5 13,4.5 10,4.5"/>'),
+  trash: svg('<path d="M2.5 4.5h11"/><path d="M6.5 2.5h3"/><path d="M4 4.5l.7 8.2a1 1 0 0 0 1 .8h4.6a1 1 0 0 0 1-.8l.7-8.2"/><line x1="6.7" y1="7" x2="6.7" y2="10.5"/><line x1="9.3" y1="7" x2="9.3" y2="10.5"/>'),
   terminal: svg('<rect x="1.5" y="2.5" width="13" height="11" rx="2"/><polyline points="4,6 6,8 4,10"/><line x1="8" y1="10" x2="11" y2="10"/>'),
   arrows: svg('<line x1="5" y1="3" x2="5" y2="13"/><polyline points="3,5 5,3 7,5"/><line x1="11" y1="13" x2="11" y2="3"/><polyline points="9,11 11,13 13,11"/>'),
   pencil: svg('<line x1="3" y1="13" x2="12" y2="4"/><line x1="10.5" y1="5.5" x2="12" y2="7"/>'),
@@ -267,14 +268,17 @@ function renderHostList() {
       `<span class="h-acts">` +
       `<button class="h-sftp icon" title="SFTP">${ICONS.arrows}</button>` +
       `<button class="h-edit icon" title="Edit">${ICONS.pencil}</button>` +
+      `<button class="h-del icon" title="Delete">${ICONS.trash}</button>` +
       `</span></div>` +
       `<div class="h-sub">${esc(sub)}${h.has_password ? " · pw" : ""}</div>`;
     (el.querySelector(".h-sftp") as HTMLElement).setAttribute("aria-label", `Open SFTP for ${h.name}`);
     (el.querySelector(".h-edit") as HTMLElement).setAttribute("aria-label", `Edit ${h.name}`);
+    (el.querySelector(".h-del") as HTMLElement).setAttribute("aria-label", `Delete ${h.name}`);
     el.addEventListener("click", (ev) => {
       const t = ev.target as HTMLElement;
       if (t.closest(".h-edit")) openEditor(h);
       else if (t.closest(".h-sftp")) openSftp(h.name);
+      else if (t.closest(".h-del")) deleteHostByName(h.name);
       else openTerminal(h.name);
     });
     el.addEventListener("keydown", (ev) => {
@@ -423,6 +427,32 @@ async function saveKey() {
     applyAuthMode("key");
   } catch (e) {
     $("#key-err").textContent = `Failed to save key: ${msg(e)}. Check the name and press Save key again.`;
+  }
+}
+
+async function deleteHostByName(name: string) {
+  const choice = await dialog(
+    "Delete host",
+    `Delete host "${name}" from ~/.ssh/config? This cannot be undone.`,
+    [
+      { label: "Delete", id: "delete", style: "danger" },
+      { label: "Cancel", id: "cancel" },
+    ],
+    "cancel",
+    "cancel"
+  );
+  if (choice !== "delete") return;
+  try {
+    await invoke("delete_host", { name });
+    await loadHosts();
+  } catch (e) {
+    await dialog(
+      "Could not delete host",
+      `Failed to delete host: ${msg(e)}. Check the config, then try again.`,
+      [{ label: "OK", id: "ok" }],
+      "ok",
+      "ok"
+    );
   }
 }
 
@@ -871,6 +901,25 @@ async function openTerminal(host: string) {
   $("#panels").appendChild(panel);
 
   term.open(host_el);
+
+  // Termius/Windows-terminal style clipboard: selecting text copies it
+  // immediately; right-click pastes the clipboard into the terminal.
+  host_el.addEventListener("mouseup", () => {
+    const sel = term.getSelection();
+    if (sel) {
+      navigator.clipboard.writeText(sel).catch(() => {});
+      term.clearSelection();
+    }
+  });
+  host_el.addEventListener("contextmenu", (ev) => {
+    ev.preventDefault();
+    navigator.clipboard
+      .readText()
+      .then((text) => {
+        if (text && session.ptyId != null) invoke("pty_write", { id: session.ptyId, data: text });
+      })
+      .catch(() => {});
+  });
 
   const session: Session = { id: tabId, ptyId: null, host, term, fit, unlisten: [] };
   sessions.set(tabId, session);
