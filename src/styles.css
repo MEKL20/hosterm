@@ -128,6 +128,20 @@ button.sftp-go, button.sftp-refresh, button.sftp-upload, button.sftp-up { backgr
 button.sftp-go:hover, button.sftp-refresh:hover, button.sftp-upload:hover, button.sftp-up:hover { background: var(--bg2); }
 .h-act { margin-left: 8px; font-size: 11px; padding: 1px 6px; border-radius: 4px; color: var(--muted); }
 .h-act:hover { background: color-mix(in srgb, var(--fg) 12%, transparent); color: var(--fg); }
+
+/* ---------- remote text editor ---------- */
+.ed-wrap { display: flex; flex-direction: column; height: 100%; box-sizing: border-box; }
+.ed-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.ed-path { flex: 1; font-family: ui-monospace, "Cascadia Code", Menlo, monospace; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ed-bar button { background: var(--panel); border: 1px solid var(--border); color: var(--fg); border-radius: 6px; padding: 5px 14px; cursor: pointer; font-size: 12px; }
+.ed-bar button:hover { background: var(--bg2); }
+.ed-editor { flex: 1; overflow: hidden; }
+.ed-editor .cm-editor { height: 100%; background: var(--bg); }
+.ed-editor .cm-gutters { background: var(--bg2); color: var(--muted); border-right: 1px solid var(--border); }
+.ed-editor .cm-activeLine { background: color-mix(in srgb, var(--fg) 5%, transparent); }
+.ed-editor .cm-activeLineGutter { background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--fg); }
+.ed-status { font-size: 12px; color: var(--muted); min-height: 18px; padding: 4px 12px; border-top: 1px solid var(--border); }
+.ed-status.ok { color: #9ece6a; }
 .modal-box select {
   background: var(--bg2); color: var(--fg); border: 1px solid var(--border);
   padding: 8px 10px; border-radius: 6px; font-size: 13px; width: 100%;

@@ -529,7 +529,9 @@ fn parse_sftp_ls(output: &str) -> Vec<SftpEntry> {
 fn run_sftp_batch(host: &str, script: &str) -> Result<(String, String, bool), String> {
     use std::process::{Command, Stdio};
     sftp_safe(host, "Host")?;
-    let mut child = Command::new("sftp")
+    // HOSTERM_SFTP_BIN: testability hook (e.g. point at a -vvv wrapper)
+    let bin = std::env::var("HOSTERM_SFTP_BIN").unwrap_or_else(|_| "sftp".to_string());
+    let mut child = Command::new(bin)
         .arg("-o")
         .arg("BatchMode=yes")
         .arg("-b")
@@ -568,8 +570,18 @@ fn sftp_list(host: String, path: String) -> Result<Vec<SftpEntry>, String> {
 fn sftp_upload(host: String, local_path: String, remote_path: String) -> Result<(), String> {
     sftp_safe(&local_path, "Local path")?;
     sftp_safe(&remote_path, "Remote path")?;
-    if !PathBuf::from(&local_path).is_file() {
+    let local = PathBuf::from(&local_path);
+    if !local.is_file() {
         return Err("local file does not exist".into());
+    }
+    // Aliasing guard: batch-mode `put` truncates its own source when the local
+    // and remote paths resolve to the same file (same-machine sftp). Refuse
+    // instead of destroying the file.
+    let canon_local = local.canonicalize().map_err(|e| e.to_string())?;
+    if remote_path == canon_local.display().to_string()
+        || PathBuf::from(&remote_path).canonicalize().map(|p| p == canon_local).unwrap_or(false)
+    {
+        return Err("local and remote path are the same file — refusing to overwrite the source".into());
     }
     let script = format!("put \"{}\" \"{}\"\n", local_path, remote_path);
     let (_o, stderr, ok) = run_sftp_batch(&host, &script)?;
@@ -583,6 +595,12 @@ fn sftp_upload(host: String, local_path: String, remote_path: String) -> Result<
 fn sftp_download(host: String, remote_path: String, local_path: String) -> Result<(), String> {
     sftp_safe(&remote_path, "Remote path")?;
     sftp_safe(&local_path, "Local path")?;
+    // Aliasing guard (see sftp_upload): `get` would truncate the remote source.
+    if let Ok(canon_local) = PathBuf::from(&local_path).canonicalize() {
+        if remote_path == canon_local.display().to_string() {
+            return Err("local and remote path are the same file — refusing to overwrite the source".into());
+        }
+    }
     let script = format!("get \"{}\" \"{}\"\n", remote_path, local_path);
     let (_o, stderr, ok) = run_sftp_batch(&host, &script)?;
     if !ok {
@@ -590,6 +608,65 @@ fn sftp_download(host: String, remote_path: String, local_path: String) -> Resul
     }
     if !PathBuf::from(&local_path).exists() {
         return Err("download reported success but local file is missing".into());
+    }
+    Ok(())
+}
+
+// ---------- remote file editor (text over sftp) ----------
+
+const EDITOR_MAX_BYTES: u64 = 2 * 1024 * 1024; // refuse >2 MB in the text editor
+
+fn editor_temp(tag: &str) -> PathBuf {
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "hosterm-edit-{}-{}-{}",
+        std::process::id(), n, tag
+    ))
+}
+
+#[tauri::command]
+fn sftp_read_file(host: String, remote_path: String) -> Result<String, String> {
+    sftp_safe(&remote_path, "Remote path")?;
+    let tmp = editor_temp("get");
+    let script = format!("get \"{}\" \"{}\"\n", remote_path, tmp.display());
+    let (_o, stderr, ok) = run_sftp_batch(&host, &script)?;
+    if !ok {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("read failed: {}", stderr.trim()));
+    }
+    let meta = std::fs::metadata(&tmp).map_err(|e| format!("downloaded file missing: {}", e))?;
+    if meta.len() > EDITOR_MAX_BYTES {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!(
+            "file is {} bytes; text editor limit is {} bytes (use SFTP download instead)",
+            meta.len(),
+            EDITOR_MAX_BYTES
+        ));
+    }
+    let bytes = std::fs::read(&tmp).map_err(|e| e.to_string());
+    let _ = std::fs::remove_file(&tmp);
+    let bytes = bytes?;
+    if bytes.contains(&0) {
+        return Err("file looks binary — open it via SFTP download instead".into());
+    }
+    Ok(String::from_utf8_lossy(&bytes).to_string())
+}
+
+#[tauri::command]
+fn sftp_write_file(host: String, remote_path: String, content: String) -> Result<(), String> {
+    sftp_safe(&remote_path, "Remote path")?;
+    if content.len() as u64 > EDITOR_MAX_BYTES {
+        return Err("content exceeds the text editor size limit".into());
+    }
+    let tmp = editor_temp("put");
+    std::fs::write(&tmp, content.as_bytes()).map_err(|e| e.to_string())?;
+    let script = format!("put \"{}\" \"{}\"\n", tmp.display(), remote_path);
+    let result = run_sftp_batch(&host, &script);
+    let _ = std::fs::remove_file(&tmp);
+    let (_o, stderr, ok) = result?;
+    if !ok {
+        return Err(format!("write failed: {}", stderr.trim()));
     }
     Ok(())
 }
@@ -1341,6 +1418,33 @@ mod sftp_tests {
             std::fs::read_to_string(&back).unwrap(),
             "hosterm live sftp test\n"
         );
+
+        // editor roundtrip: read -> write -> read-back
+        let txt_path = format!("{}/editor.txt", dir.display());
+        sftp_write_file("testbox".into(), txt_path.clone(), "hello editor\nline two\n".into()).unwrap();
+        assert_eq!(
+            sftp_read_file("testbox".into(), txt_path.clone()).unwrap(),
+            "hello editor\nline two\n"
+        );
+        // binary guard: NUL byte in an uploaded file must be refused by the editor
+        let bin_local = dir.join("bin.dat");
+        std::fs::write(&bin_local, [0x68, 0x00, 0x69]).unwrap();
+        let bin_remote = format!("{}/uploaded_bin.dat", dir.display());
+        sftp_upload("testbox".into(), bin_local.display().to_string(), bin_remote.clone()).unwrap();
+        assert!(
+            sftp_read_file("testbox".into(), bin_remote).is_err(),
+            "binary must be refused"
+        );
+
+        // aliasing guard: put/get onto the same path must be refused, source intact
+        let alias_local = dir.join("alias_me.txt");
+        std::fs::write(&alias_local, "precious\n").unwrap();
+        let alias_remote = alias_local.display().to_string();
+        assert!(sftp_upload("testbox".into(), alias_remote.clone(), alias_remote.clone()).is_err());
+        assert_eq!(std::fs::read_to_string(&alias_local).unwrap(), "precious\n");
+        assert!(sftp_download("testbox".into(), alias_remote.clone(), alias_remote).is_err());
+        assert_eq!(std::fs::read_to_string(&alias_local).unwrap(), "precious\n");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1398,6 +1502,8 @@ pub fn run() {
             sftp_list,
             sftp_upload,
             sftp_download,
+            sftp_read_file,
+            sftp_write_file,
             pty_spawn,
             pty_write,
             pty_resize,

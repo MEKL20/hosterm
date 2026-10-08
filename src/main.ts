@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { basicSetup, EditorView } from "codemirror";
 import "@xterm/xterm/css/xterm.css";
 
 interface HostDto {
@@ -336,6 +337,8 @@ async function renderSftp(tabId: number, status: (m: string, ok?: boolean) => vo
         } else if (e.is_dir) {
           s.path = joinRemote(s.path, e.name);
           renderSftp(tabId, status);
+        } else {
+          openRemoteEditor(s.host, joinRemote(s.path, e.name));
         }
       });
       list.appendChild(row);
@@ -344,6 +347,111 @@ async function renderSftp(tabId: number, status: (m: string, ok?: boolean) => vo
   } catch (err) {
     list.innerHTML = "";
     status(String(err));
+  }
+}
+
+// ---------- remote text editor ----------
+type EditorSession = { host: string; path: string; view: EditorView; dirty: boolean };
+const editorSessions = new Map<number, EditorSession>();
+
+function editorLabel(s: EditorSession): string {
+  return `✎ ${baseName(s.path)}${s.dirty ? " •" : ""}`;
+}
+
+async function openRemoteEditor(host: string, path: string) {
+  // reuse an existing editor tab for the same file
+  for (const [id, s] of editorSessions) {
+    if (s.host === host && s.path === path) return activateTab(id);
+  }
+
+  const tabId = nextTab++;
+  const tab = document.createElement("div");
+  tab.className = "tab";
+  tab.dataset.tab = String(tabId);
+  const sess: EditorSession = { host, path, view: null as unknown as EditorView, dirty: false };
+  editorSessions.set(tabId, sess);
+
+  const setTitle = () => { (tab.querySelector("span") as HTMLElement).textContent = editorLabel(sess); };
+  tab.innerHTML = `<span>✎ ${esc(baseName(path))}</span><span class="x">×</span>`;
+  tab.addEventListener("click", (ev) => {
+    if ((ev.target as HTMLElement).classList.contains("x")) closeTab(tabId);
+    else activateTab(tabId);
+  });
+  $("#tabs").appendChild(tab);
+
+  const panel = document.createElement("div");
+  panel.className = "panel";
+  panel.dataset.tab = String(tabId);
+  panel.innerHTML = `
+    <div class="ed-wrap">
+      <div class="ed-bar">
+        <span class="ed-path" title="${esc(path)}">${esc(host)}:${esc(path)}</span>
+        <button class="ed-save" title="Save (Ctrl+S)">Save</button>
+        <button class="ed-reload" title="Re-read from server">Reload</button>
+      </div>
+      <div class="ed-editor"></div>
+      <div class="ed-status"></div>
+    </div>`;
+  $("#panels").appendChild(panel);
+
+  const q = (sel: string) => panel.querySelector(sel) as HTMLElement;
+  const status = (m: string, ok = false) => {
+    const el = q(".ed-status");
+    el.textContent = m;
+    el.classList.toggle("ok", ok);
+  };
+  const save = async () => {
+    status("saving …");
+    try {
+      await invoke("sftp_write_file", { host, remotePath: path, content: sess.view.state.doc.toString() });
+      sess.dirty = false;
+      setTitle();
+      status(`saved ${new Date().toLocaleTimeString()}`, true);
+    } catch (e) {
+      status(String(e));
+    }
+  };
+  q(".ed-save").addEventListener("click", save);
+  q(".ed-reload").addEventListener("click", async () => {
+    try {
+      const text = await invoke<string>("sftp_read_file", { host, remotePath: path });
+      sess.view.dispatch({ changes: { from: 0, to: sess.view.state.doc.length, insert: text } });
+      sess.dirty = false;
+      setTitle();
+      status("reloaded from server", true);
+    } catch (e) {
+      status(String(e));
+    }
+  });
+
+  activateTab(tabId);
+  try {
+    const text = await invoke<string>("sftp_read_file", { host, remotePath: path });
+    const view = new EditorView({
+      doc: text,
+      extensions: [
+        basicSetup,
+        EditorView.lineWrapping,
+        EditorView.updateListener.of((u) => {
+          if (u.docChanged && !sess.dirty) {
+            sess.dirty = true;
+            setTitle();
+          }
+        }),
+      ],
+      parent: q(".ed-editor"),
+    });
+    sess.view = view;
+    view.dom.addEventListener("keydown", (ev) => {
+      if ((ev.ctrlKey || ev.metaKey) && ev.key === "s") {
+        ev.preventDefault();
+        save();
+      }
+    });
+    status(`${text.split("\n").length} lines · ${host}:${path}`, true);
+  } catch (e) {
+    q(".ed-editor").textContent = String(e);
+    status("failed to open file");
   }
 }
 
@@ -439,6 +547,11 @@ async function closeTab(tabId: number) {
     s.unlisten.forEach((u) => u());
     s.term.dispose();
     sessions.delete(tabId);
+  } else if (editorSessions.has(tabId)) {
+    const ed = editorSessions.get(tabId) as EditorSession;
+    if (ed.dirty && !confirm(`${baseName(ed.path)} has unsaved changes. Close anyway?`)) return;
+    ed.view?.destroy();
+    editorSessions.delete(tabId);
   } else if (sftpSessions.has(tabId)) {
     sftpSessions.delete(tabId);
   } else {
@@ -447,7 +560,7 @@ async function closeTab(tabId: number) {
   document.querySelector(`.tab[data-tab="${tabId}"]`)?.remove();
   document.querySelector(`.panel[data-tab="${tabId}"]`)?.remove();
   if (activeTab === tabId) {
-    const remaining = [...sessions.keys(), ...sftpSessions.keys()];
+    const remaining = [...sessions.keys(), ...editorSessions.keys(), ...sftpSessions.keys()];
     if (remaining.length) activateTab(remaining[remaining.length - 1]);
     else activeTab = null;
   }
