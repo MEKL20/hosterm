@@ -14,6 +14,7 @@ interface HostDto {
   port: string;
   identity_file: string;
   auth_method: string;
+  has_password: boolean;
   options: [string, string][];
 }
 
@@ -234,6 +235,10 @@ async function loadHosts() {
 function renderHostList() {
   const list = $("#host-list");
   list.innerHTML = "";
+  const q = ($("#host-search") as HTMLInputElement).value.trim().toLowerCase();
+  const visible = hosts.filter(
+    (h) => !h.name.includes("*") && !h.name.includes("?") && (!q || h.name.toLowerCase().includes(q))
+  );
   if (hosts.length === 0) {
     const empty = document.createElement("div");
     empty.className = "list-state";
@@ -241,8 +246,14 @@ function renderHostList() {
     list.appendChild(empty);
     return;
   }
-  for (const h of hosts) {
-    if (h.name.includes("*") || h.name.includes("?")) continue; // skip pattern blocks
+  if (visible.length === 0) {
+    const none = document.createElement("div");
+    none.className = "list-state";
+    none.textContent = `No host matches "${q}".`;
+    list.appendChild(none);
+    return;
+  }
+  for (const h of visible) {
     const el = document.createElement("div");
     el.className = "host-item";
     el.setAttribute("role", "button");
@@ -257,7 +268,7 @@ function renderHostList() {
       `<button class="h-sftp icon" title="SFTP">${ICONS.arrows}</button>` +
       `<button class="h-edit icon" title="Edit">${ICONS.pencil}</button>` +
       `</span></div>` +
-      `<div class="h-sub">${esc(sub)}</div>`;
+      `<div class="h-sub">${esc(sub)}${h.has_password ? " · pw" : ""}</div>`;
     (el.querySelector(".h-sftp") as HTMLElement).setAttribute("aria-label", `Open SFTP for ${h.name}`);
     (el.querySelector(".h-edit") as HTMLElement).setAttribute("aria-label", `Edit ${h.name}`);
     el.addEventListener("click", (ev) => {
@@ -295,9 +306,17 @@ async function refreshIdentityDropdown(selected: string) {
   sel.value = selected || "";
 }
 
-function applyAuthMode(method: string) {
+function applyAuthMode(method: string, hasPassword = false) {
   $("#row-identity").classList.toggle("hidden", method !== "key");
-  $("#row-password-note").classList.toggle("hidden", method !== "password");
+  $("#row-password").classList.toggle("hidden", method !== "password");
+  const note = $("#row-password-note");
+  const pw = $("#f-password") as HTMLInputElement;
+  if (method === "password") {
+    note.textContent = hasPassword
+      ? "A password is stored for this host. Leave the field empty to keep it; type to replace it."
+      : "The password is stored in ~/.ssh/config (file perms 0600) and filled in automatically at connect.";
+    pw.placeholder = hasPassword ? "kept — type to replace" : "stored in ~/.ssh/config";
+  }
 }
 
 function modalValues(): string {
@@ -322,7 +341,8 @@ async function openEditor(h: HostDto | null) {
   ($("#f-port") as HTMLInputElement).value = h?.port ?? "";
   const method = h?.auth_method === "password" ? "password" : "key";
   ($("#f-auth") as HTMLSelectElement).value = method;
-  applyAuthMode(method);
+  applyAuthMode(method, h?.has_password ?? false);
+  ($("#f-password") as HTMLInputElement).value = "";
   await refreshIdentityDropdown(h?.identity_file ?? "");
   $("#modal-err").textContent = "";
   $("#m-delete").classList.toggle("hidden", !h);
@@ -368,6 +388,7 @@ async function saveHost() {
     port: ($("#f-port") as HTMLInputElement).value.trim(),
     identity_file: method === "key" ? ($("#f-identity") as HTMLSelectElement).value.trim() : "",
     auth_method: method,
+    password: method === "password" ? ($("#f-password") as HTMLInputElement).value : "",
   };
   try {
     await invoke("save_host", { originalName: editingName, host });
@@ -964,6 +985,16 @@ window.addEventListener("DOMContentLoaded", () => {
   $("#btn-add").addEventListener("click", () => openEditor(null));
   $("#btn-reload").addEventListener("click", loadHosts);
   $("#btn-raw").addEventListener("click", openRaw);
+  ($("#host-search") as HTMLInputElement).addEventListener("input", renderHostList);
+  // sidebar collapse: remembered across restarts
+  const setCollapsed = (c: boolean) => {
+    document.body.classList.toggle("sb-collapsed", c);
+    $("#btn-expand").classList.toggle("hidden", !c);
+    try { localStorage.setItem("hosterm.sb-collapsed", c ? "1" : ""); } catch { /* private mode */ }
+  };
+  setCollapsed(localStorage.getItem("hosterm.sb-collapsed") === "1");
+  $("#btn-collapse").addEventListener("click", () => setCollapsed(true));
+  $("#btn-expand").addEventListener("click", () => setCollapsed(false));
   $("#m-cancel").addEventListener("click", cancelEditor);
   $("#m-save").addEventListener("click", saveHost);
   $("#m-delete").addEventListener("click", deleteHost);

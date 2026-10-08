@@ -12,11 +12,20 @@
       <aside id="sidebar">
         <div class="sidebar-head">
           <span class="brand">hosterm</span>
-          <button id="btn-add" class="icon" aria-label="Add host" title="Add host">
-            <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="10" y1="2" x2="10" y2="6"/><line x1="8" y1="4" x2="12" y2="4"/></svg>
-          </button>
+          <span class="head-acts">
+            <button id="btn-add" class="icon" aria-label="Add host" title="Add host">
+              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="10" y1="2" x2="10" y2="6"/><line x1="8" y1="4" x2="12" y2="4"/></svg>
+            </button>
+            <button id="btn-collapse" class="icon" aria-label="Collapse sidebar" title="Collapse sidebar">
+              <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6,3 11,8 6,13"/></svg>
+            </button>
+          </span>
         </div>
+        <input id="host-search" type="search" placeholder="Search hosts…" aria-label="Search hosts" />
         <div id="host-list"></div>
+        <button id="btn-expand" class="hidden" aria-label="Expand sidebar" title="Expand sidebar">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="10,3 5,8 10,13"/></svg>
+        </button>
         <div class="sidebar-foot">
           <button id="btn-raw">Raw config</button>
           <button id="btn-reload" class="icon" aria-label="Reload config" title="Reload config">
@@ -42,7 +51,7 @@
         <label>Authentication
           <select id="f-auth">
             <option value="key">Key (IdentityFile)</option>
-            <option value="password">Password (prompt on connect)</option>
+            <option value="password">Password</option>
           </select>
         </label>
         <div id="row-identity">
@@ -53,10 +62,12 @@
             </div>
           </label>
         </div>
-        <p id="row-password-note" class="note hidden">
-          No password is stored. ssh will prompt for it in the terminal each
-          time you connect; your <code>~/.ssh/config</code> stays portable.
-        </p>
+        <div id="row-password" class="hidden">
+          <label>Password
+            <input id="f-password" type="password" placeholder="stored in ~/.ssh/config" autocomplete="off" />
+          </label>
+          <p class="note" id="row-password-note"></p>
+        </div>
         <div class="modal-actions">
           <button id="m-delete" class="danger hidden">Delete</button>
           <span class="spacer"></span>

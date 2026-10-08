@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
@@ -199,6 +199,7 @@ struct HostDto {
     port: String,
     identity_file: String,
     auth_method: String,
+    has_password: bool,
     options: Vec<(String, String)>,
 }
 
@@ -211,11 +212,16 @@ struct HostInput {
     identity_file: String,
     #[serde(default)]
     auth_method: String,
+    #[serde(default)]
+    password: String,
 }
 
-/// Set the auth-related directives on a host block. There is no `Password`
-/// directive in OpenSSH config, so "password" mode makes ssh PROMPT at connect
-/// (no secret is ever stored — the config stays fully portable).
+/// Set the auth-related directives on a host block.
+/// "password" mode: the secret itself is stored as a `Password` directive.
+/// OpenSSH has no such directive, so the block also carries
+/// `IgnoreUnknown Password` (official escape hatch) which makes real ssh skip
+/// it silently — the config stays valid for every other ssh client, and
+/// hosterm injects the secret at the prompt on connect. Key mode: clear both.
 fn apply_host_fields(hb: &mut HostBlock, host: &HostInput) {
     set_opt(hb, "HostName", &host.host_name);
     set_opt(hb, "User", &host.user);
@@ -225,6 +231,21 @@ fn apply_host_fields(hb: &mut HostBlock, host: &HostInput) {
             set_opt(hb, "IdentityFile", "");
             set_opt(hb, "PreferredAuthentications", "password");
             set_opt(hb, "PubkeyAuthentication", "no");
+            // empty password on an existing host = keep the stored one
+            // (the UI never sends the secret back to be re-saved)
+            if !host.password.is_empty() {
+                set_opt(hb, "Password", &host.password);
+                // merge, never clobber: keep tokens the user had in IgnoreUnknown
+                let existing = get_opt(hb, "IgnoreUnknown");
+                if !existing.split_whitespace().any(|t| t == "Password") {
+                    let merged = if existing.is_empty() {
+                        "Password".to_string()
+                    } else {
+                        format!("{} Password", existing)
+                    };
+                    set_opt(hb, "IgnoreUnknown", &merged);
+                }
+            }
         }
         _ => {
             // Key auth (default): point at an IdentityFile and clear any
@@ -232,6 +253,11 @@ fn apply_host_fields(hb: &mut HostBlock, host: &HostInput) {
             set_opt(hb, "IdentityFile", &host.identity_file);
             set_opt(hb, "PreferredAuthentications", "");
             set_opt(hb, "PubkeyAuthentication", "");
+            set_opt(hb, "Password", "");
+            // drop our own IgnoreUnknown only if it is exactly ours
+            if get_opt(hb, "IgnoreUnknown") == "Password" {
+                set_opt(hb, "IgnoreUnknown", "");
+            }
         }
     }
 }
@@ -278,6 +304,7 @@ fn read_ssh_config() -> Result<Vec<HostDto>, String> {
             "key"
         }
         .to_string();
+        let has_password = !get_opt(h, "Password").is_empty();
         out.push(HostDto {
             name,
             host_name: get_opt(h, "HostName"),
@@ -285,6 +312,7 @@ fn read_ssh_config() -> Result<Vec<HostDto>, String> {
             port: get_opt(h, "Port"),
             identity_file: get_opt(h, "IdentityFile"),
             auth_method,
+            has_password,
             options,
         });
     }
@@ -363,55 +391,78 @@ fn write_config_raw(content: String) -> Result<(), String> {
 
 // ---------- identity key management ----------
 
-/// List private-key files in the ssh dir, newest-friendly order. Returns the
-/// `~/.ssh/<name>` path form that goes straight into an IdentityFile directive.
-/// A ".pub" file or a file whose sibling has no private counterpart is skipped.
+/// Keys live in `<ssh_dir>/keys/` so ~/.ssh stays tidy (config, known_hosts,
+/// agent sockets) while every key hosterm manages is in one folder — copying
+/// that folder to a new device carries all keys with it.
+fn keys_dir() -> PathBuf {
+    let mut d = ssh_dir();
+    d.push("keys");
+    d
+}
+
+/// List private-key files in ~/.ssh/keys, sorted by name. Returns the
+/// `~/.ssh/keys/<name>` path form that goes straight into an IdentityFile
+/// directive. Legacy keys still in ~/.ssh are listed too (read-only legacy
+/// support); new keys are created in keys/ only.
 #[tauri::command]
 fn list_identity_files() -> Result<Vec<String>, String> {
-    let dir = ssh_dir();
     let mut out: Vec<String> = Vec::new();
-    let rd = match std::fs::read_dir(&dir) {
-        Ok(r) => r,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
-        Err(e) => return Err(e.to_string()),
-    };
-    for entry in rd.flatten() {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        let name = match path.file_name().and_then(|n| n.to_str()) {
-            Some(n) => n,
-            None => continue,
+    let keys = keys_dir();
+    let legacy = ssh_dir();
+    for (dir, prefix) in [(keys.clone(), "~/.ssh/keys/"), (legacy.clone(), "~/.ssh/")] {
+        let rd = match std::fs::read_dir(&dir) {
+            Ok(r) => r,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e.to_string()),
         };
-        // skip public keys, known_hosts, config, authorized_keys and temp files
-        if name.ends_with(".pub")
-            || name == "config"
-            || name == "known_hosts"
-            || name == "known_hosts.old"
-            || name == "authorized_keys"
-            || name.starts_with('.')
-        {
-            continue;
+        for entry in rd.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n,
+                None => continue,
+            };
+            // skip public keys, known_hosts, config, authorized_keys and temp files
+            if name.ends_with(".pub")
+                || name == "config"
+                || name == "known_hosts"
+                || name == "known_hosts.old"
+                || name == "authorized_keys"
+                || name.starts_with('.')
+            {
+                continue;
+            }
+            // treat as a key if the first line looks like a private key header,
+            // OR a matching <name>.pub exists next to it
+            let looks_private = std::fs::read_to_string(&path)
+                .map(|c| c.lines().next().map(|l| l.contains("PRIVATE KEY")).unwrap_or(false))
+                .unwrap_or(false);
+            let has_pub = dir.join(format!("{}.pub", name)).exists();
+            if looks_private || has_pub {
+                out.push(format!("{}{}", prefix, name));
+            }
         }
-        // treat as a key if the first line looks like a private key header,
-        // OR a matching <name>.pub exists next to it
-        let looks_private = std::fs::read_to_string(&path)
-            .map(|c| c.lines().next().map(|l| l.contains("PRIVATE KEY")).unwrap_or(false))
-            .unwrap_or(false);
-        let has_pub = dir.join(format!("{}.pub", name)).exists();
-        if looks_private || has_pub {
-            out.push(format!("~/.ssh/{}", name));
+        if dir == legacy {
+            // harden the keys/ dir once it exists
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if keys.is_dir() {
+                    let _ = std::fs::set_permissions(&keys, std::fs::Permissions::from_mode(0o700));
+                }
+            }
         }
     }
     out.sort();
     Ok(out)
 }
 
-/// Write a pasted private key into the ssh dir at 0600 and return the
-/// `~/.ssh/<name>` path to drop into an IdentityFile directive. Termius-style:
-/// the user pastes key text, hosterm persists it as a real file (SSH needs a
-/// file on disk; there is no in-config key storage).
+/// Write a pasted private key into ~/.ssh/keys at 0600 and return the
+/// `~/.ssh/keys/<name>` path to drop into an IdentityFile directive.
+/// Termius-style: the user pastes key text, hosterm persists it as a real
+/// file (SSH needs a file on disk; there is no in-config key storage).
 #[tauri::command]
 fn create_identity_file(name: String, private_key: String) -> Result<String, String> {
     let name = name.trim();
@@ -425,8 +476,13 @@ fn create_identity_file(name: String, private_key: String) -> Result<String, Str
     if private_key.trim().is_empty() {
         return Err("Private key text is empty".into());
     }
-    let dir = ssh_dir();
+    let dir = keys_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    }
     let path = dir.join(name);
     if path.exists() {
         return Err(format!("A key named '{}' already exists", name));
@@ -443,7 +499,7 @@ fn create_identity_file(name: String, private_key: String) -> Result<String, Str
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
             .map_err(|e| e.to_string())?;
     }
-    Ok(format!("~/.ssh/{}", name))
+    Ok(format!("~/.ssh/keys/{}", name))
 }
 
 // ============================================================
@@ -677,7 +733,7 @@ fn sftp_write_file(host: String, remote_path: String, content: String) -> Result
 
 struct PtySession {
     master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
 }
 
 #[derive(Default)]
@@ -685,7 +741,57 @@ struct PtyState {
     sessions: Mutex<HashMap<u32, PtySession>>,
 }
 
+/// Pump a PTY: forward output chunks through `on_chunk`, watching for
+/// OpenSSH's password prompt when `auto_pw` is set, injecting the secret
+/// once into `writer`. Shared by pty_spawn and the live test module.
+fn pump_pty(
+    mut reader: Box<dyn std::io::Read + Send>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    auto_pw: Option<String>,
+    mut on_chunk: impl FnMut(&str),
+) {
+    let mut buf = [0u8; 4096];
+    let mut tail: Vec<u8> = Vec::new();
+    let mut injected = false;
+    loop {
+        match reader.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                let s = String::from_utf8_lossy(&buf[..n]).to_string();
+                if let Some(pw) = auto_pw.as_deref() {
+                    if !injected {
+                        tail.extend_from_slice(&buf[..n]);
+                        if tail.len() > 8192 {
+                            tail.drain(..tail.len() - 512);
+                        }
+                        if String::from_utf8_lossy(&tail).contains("'s password:") {
+                            injected = true;
+                            let mut w = writer.lock().unwrap();
+                            let _ = w.write_all(pw.as_bytes());
+                            let _ = w.write_all(b"\r");
+                            let _ = w.flush();
+                        }
+                    }
+                }
+                on_chunk(&s);
+            }
+        }
+    }
+}
+
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
+
+/// Stored password for a host alias, from its `Password` directive.
+/// Stays inside the Rust process — never crosses the IPC boundary.
+fn lookup_stored_password(host: &str) -> Option<String> {
+    let text = read_config_text(&config_path()).ok()?;
+    let cfg = parse_config(&text);
+    cfg.hosts
+        .iter()
+        .find(|h| h.patterns.first().map(|p| p == host).unwrap_or(false))
+        .map(|h| get_opt(h, "Password"))
+        .filter(|p| !p.is_empty())
+}
 
 #[tauri::command]
 fn pty_spawn(
@@ -711,25 +817,25 @@ fn pty_spawn(
     let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
     drop(pair.slave);
 
-    let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
+    let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
 
     let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
 
-    // reader -> frontend events
+    // password prompt auto-fill: when a stored password exists for this host,
+    // the reader loop below watches for OpenSSH's prompt and injects the
+    // secret once through the shared writer.
+    let auto_pw = lookup_stored_password(&host);
+    let writer = Arc::new(Mutex::new(writer));
+
+    // reader -> frontend events (+ one-shot password injection)
     let app_r = app.clone();
+    let w_inject = writer.clone();
+    let auto_pw2 = auto_pw.clone();
     thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    let s = String::from_utf8_lossy(&buf[..n]).to_string();
-                    let _ = app_r.emit(&format!("pty://output/{}", id), s);
-                }
-                Err(_) => break,
-            }
-        }
+        pump_pty(reader, w_inject, auto_pw2, |s| {
+            let _ = app_r.emit(&format!("pty://output/{}", id), s.to_string());
+        });
         let _ = app_r.emit(&format!("pty://exit/{}", id), ());
     });
 
@@ -749,10 +855,11 @@ fn pty_spawn(
 
 #[tauri::command]
 fn pty_write(state: State<PtyState>, id: u32, data: String) -> Result<(), String> {
-    let mut map = state.sessions.lock().unwrap();
-    let s = map.get_mut(&id).ok_or("no such pty session")?;
-    s.writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
-    s.writer.flush().map_err(|e| e.to_string())?;
+    let map = state.sessions.lock().unwrap();
+    let s = map.get(&id).ok_or("no such pty session")?;
+    let mut w = s.writer.lock().unwrap();
+    w.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
+    w.flush().map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -894,6 +1001,7 @@ mod qa_roundtrip_tests {
             port: port.into(),
             identity_file: idf.into(),
             auth_method: "key".into(),
+            password: "".into(),
         }
     }
 
@@ -1295,6 +1403,7 @@ mod auth_key_tests {
             port: "".into(),
             identity_file: idf.into(),
             auth_method: method.into(),
+            password: "".into(),
         }
     }
 
@@ -1332,14 +1441,118 @@ mod auth_key_tests {
     }
 
     #[test]
+    fn stored_password_writes_password_directive_and_roundtrips() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = tmp("storedpw");
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        let mut input = hi("box", "password", "");
+        input.password = "s3cret!pw".into();
+        save_host(None, input).unwrap();
+        let out = std::fs::read_to_string(&cfg).unwrap();
+        assert!(out.contains("IgnoreUnknown Password"), "ssh must be told to skip Password: {out}");
+        assert!(out.contains("Password s3cret!pw"));
+        // round-trips: has_password=true, and editing WITHOUT resending the
+        // secret keeps the stored one (UI never echoes secrets back)
+        let hosts = read_ssh_config().unwrap();
+        assert_eq!(hosts[0].has_password, true);
+        assert!(!hosts[0].options.iter().any(|(k, _)| k == "Password" && k.is_empty()));
+        let mut edit = hi("box", "password", "");
+        edit.password = "".into();
+        save_host(Some("box".into()), edit).unwrap();
+        let out2 = std::fs::read_to_string(&cfg).unwrap();
+        std::env::remove_var("HOSTERM_CONFIG");
+        assert!(out2.contains("Password s3cret!pw"), "stored secret must survive an edit that omits it");
+    }
+
+    #[test]
+    fn legacy_keys_in_ssh_dir_still_listed() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = tmp("legacykey");
+        let dir = cfg.parent().unwrap();
+        std::fs::write(dir.join("id_old"), "-----BEGIN OPENSSH PRIVATE KEY-----\n").unwrap();
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        let listed = list_identity_files().unwrap();
+        std::env::remove_var("HOSTERM_CONFIG");
+        assert!(listed.contains(&"~/.ssh/id_old".to_string()), "legacy key still usable: {listed:?}");
+    }
+
+    /// Live check of the PTY password auto-inject: a fake "ssh" (bash reading
+    /// a line after printing the real OpenSSH prompt text) runs in a real
+    /// PTY; the pump must type the stored password for us. Gated behind
+    /// HOSTERM_LIVE_PTY=1 so normal runs never spawn processes.
+    #[test]
+    fn live_pty_password_autoinject() {
+        if std::env::var("HOSTERM_LIVE_PTY").as_deref() != Ok("1") {
+            return;
+        }
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = tmp("ptylive");
+        std::fs::write(
+            &cfg,
+            "Host fakebox\n    HostName 127.0.0.1\n    Password s3cret-pw-xyz\n    IgnoreUnknown Password\n",
+        )
+        .unwrap();
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        assert_eq!(lookup_stored_password("fakebox").as_deref(), Some("s3cret-pw-xyz"));
+
+        let pty_system = portable_pty::native_pty_system();
+        let pair = pty_system
+            .openpty(portable_pty::PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
+            .unwrap();
+        use portable_pty::CommandBuilder;
+        let mut cmd = CommandBuilder::new("bash");
+        cmd.arg("-c");
+        cmd.arg("read -r -p \"fakebox@127.0.0.1's password: \" pw; if [ \"$pw\" = 's3cret-pw-xyz' ]; then echo ACCESS_GRANTED; else echo WRONG_PASSWORD; fi");
+        cmd.env("TERM", "dumb");
+        let mut child = pair.slave.spawn_command(cmd).unwrap();
+        drop(pair.slave);
+        let reader = pair.master.try_clone_reader().unwrap();
+        let writer = pair.master.take_writer().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        let pump = std::thread::spawn(move || {
+            pump_pty(
+                reader,
+                std::sync::Arc::new(std::sync::Mutex::new(writer)),
+                lookup_stored_password("fakebox"),
+                move |s| {
+                    let _ = tx.send(s.to_string());
+                },
+            );
+        });
+        // collect until the fake ssh reports the outcome, then close the
+        // master so the pump's read EOFs and its thread can finish
+        let mut out = String::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
+            match rx.recv_timeout(std::time::Duration::from_millis(500)) {
+                Ok(s) => {
+                    out.push_str(&s);
+                    if out.contains("ACCESS_GRANTED") || out.contains("WRONG_PASSWORD") {
+                        break;
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(_) => break,
+            }
+        }
+        drop(pair.master);
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = pump.join();
+        std::env::remove_var("HOSTERM_CONFIG");
+        assert!(out.contains("ACCESS_GRANTED"), "auto-inject must type the stored password; got: {out:?}");
+        assert!(!out.contains("WRONG_PASSWORD"));
+    }
+
+    #[test]
     fn create_identity_file_writes_key_0600_and_lists_it() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let cfg = tmp("key");
         std::env::set_var("HOSTERM_CONFIG", &cfg);
         let body = "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----";
         let path = create_identity_file("id_test".into(), body.into()).unwrap();
-        assert_eq!(path, "~/.ssh/id_test");
-        let on_disk = cfg.parent().unwrap().join("id_test");
+        assert_eq!(path, "~/.ssh/keys/id_test");
+        let on_disk = cfg.parent().unwrap().join("keys").join("id_test");
         let content = std::fs::read_to_string(&on_disk).unwrap();
         assert!(content.ends_with('\n'), "trailing newline added");
         assert!(content.starts_with("-----BEGIN"));
@@ -1348,10 +1561,16 @@ mod auth_key_tests {
             use std::os::unix::fs::PermissionsExt;
             let mode = std::fs::metadata(&on_disk).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600);
+            let dmode = std::fs::metadata(cfg.parent().unwrap().join("keys"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(dmode, 0o700, "keys dir must be 0700");
         }
         let listed = list_identity_files().unwrap();
         std::env::remove_var("HOSTERM_CONFIG");
-        assert!(listed.contains(&"~/.ssh/id_test".to_string()));
+        assert!(listed.contains(&"~/.ssh/keys/id_test".to_string()));
     }
 
     #[test]

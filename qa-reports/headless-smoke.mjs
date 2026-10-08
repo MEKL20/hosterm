@@ -1,4 +1,6 @@
 // Headless smoke test for the redesigned UI without a Tauri backend.
+// Requires: npm install --no-save playwright@1.63.0 (chromium cached in
+// ~/.cache/ms-playwright). Run: node qa-reports/headless-smoke.mjs
 // Mocks window.__TAURI_INTERNALS__.invoke, loads dist/, asserts DOM behavior.
 import { chromium } from "playwright";
 import { createServer } from "http";
@@ -124,6 +126,25 @@ const ring = await page.evaluate(() => [...document.styleSheets].some((s) => {
   catch { return false; }
 }));
 check(":focus-visible rule present", ring);
+
+// 9b. host search filters the list
+await page.locator("#host-search").fill("zzz");
+await page.waitForTimeout(150);
+check("search: no match message", (await page.locator(".list-state").textContent()).includes("No host matches"));
+await page.locator("#host-search").fill("prod");
+await page.waitForTimeout(150);
+check("search: match renders", (await page.locator(".host-item").count()) === 1);
+await page.locator("#host-search").fill("");
+await page.waitForTimeout(150);
+
+// 9c. sidebar collapse/expand + localStorage persistence
+await page.locator("#btn-collapse").click();
+check("collapse: body class set", await page.evaluate(() => document.body.classList.contains("sb-collapsed")));
+check("collapse: expand button shown", await page.locator("#btn-expand").isVisible());
+const stored = await page.evaluate(() => localStorage.getItem("hosterm.sb-collapsed"));
+check("collapse: persisted", stored === "1");
+await page.locator("#btn-expand").click();
+check("expand: class removed", await page.evaluate(() => !document.body.classList.contains("sb-collapsed")));
 
 check("no console/page errors", errors.length === 0, errors.slice(0, 3).join(" | "));
 

@@ -97,6 +97,19 @@ select {
 }
 .brand { font-weight: 600; letter-spacing: .3px; }
 .sidebar-head button { width: 26px; height: 26px; }
+.head-acts { display: inline-flex; gap: 4px; }
+#host-search {
+  margin: 8px 12px;
+  width: calc(100% - 24px);
+  font-size: 12px;
+}
+#sidebar.sb-collapsed, body.sb-collapsed #sidebar { width: 44px; }
+body.sb-collapsed #sidebar > :not(#btn-expand) { display: none; }
+#btn-expand {
+  margin: 10px auto;
+  width: 26px; height: 26px;
+  padding: 0;
+}
 #host-list { flex: 1; overflow-y: auto; padding: 8px; }
 .host-item {
   padding: 8px 10px;
