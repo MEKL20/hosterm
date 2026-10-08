@@ -231,7 +231,7 @@ body.sb-collapsed #sidebar > :not(#btn-expand) { display: none; }
 }
 
 /* sftp browser */
-.sftp-wrap { display: flex; flex-direction: column; height: 100%; padding: 12px; gap: 8px; }
+.sftp-wrap { display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 12px; gap: 8px; }
 .sftp-toolbar { display: flex; gap: 8px; }
 .sftp-toolbar input.sftp-path { flex: 1; font-family: var(--font-mono); }
 .sftp-toolbar button.sftp-up, .sftp-toolbar button.sftp-refresh { width: 34px; height: 34px; }
@@ -274,6 +274,11 @@ body.sb-collapsed #sidebar > :not(#btn-expand) { display: none; }
 
 /* remote text editor */
 .ed-wrap { display: flex; flex-direction: column; height: 100%; }
+.sftp-panes { display: flex; gap: 8px; flex: 1; min-height: 0; }
+.sftp-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--border-soft); border-radius: 6px; overflow: hidden; }
+.pane-head { padding: 5px 8px; background: var(--bg2); color: var(--muted); font-size: 11px; letter-spacing: .4px; text-transform: uppercase; }
+.sftp-row.sel { background: var(--hover); outline: 1px solid var(--accent); }
+.loc-list { flex: 1; overflow-y: auto; padding: 4px; }
 .ed-bar {
   display: flex; align-items: center; gap: 8px;
   padding: 8px 12px;

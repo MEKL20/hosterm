@@ -513,6 +513,13 @@ fn create_identity_file(name: String, private_key: String) -> Result<String, Str
 // the persistent-session variant (a later increment).
 
 #[derive(Serialize)]
+struct LocalEntryDto {
+    name: String,
+    is_dir: bool,
+    size: u64,
+}
+
+#[derive(Serialize)]
 struct SftpEntry {
     name: String,
     is_dir: bool,
@@ -587,15 +594,23 @@ fn run_sftp_batch(host: &str, script: &str) -> Result<(String, String, bool), St
     sftp_safe(host, "Host")?;
     // HOSTERM_SFTP_BIN: testability hook (e.g. point at a -vvv wrapper)
     let bin = std::env::var("HOSTERM_SFTP_BIN").unwrap_or_else(|_| "sftp".to_string());
-    let mut child = Command::new(bin)
-        .arg("-o")
+    let mut cmd = Command::new(bin);
+    cmd.arg("-o")
         .arg("BatchMode=yes")
         .arg("-b")
         .arg("-") // read batch commands from stdin
         .arg(host)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    // sftp.exe is a console program: without CREATE_NO_WINDOW a console
+    // window flashes on screen on every operation on Windows.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("failed to launch sftp: {}", e))?;
     {
@@ -620,6 +635,36 @@ fn sftp_list(host: String, path: String) -> Result<Vec<SftpEntry>, String> {
         return Err(format!("sftp ls failed: {}", stderr.trim()));
     }
     Ok(parse_sftp_ls(&stdout))
+}
+
+#[tauri::command]
+fn home_dir() -> String {
+    std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn local_list(path: String) -> Result<Vec<LocalEntryDto>, String> {
+    if path.trim().is_empty() {
+        return Err("path is empty".into());
+    }
+    let dir = PathBuf::from(&path);
+    let entries = std::fs::read_dir(&dir).map_err(|e| format!("cannot read {}: {}", path, e))?;
+    let mut out: Vec<LocalEntryDto> = Vec::new();
+    for e in entries.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue; // keep the pane calm; same rule as the remote pane
+        }
+        let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        let size = e.metadata().map(|m| m.len()).unwrap_or(0);
+        out.push(LocalEntryDto { name, is_dir, size });
+    }
+    out.sort_by(|a, b| {
+        b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    Ok(out)
 }
 
 #[tauri::command]
@@ -1476,6 +1521,21 @@ mod auth_key_tests {
         assert!(listed.contains(&"~/.ssh/id_old".to_string()), "legacy key still usable: {listed:?}");
     }
 
+    #[test]
+    fn local_list_skips_hidden_and_sorts_dirs_first() {
+        let base = std::env::temp_dir().join(format!("hosterm-locallist-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("zdir")).unwrap();
+        std::fs::create_dir_all(base.join("adir")).unwrap();
+        std::fs::write(base.join("b.txt"), "x").unwrap();
+        std::fs::write(base.join(".hidden"), "x").unwrap();
+        let out = local_list(base.display().to_string()).unwrap();
+        let _ = std::fs::remove_dir_all(&base);
+        let names: Vec<&str> = out.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["adir", "zdir", "b.txt"], "dirs first, hidden skipped: {names:?}");
+        assert!(out[0].is_dir && !out[2].is_dir);
+    }
+
     /// Live check of the PTY password auto-inject: a fake "ssh" (bash reading
     /// a line after printing the real OpenSSH prompt text) runs in a real
     /// PTY; the pump must type the stored password for us. Gated behind
@@ -1719,6 +1779,8 @@ pub fn run() {
             list_identity_files,
             create_identity_file,
             sftp_list,
+            local_list,
+            home_dir,
             sftp_upload,
             sftp_download,
             sftp_read_file,

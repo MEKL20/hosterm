@@ -33,6 +33,8 @@ const invoke = (cmd, args = {}) => {
     case "write_config_raw": return Promise.resolve();
     case "list_identity_files": return Promise.resolve(["~/.ssh/id_test"]);
     case "sftp_list": return Promise.resolve(sampleSftp);
+    case "local_list": return Promise.resolve([{ name: "notes.txt", is_dir: false, size: 5 }, { name: "sub", is_dir: true, size: 0 }]);
+    case "home_dir": return Promise.resolve("/tmp/mockhome");
     case "sftp_read_file": return Promise.resolve("hello editor\nline two\n");
     case "sftp_write_file": return Promise.resolve();
     case "save_host": case "delete_host": case "create_identity_file": return Promise.resolve();
@@ -76,16 +78,16 @@ check("sidebar sftp action is a button", (await sftpBtn.evaluate((el) => el.tagN
 const vis = await sftpBtn.evaluate((el) => getComputedStyle(el).opacity);
 check("action buttons not hover-hidden", vis === "1", `opacity=${vis}`);
 
-// 3. open SFTP tab via button
+// 3. open SFTP tab via button (remote pane only; local pane adds its own rows)
 await sftpBtn.click();
 await page.waitForTimeout(500);
-const sftpRows = await page.locator(".sftp-row").count();
+const sftpRows = await page.locator(".sftp-list .sftp-row").count();
 check("sftp rows render from mock", sftpRows === 2, `rows=${sftpRows}`);
-const dirSize = await page.locator(".sftp-row", { hasText: "projects" }).locator(".sz").textContent();
+const dirSize = await page.locator(".sftp-list .sftp-row", { hasText: "projects" }).locator(".sz").textContent();
 check("dir size cell empty (no em dash)", dirSize.trim() === "", JSON.stringify(dirSize));
 
-// 4. click the file row -> editor tab opens with CodeMirror content
-await page.locator(".sftp-row", { hasText: "notes.txt" }).locator(".nm").click();
+// 4. double-click the file row -> editor tab opens with CodeMirror content
+await page.locator(".sftp-row", { hasText: "notes.txt" }).first().dblclick();
 await page.waitForTimeout(500);
 const cmContent = await page.locator(".cm-content").textContent();
 check("editor opens with mocked file", cmContent.includes("hello editor"), cmContent.slice(0, 40));
@@ -170,6 +172,25 @@ const rcHandled = await page.evaluate(() => {
   return ev.defaultPrevented;
 });
 check("terminal right-click handled (no native menu)", rcHandled);
+
+// 9f. sftp dual-pane: panes render, double-click navigates, single-click selects
+await page.locator(".host-item .h-sftp").click();
+await page.waitForTimeout(600);
+check("sftp dual-pane: remote pane", (await page.locator(".panel.active .sftp-list .sftp-row").count()) >= 1);
+check("sftp dual-pane: local pane rows", (await page.locator(".panel.active .loc-list .sftp-row").count()) === 2);
+check("sftp dual-pane: local home prefilled", (await page.locator(".panel.active .loc-path").inputValue()) === "/tmp/mockhome");
+// single click selects (delayed 250ms)
+await page.locator(".panel.active .loc-list .sftp-row").first().click();
+await page.waitForTimeout(400);
+check("sftp single-click selects", (await page.locator(".panel.active .loc-list .sftp-row.sel").count()) === 1);
+// double-click on local dir navigates
+await page.locator(".panel.active .loc-list .sftp-row").nth(1).dblclick();
+await page.waitForTimeout(400);
+check("sftp double-click navigates local dir", (await page.locator(".panel.active .loc-path").inputValue()).endsWith("/sub"));
+// download button guards when nothing selected in remote
+await page.locator(".panel.active .sftp-download").click();
+await page.waitForTimeout(300);
+check("download without selection shows hint", (await page.locator(".panel.active .sftp-status").textContent()).includes("Select a file"));
 
 check("no console/page errors", errors.length === 0, errors.slice(0, 3).join(" | "));
 

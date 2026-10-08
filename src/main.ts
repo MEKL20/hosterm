@@ -525,7 +525,11 @@ async function saveRaw() {
 // ---------- sftp browser ----------
 type SftpSession = { host: string; path: string };
 type SftpEntry = { name: string; is_dir: boolean; is_link: boolean; size: number };
+type LocalEntry = { name: string; is_dir: boolean; size: number };
 const sftpSessions = new Map<number, SftpSession>();
+
+// Local pane state per sftp tab (browser can't list dirs itself).
+const localPane = new Map<number, string>(); // tabId -> local cwd
 
 function fmtSize(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -557,17 +561,32 @@ async function openSftp(host: string) {
   panel.setAttribute("role", "tabpanel");
   panel.innerHTML = `
     <div class="sftp-wrap">
-      <div class="sftp-toolbar">
-        <button class="sftp-up icon" aria-label="Parent directory" title="Parent directory">${ICONS.up}</button>
-        <input class="sftp-path" placeholder="remote path (empty = home)" />
-        <button class="sftp-go">Go</button>
-        <button class="sftp-refresh icon" aria-label="Reload directory" title="Reload directory">${ICONS.reload}</button>
+      <div class="sftp-panes">
+        <div class="sftp-pane">
+          <div class="pane-head"><span class="pane-title">${esc(host)} — remote</span></div>
+          <div class="sftp-toolbar">
+            <button class="sftp-up icon" aria-label="Parent directory" title="Parent directory">${ICONS.up}</button>
+            <input class="sftp-path" placeholder="remote path (empty = home)" />
+            <button class="sftp-go">Go</button>
+            <button class="sftp-refresh icon" aria-label="Reload directory" title="Reload directory">${ICONS.reload}</button>
+          </div>
+          <div class="sftp-list"></div>
+        </div>
+        <div class="sftp-pane">
+          <div class="pane-head"><span class="pane-title">This PC — local</span></div>
+          <div class="sftp-toolbar">
+            <button class="loc-up icon" aria-label="Parent local directory" title="Parent directory">${ICONS.up}</button>
+            <input class="loc-path" placeholder="local directory" />
+            <button class="loc-go">Go</button>
+            <button class="loc-refresh icon" aria-label="Reload local directory" title="Reload directory">${ICONS.reload}</button>
+          </div>
+          <div class="loc-list"></div>
+        </div>
       </div>
       <div class="xfer-bar"></div>
-      <div class="sftp-list"></div>
       <div class="sftp-foot">
-        <input class="sftp-local" placeholder="local path (download dir / file to upload)" />
-        <button class="sftp-upload">Upload</button>
+        <button class="sftp-upload">Upload selection</button>
+        <button class="sftp-download">Download selection</button>
       </div>
       <div class="sftp-status"></div>
     </div>`;
@@ -575,7 +594,7 @@ async function openSftp(host: string) {
 
   const q = (sel: string) => panel.querySelector(sel) as HTMLElement;
   const inp = q(".sftp-path") as HTMLInputElement;
-  const loc = q(".sftp-local") as HTMLInputElement;
+  const locinp = q(".loc-path") as HTMLInputElement;
   const status: StatusFn = (m, kind = "") => {
     const el = q(".sftp-status");
     el.textContent = m;
@@ -585,6 +604,7 @@ async function openSftp(host: string) {
   const busy = (on: boolean) => {
     q(".xfer-bar").classList.toggle("on", on);
     (q(".sftp-upload") as HTMLButtonElement).disabled = on;
+    (q(".sftp-download") as HTMLButtonElement).disabled = on;
   };
 
   q(".sftp-go").addEventListener("click", () => {
@@ -601,25 +621,159 @@ async function openSftp(host: string) {
     renderSftp(tabId, status);
   });
   q(".sftp-refresh").addEventListener("click", () => renderSftp(tabId, status));
+
+  const goLocal = () => {
+    localPane.set(tabId, locinp.value.trim());
+    renderLocalPane(tabId, status);
+  };
+  locinp.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") goLocal();
+  });
+  q(".loc-go").addEventListener("click", goLocal);
+  q(".loc-up").addEventListener("click", () => {
+    const cur = localPane.get(tabId) || "";
+    const parent = cur.replace(/[\\/][^\\/]*$/, "");
+    localPane.set(tabId, parent || cur);
+    const s2 = sftpSessions.get(tabId);
+    locinp.value = localPane.get(tabId) || "";
+    if (s2) renderLocalPane(tabId, status);
+  });
+  q(".loc-refresh").addEventListener("click", () => renderLocalPane(tabId, status));
+
+  // selection-based transfers, Termius style
   q(".sftp-upload").addEventListener("click", async () => {
-    const localPath = loc.value.trim().replace(/[\/]+$/, "");
-    if (!localPath) return status("Enter a local file path to upload, then press Upload.", "err");
-    const remote = joinRemote((sftpSessions.get(tabId) as SftpSession).path, baseName(localPath));
+    const name = (panel as any).__selLocal || "";
+    if (!name) return status("Select a file in the local pane first (single click).", "err");
+    const localDir = localPane.get(tabId) || "";
+    const localPath = `${localDir.replace(/[\\/]+$/, "")}/${name}`;
+    const remote = joinRemote((sftpSessions.get(tabId) as SftpSession).path, name);
     busy(true);
-    status(`Uploading ${baseName(localPath)}…`);
+    status(`Uploading ${name}…`);
     try {
       await invoke("sftp_upload", { host, localPath, remotePath: remote });
       status(`Uploaded to ${remote}`, "ok");
+      (panel as any).__selLocal = "";
       renderSftp(tabId, status);
     } catch (e) {
-      status(`Failed to upload ${baseName(localPath)}: ${msg(e)}. Check the local path and try again.`, "err");
+      status(`Failed to upload ${name}: ${msg(e)}. Check the path and try again.`, "err");
+    } finally {
+      busy(false);
+    }
+  });
+  q(".sftp-download").addEventListener("click", async () => {
+    const name = (panel as any).__selRemote || "";
+    if (!name) return status("Select a file in the remote pane first (single click).", "err");
+    const localDir = (localPane.get(tabId) || "").replace(/[\\/]+$/, "");
+    if (!localDir) return status("Open a local directory on the right first.", "err");
+    const local = `${localDir}/${name}`;
+    const s = sftpSessions.get(tabId) as SftpSession;
+    busy(true);
+    status(`Downloading ${name}…`);
+    try {
+      await invoke("sftp_download", { host, remotePath: joinRemote(s.path, name), localPath: local });
+      status(`Saved to ${local}`, "ok");
+      (panel as any).__selRemote = "";
+      renderLocalPane(tabId, status);
+    } catch (e) {
+      status(`Failed to download ${name}: ${msg(e)}. Check the path and try again.`, "err");
     } finally {
       busy(false);
     }
   });
 
+  // default local pane: user home (frontend knows it from the backend)
+  try {
+    localPane.set(tabId, await invoke<string>("home_dir"));
+    locinp.value = localPane.get(tabId) || "";
+  } catch {
+    localPane.set(tabId, "");
+  }
   activateTab(tabId);
   renderSftp(tabId, status);
+  renderLocalPane(tabId, status);
+}
+
+function rowFor(
+  list: HTMLElement,
+  e: { name: string; is_dir: boolean; is_link?: boolean; size: number },
+  onOpen: () => void,
+  onSelect: () => void,
+  isSelected: () => boolean
+) {
+  const row = document.createElement("div");
+  row.className = "sftp-row" + (isSelected() ? " sel" : "");
+  row.setAttribute("role", "button");
+  row.tabIndex = 0;
+  const ico = e.is_dir ? ICONS.folder : e.is_link ? ICONS.link : ICONS.file;
+  row.innerHTML =
+    `<span class="f-ico${e.is_dir ? " dir" : ""}"${e.is_link ? ' title="Symbolic link"' : ""}>${ico}</span>` +
+    `<span class="nm">${esc(e.name)}</span>` +
+    `<span class="sz">${e.is_dir ? "" : fmtSize(e.size)}</span>`;
+  let clickTimer: number | null = null;
+  row.addEventListener("click", () => {
+    if (clickTimer != null) return; // the dblclick handler owns it
+    clickTimer = window.setTimeout(() => {
+      clickTimer = null;
+      onSelect();
+    }, 250);
+  });
+  row.addEventListener("dblclick", () => {
+    if (clickTimer != null) {
+      clearTimeout(clickTimer);
+      clickTimer = null;
+    }
+    onOpen();
+  });
+  row.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") onOpen();
+    else if (ev.key === " ") {
+      ev.preventDefault();
+      onSelect();
+    }
+  });
+  list.appendChild(row);
+}
+
+async function renderLocalPane(tabId: number, status: StatusFn) {
+  const panel = document.querySelector(`.panel[data-tab="${tabId}"]`) as HTMLElement;
+  if (!panel) return;
+  const list = panel.querySelector(".loc-list") as HTMLElement;
+  const dir = localPane.get(tabId) || "";
+  list.innerHTML = `<div class="list-state"><span class="spinner"></span>Loading ${esc(dir || "~")}…</div>`;
+  let entries: LocalEntry[];
+  try {
+    entries = await invoke<LocalEntry[]>("local_list", { path: dir });
+  } catch (err) {
+    list.innerHTML = "";
+    status(`Failed to read ${dir || "home"}: ${msg(err)}. Fix the path and press Go.`, "err");
+    return;
+  }
+  list.innerHTML = "";
+  if (entries.length === 0) list.innerHTML = `<div class="list-state">Empty directory.</div>`;
+  for (const e of entries) {
+    rowFor(
+      list,
+      e,
+      () => {
+        if (e.is_dir) {
+          const next = dir.replace(/[\\/]+$/, "") + "/" + e.name;
+          localPane.set(tabId, next);
+          const inp = panel.querySelector(".loc-path") as HTMLInputElement;
+          inp.value = next;
+          renderLocalPane(tabId, status);
+        } else {
+          status(`Selected ${e.name} for upload.`, "");
+        }
+      },
+      () => {
+        (panel as any).__selLocal = e.name;
+        list.querySelectorAll(".sftp-row.sel").forEach((r) => r.classList.remove("sel"));
+        (list.querySelector(".sftp-row:last-child") as HTMLElement)?.classList.add("sel");
+      },
+      () => ((panel as any).__selLocal || "") === e.name
+    );
+  }
+  status(`${entries.length} local items · ${dir || "~"}`);
 }
 
 async function renderSftp(tabId: number, status: StatusFn) {
@@ -643,48 +797,27 @@ async function renderSftp(tabId: number, status: StatusFn) {
     list.innerHTML = `<div class="list-state">Empty directory.</div>`;
   }
   for (const e of entries) {
-    const row = document.createElement("div");
-    row.className = "sftp-row";
-    const ico = e.is_dir ? ICONS.folder : e.is_link ? ICONS.link : ICONS.file;
-    row.innerHTML =
-      `<span class="f-ico${e.is_dir ? " dir" : ""}"${e.is_link ? ' title="Symbolic link"' : ""}>${ico}</span>` +
-      `<span class="nm">${esc(e.name)}</span>` +
-      `<span class="sz">${e.is_dir ? "" : fmtSize(e.size)}</span>`;
-    if (!e.is_dir) {
-      const dl = document.createElement("button");
-      dl.className = "dl icon";
-      dl.title = "Download";
-      dl.setAttribute("aria-label", `Download ${e.name}`);
-      dl.innerHTML = ICONS.download;
-      dl.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        const localDir = (panel.querySelector(".sftp-local") as HTMLInputElement).value.trim().replace(/[\/]+$/, "");
-        if (!localDir) return status("Set a local download directory in the bottom input first.", "err");
-        const local = `${localDir}/${e.name}`;
-        const bar = panel.querySelector(".xfer-bar") as HTMLElement;
-        const up = panel.querySelector(".sftp-upload") as HTMLButtonElement;
-        bar.classList.add("on");
-        up.disabled = true;
-        status(`Downloading ${e.name}…`);
-        invoke("sftp_download", { host: s.host, remotePath: joinRemote(s.path, e.name), localPath: local })
-          .then(() => status(`Saved to ${local}`, "ok"))
-          .catch((err) => status(`Failed to download ${e.name}: ${msg(err)}. Check the local path and try again.`, "err"))
-          .finally(() => {
-            bar.classList.remove("on");
-            up.disabled = false;
-          });
-      });
-      row.appendChild(dl);
-    }
-    row.addEventListener("click", () => {
-      if (e.is_dir) {
-        s.path = joinRemote(s.path, e.name);
-        renderSftp(tabId, status);
-      } else {
-        openRemoteEditor(s.host, joinRemote(s.path, e.name));
-      }
-    });
-    list.appendChild(row);
+    rowFor(
+      list,
+      e,
+      () => {
+        if (e.is_dir) {
+          s.path = joinRemote(s.path, e.name);
+          renderSftp(tabId, status);
+        } else {
+          openRemoteEditor(s.host, joinRemote(s.path, e.name));
+        }
+      },
+      () => {
+        (panel as any).__selRemote = e.is_dir ? "" : e.name;
+        list.querySelectorAll(".sftp-row.sel").forEach((r) => r.classList.remove("sel"));
+        if (!e.is_dir) {
+          (list.querySelector(".sftp-row:last-child") as HTMLElement)?.classList.add("sel");
+          status(`Selected ${e.name} for download.`, "");
+        }
+      },
+      () => ((panel as any).__selRemote || "") === e.name && !e.is_dir
+    );
   }
   status(`${entries.length} ${entries.length === 1 ? "item" : "items"} · ${s.host}:${s.path || "~"}`);
 }
