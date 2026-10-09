@@ -651,6 +651,7 @@ fn parse_sftp_ls(output: &str) -> Vec<SftpEntry> {
 /// Run an sftp batch script against `host`, return (stdout, stderr, success).
 fn run_sftp_batch(host: &str, script: &str) -> Result<(String, String, bool), String> {
     use std::process::{Command, Stdio};
+    ensure_config_valid();
     sftp_safe(host, "Host")?;
     // HOSTERM_SFTP_BIN: testability hook (e.g. point at a -vvv wrapper)
     let bin = std::env::var("HOSTERM_SFTP_BIN").unwrap_or_else(|_| "sftp".to_string());
@@ -702,6 +703,25 @@ fn home_dir() -> String {
     std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
         .unwrap_or_default()
+}
+
+/// Clipboard via the host process, not the webview: WebView2 shows a
+/// permission prompt ("wants to see text and images copied to the
+/// clipboard") for navigator.clipboard reads, which breaks the
+/// right-click-to-paste flow. The OS clipboard is shared, so this is the
+/// same content — no webview clipboard permission involved.
+#[tauri::command]
+fn clipboard_write(text: String) -> Result<(), String> {
+    arboard::Clipboard::new()
+        .and_then(|mut c| c.set_text(text))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn clipboard_read() -> Result<String, String> {
+    arboard::Clipboard::new()
+        .and_then(|mut c| c.get_text())
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -898,6 +918,23 @@ fn lookup_stored_password(host: &str) -> Option<String> {
         .filter(|p| !p.is_empty())
 }
 
+/// Connect-time guard: repair any host block whose IgnoreUnknown/Password
+/// pair is reversed before a real ssh/sftp/scp binary reads the file. Runs
+/// on every spawn path (PTY, SFTP list/upload/download) so configs written
+/// by any older version can never terminate ssh at connect time, even if
+/// the app-start migration missed them.
+fn ensure_config_valid() {
+    let path = config_path();
+    if let Ok(text) = read_config_text(&path) {
+        let mut cfg = parse_config(&text);
+        migrate_reversed_ignore_unknown(&mut cfg);
+        let fixed = serialize_config(&cfg);
+        if fixed != text {
+            let _ = write_config_file(&path, &fixed);
+        }
+    }
+}
+
 #[tauri::command]
 fn pty_spawn(
     app: AppHandle,
@@ -906,6 +943,7 @@ fn pty_spawn(
     cols: u16,
     rows: u16,
 ) -> Result<u32, String> {
+    ensure_config_valid();
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -1898,6 +1936,8 @@ pub fn run() {
             sftp_list,
             local_list,
             home_dir,
+            clipboard_write,
+            clipboard_read,
             sftp_upload,
             sftp_download,
             sftp_read_file,

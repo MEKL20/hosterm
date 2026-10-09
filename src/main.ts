@@ -1040,14 +1040,13 @@ async function openTerminal(host: string) {
   host_el.addEventListener("mouseup", () => {
     const sel = term.getSelection();
     if (sel) {
-      navigator.clipboard.writeText(sel).catch(() => {});
+      invoke("clipboard_write", { text: sel }).catch(() => {});
       term.clearSelection();
     }
   });
   host_el.addEventListener("contextmenu", (ev) => {
     ev.preventDefault();
-    navigator.clipboard
-      .readText()
+    invoke("clipboard_read")
       .then((text) => {
         if (text && session.ptyId != null) invoke("pty_write", { id: session.ptyId, data: text });
       })
