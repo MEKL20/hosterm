@@ -222,6 +222,39 @@ struct HostInput {
 /// `IgnoreUnknown Password` (official escape hatch) which makes real ssh skip
 /// it silently — the config stays valid for every other ssh client, and
 /// hosterm injects the secret at the prompt on connect. Key mode: clear both.
+/// OpenSSH parses top-down: an unknown option is fatal unless an earlier
+/// IgnoreUnknown listed it. hosterm stores secrets as a `Password` directive,
+/// so that pair must appear in exactly that order inside a host block. This
+/// moves the IgnoreUnknown line ahead of the Password line when a save left
+/// them reversed (new directives append at the block end).
+fn reorder_ignore_unknown_first(hb: &mut HostBlock) {
+    let iu = match hb.lines.iter().position(
+        |l| matches!(l, CfgLine::Opt { key, .. } if key.eq_ignore_ascii_case("IgnoreUnknown")),
+    ) {
+        Some(i) => i,
+        None => return,
+    };
+    let pw = match hb.lines.iter().position(
+        |l| matches!(l, CfgLine::Opt { key, .. } if key.eq_ignore_ascii_case("Password")),
+    ) {
+        Some(p) => p,
+        None => return,
+    };
+    if pw < iu {
+        let line = hb.lines.remove(iu);
+        hb.lines.insert(pw, line);
+    }
+}
+
+/// Fix any existing host block that already has the pair reversed (configs
+/// written by hosterm <= 0.4.x). Runs at load so users never see ssh's
+/// "Bad configuration option: password" termination.
+fn migrate_reversed_ignore_unknown(cfg: &mut SshConfig) {
+    for hb in &mut cfg.hosts {
+        reorder_ignore_unknown_first(hb);
+    }
+}
+
 fn apply_host_fields(hb: &mut HostBlock, host: &HostInput) {
     set_opt(hb, "HostName", &host.host_name);
     set_opt(hb, "User", &host.user);
@@ -245,6 +278,11 @@ fn apply_host_fields(hb: &mut HostBlock, host: &HostInput) {
                     };
                     set_opt(hb, "IgnoreUnknown", &merged);
                 }
+                // OpenSSH reads the file sequentially: IgnoreUnknown must come
+                // BEFORE the Password line, or ssh dies with "Bad configuration
+                // option: password". (New opts append at the block end, so the
+                // pair can end up in the wrong order — fix it here.)
+                reorder_ignore_unknown_first(hb);
             }
         }
         _ => {
@@ -280,7 +318,12 @@ fn ssh_dir() -> PathBuf {
 fn read_ssh_config() -> Result<Vec<HostDto>, String> {
     let path = config_path();
     let text = read_config_text(&path)?;
-    let cfg = parse_config(&text);
+    let mut cfg = parse_config(&text);
+    // self-heal configs written by older versions with the pair reversed
+    migrate_reversed_ignore_unknown(&mut cfg);
+    if serialize_config(&cfg) != text {
+        let _ = write_config_file(&path, &serialize_config(&cfg));
+    }
     let mut out = Vec::new();
     for h in &cfg.hosts {
         let name = h.patterns.first().cloned().unwrap_or_default();
@@ -381,7 +424,16 @@ fn delete_host(name: String) -> Result<(), String> {
 
 #[tauri::command]
 fn read_config_raw() -> Result<String, String> {
-    read_config_text(&config_path())
+    let path = config_path();
+    let text = read_config_text(&path)?;
+    let mut cfg = parse_config(&text);
+    migrate_reversed_ignore_unknown(&mut cfg);
+    let fixed = serialize_config(&cfg);
+    if fixed != text {
+        let _ = write_config_file(&path, &fixed);
+        return Ok(fixed);
+    }
+    Ok(text)
 }
 
 #[tauri::command]
@@ -1468,6 +1520,42 @@ mod auth_key_tests {
         let hosts = read_ssh_config().unwrap();
         std::env::remove_var("HOSTERM_CONFIG");
         assert_eq!(hosts[0].auth_method, "password");
+    }
+
+    #[test]
+    fn save_password_host_writes_ignoreunknown_before_password() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = tmp("pworder");
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        let mut h = hi("orderbox", "password", "");
+        h.password = "sekret".into();
+        save_host(None, h).unwrap();
+        let out = std::fs::read_to_string(&cfg).unwrap();
+        std::env::remove_var("HOSTERM_CONFIG");
+        let iu = out.find("IgnoreUnknown").expect("IgnoreUnknown present");
+        let pw = out.find("\n    Password ").expect("Password present");
+        assert!(iu < pw, "IgnoreUnknown must precede Password, got:\n{out}");
+    }
+
+    #[test]
+    fn migration_repairs_reversed_pair_from_older_versions() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = tmp("pwmigrate");
+        // exactly what hosterm <= 0.4.x could write: Password before IgnoreUnknown
+        std::fs::write(
+            &cfg,
+            "Host legacy\n    HostName 203.0.113.9\n    Password oldsecret\n    IgnoreUnknown Password\n",
+        )
+        .unwrap();
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        // loading the config must self-heal the order in place
+        let _ = read_ssh_config().unwrap();
+        let out = std::fs::read_to_string(&cfg).unwrap();
+        std::env::remove_var("HOSTERM_CONFIG");
+        let iu = out.find("IgnoreUnknown").expect("IgnoreUnknown present");
+        let pw = out.find("\n    Password ").expect("Password present");
+        assert!(iu < pw, "migration must reorder, got:\n{out}");
+        assert!(out.contains("oldsecret"), "secret must survive migration");
     }
 
     #[test]
