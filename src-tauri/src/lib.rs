@@ -219,40 +219,94 @@ struct HostInput {
 /// Set the auth-related directives on a host block.
 /// "password" mode: the secret itself is stored as a `Password` directive.
 /// OpenSSH has no such directive, so the block also carries
-/// `IgnoreUnknown Password` (official escape hatch) which makes real ssh skip
-/// it silently — the config stays valid for every other ssh client, and
-/// hosterm injects the secret at the prompt on connect. Key mode: clear both.
-/// OpenSSH parses top-down: an unknown option is fatal unless an earlier
-/// IgnoreUnknown listed it. hosterm stores secrets as a `Password` directive,
-/// so that pair must appear in exactly that order inside a host block. This
-/// moves the IgnoreUnknown line ahead of the Password line when a save left
-/// them reversed (new directives append at the block end).
-fn reorder_ignore_unknown_first(hb: &mut HostBlock) {
-    let iu = match hb.lines.iter().position(
-        |l| matches!(l, CfgLine::Opt { key, .. } if key.eq_ignore_ascii_case("IgnoreUnknown")),
-    ) {
-        Some(i) => i,
-        None => return,
-    };
-    let pw = match hb.lines.iter().position(
-        |l| matches!(l, CfgLine::Opt { key, .. } if key.eq_ignore_ascii_case("Password")),
-    ) {
-        Some(p) => p,
-        None => return,
-    };
-    if pw < iu {
-        let line = hb.lines.remove(iu);
-        hb.lines.insert(pw, line);
+/// Secrets live in a sidecar file ssh NEVER reads. Earlier releases stored
+/// them as a `Password` directive hidden from OpenSSH via `IgnoreUnknown`,
+/// but that couples validity to parse-order details inside blocks that our
+/// own parser is looser about than ssh — one stray `Password` line anywhere
+/// in the file and every connection dies with "Bad configuration option:
+/// password". Sidecar keeps `~/.ssh/config` parseable by real ssh at all
+/// times, whatever hosterm does to it.
+fn secrets_path() -> PathBuf {
+    ssh_dir().join("hosterm.secrets")
+}
+
+fn read_secrets() -> std::collections::BTreeMap<String, String> {
+    let mut m = std::collections::BTreeMap::new();
+    if let Ok(text) = std::fs::read_to_string(secrets_path()) {
+        for l in text.lines() {
+            if let Some(i) = l.find('=') {
+                m.insert(l[..i].to_string(), l[i + 1..].to_string());
+            }
+        }
+    }
+    m
+}
+
+fn write_secrets(m: &std::collections::BTreeMap<String, String>) {
+    let body: String = m.iter().map(|(k, v)| format!("{}={}\n", k, v)).collect();
+    if m.is_empty() {
+        let _ = std::fs::remove_file(secrets_path());
+        return;
+    }
+    if std::fs::write(secrets_path(), body).is_ok() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(
+                secrets_path(),
+                std::fs::Permissions::from_mode(0o600),
+            );
+        }
     }
 }
 
-/// Fix any existing host block that already has the pair reversed (configs
-/// written by hosterm <= 0.4.x). Runs at load so users never see ssh's
-/// "Bad configuration option: password" termination.
-fn migrate_reversed_ignore_unknown(cfg: &mut SshConfig) {
-    for hb in &mut cfg.hosts {
-        reorder_ignore_unknown_first(hb);
+/// Add/update/remove one alias→secret row. Empty pw removes.
+fn set_secret(alias: &str, pw: &str) {
+    let mut m = read_secrets();
+    if pw.is_empty() {
+        m.remove(alias);
+    } else {
+        m.insert(alias.to_string(), pw.to_string());
     }
+    write_secrets(&m);
+}
+
+/// One-time cleanup for configs written by <= 0.6.1: pull any stored secret
+/// out of `Password` directives into the sidecar, then erase both `Password`
+/// and our `IgnoreUnknown Password` marker from every block so the file is
+/// parseable by real ssh no matter how the directives were ordered/nested.
+/// Returns true when something changed.
+fn migrate_legacy_password_directives(cfg: &mut SshConfig) -> bool {
+    let mut changed = false;
+    for hb in &mut cfg.hosts {
+        let mut pw: Option<String> = None;
+        for l in hb.lines.iter_mut() {
+            if let CfgLine::Opt { key, value } = l {
+                if key.eq_ignore_ascii_case("Password") && !value.is_empty() {
+                    pw = Some(value.clone());
+                }
+            }
+        }
+        if let Some(pw) = pw {
+            if let Some(alias) = hb.patterns.first() {
+                if read_secrets().get(alias).is_none() {
+                    set_secret(alias, &pw);
+                }
+            }
+        }
+        let before = hb.lines.len();
+        hb.lines.retain(|l| match l {
+            CfgLine::Opt { key, value } => {
+                let k = key.to_ascii_lowercase();
+                let ours_iu = k == "ignoreunknown"
+                    && value.split_whitespace().any(|t| t.eq_ignore_ascii_case("Password"));
+                !k.eq_ignore_ascii_case("password") && !ours_iu
+            }
+            _ => true,
+        });
+        changed |= hb.lines.len() != before;
+    }
+    changed
 }
 
 fn apply_host_fields(hb: &mut HostBlock, host: &HostInput) {
@@ -264,26 +318,10 @@ fn apply_host_fields(hb: &mut HostBlock, host: &HostInput) {
             set_opt(hb, "IdentityFile", "");
             set_opt(hb, "PreferredAuthentications", "password");
             set_opt(hb, "PubkeyAuthentication", "no");
-            // empty password on an existing host = keep the stored one
-            // (the UI never sends the secret back to be re-saved)
-            if !host.password.is_empty() {
-                set_opt(hb, "Password", &host.password);
-                // merge, never clobber: keep tokens the user had in IgnoreUnknown
-                let existing = get_opt(hb, "IgnoreUnknown");
-                if !existing.split_whitespace().any(|t| t == "Password") {
-                    let merged = if existing.is_empty() {
-                        "Password".to_string()
-                    } else {
-                        format!("{} Password", existing)
-                    };
-                    set_opt(hb, "IgnoreUnknown", &merged);
-                }
-                // OpenSSH reads the file sequentially: IgnoreUnknown must come
-                // BEFORE the Password line, or ssh dies with "Bad configuration
-                // option: password". (New opts append at the block end, so the
-                // pair can end up in the wrong order — fix it here.)
-                reorder_ignore_unknown_first(hb);
-            }
+            // The secret itself lives in the hosterm.secrets sidecar, never
+            // in the config — real ssh must be able to parse every line.
+            set_opt(hb, "Password", "");
+            set_opt(hb, "IgnoreUnknown", "");
         }
         _ => {
             // Key auth (default): point at an IdentityFile and clear any
@@ -292,11 +330,25 @@ fn apply_host_fields(hb: &mut HostBlock, host: &HostInput) {
             set_opt(hb, "PreferredAuthentications", "");
             set_opt(hb, "PubkeyAuthentication", "");
             set_opt(hb, "Password", "");
-            // drop our own IgnoreUnknown only if it is exactly ours
-            if get_opt(hb, "IgnoreUnknown") == "Password" {
-                set_opt(hb, "IgnoreUnknown", "");
-            }
+            set_opt(hb, "IgnoreUnknown", "");
         }
+    }
+}
+
+/// Remove a deleted host's secret row, if any.
+fn purge_secret(alias: &str) {
+    let mut m = read_secrets();
+    if m.remove(alias).is_some() {
+        write_secrets(&m);
+    }
+}
+
+/// Persist (or clear) the secret for an alias in the sidecar. Called from the
+/// save path, next to the config write, so the two stay in sync. Empty pw =
+/// keep whatever is already stored (the UI never re-sends the secret).
+fn store_secret_for_host(host: &HostInput) {
+    if !host.password.is_empty() {
+        set_secret(&host.name, &host.password);
     }
 }
 
@@ -319,8 +371,8 @@ fn read_ssh_config() -> Result<Vec<HostDto>, String> {
     let path = config_path();
     let text = read_config_text(&path)?;
     let mut cfg = parse_config(&text);
-    // self-heal configs written by older versions with the pair reversed
-    migrate_reversed_ignore_unknown(&mut cfg);
+    // self-heal configs written by older versions: secret -> sidecar, config clean
+    migrate_legacy_password_directives(&mut cfg);
     if serialize_config(&cfg) != text {
         let _ = write_config_file(&path, &serialize_config(&cfg));
     }
@@ -347,7 +399,9 @@ fn read_ssh_config() -> Result<Vec<HostDto>, String> {
             "key"
         }
         .to_string();
-        let has_password = !get_opt(h, "Password").is_empty();
+        let has_password = read_secrets()
+            .contains_key(name.as_str())
+            || !get_opt(h, "Password").is_empty();
         out.push(HostDto {
             name,
             host_name: get_opt(h, "HostName"),
@@ -395,6 +449,15 @@ fn save_host(original_name: Option<String>, host: HostInput) -> Result<(), Strin
                 hb.patterns[0] = host.name.clone();
             }
             apply_host_fields(hb, &host);
+            // renaming a host must carry its stored secret to the new alias
+            if &orig != &host.name {
+                let mut m = read_secrets();
+                if let Some(pw) = m.remove(&orig) {
+                    m.insert(host.name.clone(), pw);
+                    write_secrets(&m);
+                }
+            }
+            store_secret_for_host(&host);
         }
         None => {
             let mut hb = HostBlock {
@@ -402,6 +465,7 @@ fn save_host(original_name: Option<String>, host: HostInput) -> Result<(), Strin
                 lines: Vec::new(),
             };
             apply_host_fields(&mut hb, &host);
+            store_secret_for_host(&host);
             cfg.hosts.push(hb);
         }
     }
@@ -425,7 +489,8 @@ fn delete_host(name: String) -> Result<(), String> {
         None => Err(format!("Host '{}' not found", name)),
         Some(i) => {
             cfg.hosts.remove(i);
-            write_config_file(&path, &serialize_config(&cfg))
+            purge_secret(&name);
+    write_config_file(&path, &serialize_config(&cfg))
         }
     }
 }
@@ -435,7 +500,7 @@ fn read_config_raw() -> Result<String, String> {
     let path = config_path();
     let text = read_config_text(&path)?;
     let mut cfg = parse_config(&text);
-    migrate_reversed_ignore_unknown(&mut cfg);
+    migrate_legacy_password_directives(&mut cfg);
     let fixed = serialize_config(&cfg);
     if fixed != text {
         let _ = write_config_file(&path, &fixed);
@@ -651,7 +716,6 @@ fn parse_sftp_ls(output: &str) -> Vec<SftpEntry> {
 /// Run an sftp batch script against `host`, return (stdout, stderr, success).
 fn run_sftp_batch(host: &str, script: &str) -> Result<(String, String, bool), String> {
     use std::process::{Command, Stdio};
-    ensure_config_valid();
     sftp_safe(host, "Host")?;
     // HOSTERM_SFTP_BIN: testability hook (e.g. point at a -vvv wrapper)
     let bin = std::env::var("HOSTERM_SFTP_BIN").unwrap_or_else(|_| "sftp".to_string());
@@ -909,30 +973,7 @@ static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 /// Stored password for a host alias, from its `Password` directive.
 /// Stays inside the Rust process — never crosses the IPC boundary.
 fn lookup_stored_password(host: &str) -> Option<String> {
-    let text = read_config_text(&config_path()).ok()?;
-    let cfg = parse_config(&text);
-    cfg.hosts
-        .iter()
-        .find(|h| h.patterns.first().map(|p| p == host).unwrap_or(false))
-        .map(|h| get_opt(h, "Password"))
-        .filter(|p| !p.is_empty())
-}
-
-/// Connect-time guard: repair any host block whose IgnoreUnknown/Password
-/// pair is reversed before a real ssh/sftp/scp binary reads the file. Runs
-/// on every spawn path (PTY, SFTP list/upload/download) so configs written
-/// by any older version can never terminate ssh at connect time, even if
-/// the app-start migration missed them.
-fn ensure_config_valid() {
-    let path = config_path();
-    if let Ok(text) = read_config_text(&path) {
-        let mut cfg = parse_config(&text);
-        migrate_reversed_ignore_unknown(&mut cfg);
-        let fixed = serialize_config(&cfg);
-        if fixed != text {
-            let _ = write_config_file(&path, &fixed);
-        }
-    }
+    read_secrets().remove(host).filter(|p| !p.is_empty())
 }
 
 #[tauri::command]
@@ -943,7 +984,6 @@ fn pty_spawn(
     cols: u16,
     rows: u16,
 ) -> Result<u32, String> {
-    ensure_config_valid();
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -1569,7 +1609,7 @@ mod auth_key_tests {
     }
 
     #[test]
-    fn save_password_host_writes_ignoreunknown_before_password() {
+    fn save_password_host_keeps_config_ssh_clean_and_stores_secret_in_sidecar() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let cfg = tmp("pworder");
         std::env::set_var("HOSTERM_CONFIG", &cfg);
@@ -1578,30 +1618,41 @@ mod auth_key_tests {
         save_host(None, h).unwrap();
         let out = std::fs::read_to_string(&cfg).unwrap();
         std::env::remove_var("HOSTERM_CONFIG");
-        let iu = out.find("IgnoreUnknown").expect("IgnoreUnknown present");
-        let pw = out.find("\n    Password ").expect("Password present");
-        assert!(iu < pw, "IgnoreUnknown must precede Password, got:\n{out}");
+        // real ssh must parse every line: no Password directive, no IgnoreUnknown marker
+        assert!(!out.contains("Password"), "config must not carry secrets: {out}");
+        assert!(!out.contains("IgnoreUnknown"), "no IgnoreUnknown marker either: {out}");
+        // the secret survives in the sidecar and the lookup finds it
+        let sec = cfg.parent().unwrap().join("hosterm.secrets");
+        let s = std::fs::read_to_string(&sec).unwrap();
+        assert!(s.contains("orderbox=sekret"), "sidecar: {s}");
     }
 
     #[test]
-    fn migration_repairs_reversed_pair_from_older_versions() {
+    fn migration_moves_legacy_password_directive_to_sidecar() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let cfg = tmp("pwmigrate");
-        // exactly what hosterm <= 0.4.x could write: Password before IgnoreUnknown
+        // exactly what hosterm <= 0.6.1 wrote (any order, any nesting)
         std::fs::write(
             &cfg,
             "Host legacy\n    HostName 203.0.113.9\n    Password oldsecret\n    IgnoreUnknown Password\n",
         )
         .unwrap();
         std::env::set_var("HOSTERM_CONFIG", &cfg);
-        // loading the config must self-heal the order in place
+        // loading the config must clean it in place and salvage the secret
         let _ = read_ssh_config().unwrap();
         let out = std::fs::read_to_string(&cfg).unwrap();
         std::env::remove_var("HOSTERM_CONFIG");
-        let iu = out.find("IgnoreUnknown").expect("IgnoreUnknown present");
-        let pw = out.find("\n    Password ").expect("Password present");
-        assert!(iu < pw, "migration must reorder, got:\n{out}");
-        assert!(out.contains("oldsecret"), "secret must survive migration");
+        assert!(!out.contains("Password"), "directive must be gone: {out}");
+        assert!(!out.contains("IgnoreUnknown"), "marker must be gone: {out}");
+        assert!(out.contains("HostName 203.0.113.9"), "host data survives: {out}");
+        let sec = cfg.parent().unwrap().join("hosterm.secrets");
+        let s = std::fs::read_to_string(&sec).unwrap();
+        assert!(s.contains("legacy=oldsecret"), "secret salvaged to sidecar: {s}");
+        // and the host still reports password capability after migration
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        let hosts = read_ssh_config().unwrap();
+        std::env::remove_var("HOSTERM_CONFIG");
+        assert_eq!(hosts[0].has_password, true);
     }
 
     #[test]
@@ -1641,27 +1692,26 @@ mod auth_key_tests {
     }
 
     #[test]
-    fn stored_password_writes_password_directive_and_roundtrips() {
+    fn stored_password_sidecar_roundtrips() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let cfg = tmp("storedpw");
         std::env::set_var("HOSTERM_CONFIG", &cfg);
         let mut input = hi("box", "password", "");
         input.password = "s3cret!pw".into();
         save_host(None, input).unwrap();
-        let out = std::fs::read_to_string(&cfg).unwrap();
-        assert!(out.contains("IgnoreUnknown Password"), "ssh must be told to skip Password: {out}");
-        assert!(out.contains("Password s3cret!pw"));
         // round-trips: has_password=true, and editing WITHOUT resending the
         // secret keeps the stored one (UI never echoes secrets back)
         let hosts = read_ssh_config().unwrap();
         assert_eq!(hosts[0].has_password, true);
-        assert!(!hosts[0].options.iter().any(|(k, _)| k == "Password" && k.is_empty()));
+        assert!(!hosts[0].options.iter().any(|(k, _)| k == "Password"));
         let mut edit = hi("box", "password", "");
         edit.password = "".into();
         save_host(Some("box".into()), edit).unwrap();
-        let out2 = std::fs::read_to_string(&cfg).unwrap();
         std::env::remove_var("HOSTERM_CONFIG");
-        assert!(out2.contains("Password s3cret!pw"), "stored secret must survive an edit that omits it");
+        // secret survives in the sidecar even though the edit omitted it
+        let sec = cfg.parent().unwrap().join("hosterm.secrets");
+        let s = std::fs::read_to_string(&sec).unwrap();
+        assert!(s.contains("box=s3cret!pw"), "stored secret must survive: {s}");
     }
 
     #[test]

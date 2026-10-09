@@ -107,7 +107,7 @@ select {
   width: calc(100% - 24px);
   font-size: 12px;
 }
-#sidebar.sb-collapsed, body.sb-collapsed #sidebar { width: 44px; }
+body.sb-collapsed #sidebar, #sidebar.sb-collapsed { width: 44px; min-width: 44px; max-width: 44px; }
 body.sb-collapsed #sidebar > :not(#btn-expand) { display: none; }
 #btn-expand {
   margin: 10px auto;
@@ -204,8 +204,7 @@ body.sb-collapsed #sidebar > :not(#btn-expand) { display: none; }
 .panel.active { display: block; }
 .term-host { width: 100%; height: 100%; padding: 8px; background: var(--bg); }
 .panel.split .term-host { width: 50%; height: 100%; float: left; }
-.tab .split.icon { display: inline-flex; align-items: center; gap: 1px; margin-left: 2px; padding: 2px 3px; border-radius: 4px; color: var(--muted); }
-.tab .split.icon:hover { color: var(--fg); background: var(--hover); }
+.tab.drop-target { outline: 2px dashed var(--accent); outline-offset: -2px; }
 
 .placeholder {
   height: 100%; display: flex; align-items: center; justify-content: center;
