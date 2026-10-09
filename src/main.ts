@@ -1003,7 +1003,48 @@ function makeTab(tabId: number, kind: "terminal" | "sftp" | "editor", label: str
     if (splitSessions.has(tabId)) return; // already split
     splitTerminal(tabId, srcId);
   });
+  // Tab context menu. Without this, right-click shows the webview's native
+  // menu whose "Refresh" reloads the whole window — killing every tab at once.
+  tab.addEventListener("contextmenu", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    showTabMenu(ev as MouseEvent, tabId);
+  });
   return tab;
+}
+
+// In-app tab context menu: Close / Close others / Close all.
+function showTabMenu(ev: MouseEvent, tabId: number) {
+  document.getElementById("tab-menu")?.remove();
+  const menu = document.createElement("div");
+  menu.id = "tab-menu";
+  menu.setAttribute("role", "menu");
+  const items: Array<[string, () => void]> = [
+    ["Close", () => void closeTab(tabId)],
+    ["Close others", () => {
+      for (const id of openTabIds()) if (id !== tabId) void closeTab(id);
+    }],
+    ["Close all", () => { for (const id of openTabIds()) void closeTab(id); }],
+  ];
+  for (const [label, fn] of items) {
+    const b = document.createElement("button");
+    b.setAttribute("role", "menuitem");
+    b.textContent = label;
+    b.addEventListener("click", () => { menu.remove(); fn(); });
+    menu.appendChild(b);
+  }
+  document.body.appendChild(menu);
+  const mw = menu.offsetWidth, mh = menu.offsetHeight;
+  menu.style.left = Math.min(ev.clientX, window.innerWidth - mw - 8) + "px";
+  menu.style.top = Math.min(ev.clientY, window.innerHeight - mh - 8) + "px";
+  const close = () => { menu.remove(); document.removeEventListener("mousedown", onDown, true); };
+  const onDown = (e: MouseEvent) => { if (!menu.contains(e.target as Node)) close(); };
+  setTimeout(() => document.addEventListener("mousedown", onDown, true), 0);
+  menu.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
+}
+
+function openTabIds(): number[] {
+  return [...sessions.keys(), ...editorSessions.keys(), ...sftpSessions.keys()];
 }
 
 // ---------- terminals ----------

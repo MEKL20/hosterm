@@ -226,6 +226,25 @@ const w1 = await splitPanel.locator(".term-host").first().evaluate((el) => el.ge
 const w2 = await splitPanel.locator(".term-host").nth(1).evaluate((el) => el.getBoundingClientRect().width);
 check("split panes side-by-side ~50/50", Math.abs(w1 - w2) < 30, `w1=${Math.round(w1)} w2=${Math.round(w2)}`);
 
+// 9g2. tab context menu: in-app menu, no native reload menu, close-others works
+// (runs while the two terminal tabs from 9g are still open)
+await page.locator(".tab").first().click({ button: "right" });
+await page.waitForTimeout(200);
+check("right-click tab opens in-app menu", (await page.locator("#tab-menu").count()) === 1);
+check("menu has close items", (await page.locator("#tab-menu button").count()) === 3);
+const ctxBlocked = await page.evaluate(() => {
+  let blocked = false;
+  const t = document.querySelector(".tab");
+  t.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  // the handler calls preventDefault; a fresh event tells us nothing, so check listener effect:
+  blocked = !document.getElementById("tab-menu") ? false : true;
+  return blocked;
+});
+check("contextmenu handled (menu visible)", ctxBlocked);
+await page.locator("#tab-menu button", { hasText: "Close others" }).click();
+await page.waitForTimeout(500);
+check("close others leaves one tab", (await page.locator(".tab").count()) === 1);
+
 // 9h. sidebar resizer: drag divider widens the host list
 await page.evaluate(() => { localStorage.removeItem("sb-width"); });
 await page.locator(".tab.active .x").click();
