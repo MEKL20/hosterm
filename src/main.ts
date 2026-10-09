@@ -947,6 +947,43 @@ async function openRemoteEditor(host: string, path: string) {
 }
 
 // ---------- tabs ----------
+// Manual tab-drag state: mousedown arms it, moving >6px activates, mouseup
+// over another TERMINAL tab splits. Plain clicks never activate it.
+let tabDrag: { srcId: number; active: boolean; x: number; y: number } | null = null;
+
+function tabFromPoint(x: number, y: number): HTMLElement | null {
+  return (document.elementFromPoint(x, y)?.closest(".tab") as HTMLElement | null) ?? null;
+}
+
+window.addEventListener("mousemove", (ev) => {
+  if (!tabDrag) return;
+  if (!tabDrag.active) {
+    if (Math.hypot(ev.clientX - tabDrag.x, ev.clientY - tabDrag.y) < 6) return;
+    tabDrag.active = true;
+    document.querySelector(`.tab[data-tab="${tabDrag.srcId}"]`)?.classList.add("dragging");
+  }
+  document.querySelectorAll(".tab.drop-target").forEach((t) => t.classList.remove("drop-target"));
+  const over = tabFromPoint(ev.clientX, ev.clientY);
+  const tid = Number(over?.dataset.tab);
+  if (over && Number.isFinite(tid) && tid !== tabDrag.srcId && sessions.has(tid) && !splitSessions.has(tid)) {
+    over.classList.add("drop-target");
+  }
+});
+
+window.addEventListener("mouseup", (ev) => {
+  const d = tabDrag;
+  tabDrag = null;
+  if (!d) return;
+  document.querySelector(`.tab[data-tab="${d.srcId}"]`)?.classList.remove("dragging");
+  document.querySelectorAll(".tab.drop-target").forEach((t) => t.classList.remove("drop-target"));
+  if (!d.active) return; // plain click — not a drag
+  const over = tabFromPoint(ev.clientX, ev.clientY);
+  const targetId = Number(over?.dataset.tab);
+  if (!Number.isFinite(targetId) || targetId === d.srcId) return;
+  if (!sessions.has(targetId) || splitSessions.has(targetId)) return;
+  splitTerminal(targetId, d.srcId);
+});
+
 function makeTab(tabId: number, kind: "terminal" | "sftp" | "editor", label: string): HTMLElement {
   const tab = document.createElement("div");
   tab.className = "tab";
@@ -960,7 +997,6 @@ function makeTab(tabId: number, kind: "terminal" | "sftp" | "editor", label: str
     `<span class="t-label">${esc(label)}</span>` +
     (kind === "editor" ? `<span class="t-dot" title="Unsaved changes" aria-label="Unsaved changes"></span>` : "") +
     `<button class="x icon" aria-label="Close tab" title="Close">${ICONS.close}</button>`;
-  tab.draggable = true;
   tab.addEventListener("click", (ev) => {
     if ((ev.target as HTMLElement).closest(".x")) closeTab(tabId);
     else activateTab(tabId);
@@ -980,28 +1016,11 @@ function makeTab(tabId: number, kind: "terminal" | "sftp" | "editor", label: str
       activateTab(Number(next.dataset.tab));
     }
   });
-  // Termius-style split: drag a terminal tab onto another terminal tab to
-  // open the dragged host beside the target in the same panel.
-  tab.addEventListener("dragstart", (ev) => {
-    ev.dataTransfer?.setData("text/hosterm-tab", String(tabId));
-    ev.dataTransfer!.effectAllowed = "copy";
-  });
-  tab.addEventListener("dragover", (ev) => {
-    if (sessions.has(tabId)) {
-      ev.preventDefault();
-      ev.dataTransfer!.dropEffect = "copy";
-      tab.classList.add("drop-target");
-    }
-  });
-  tab.addEventListener("dragleave", () => tab.classList.remove("drop-target"));
-  tab.addEventListener("drop", (ev) => {
-    ev.preventDefault();
-    ev.stopPropagation();
-    tab.classList.remove("drop-target");
-    const srcId = Number(ev.dataTransfer?.getData("text/hosterm-tab"));
-    if (!Number.isFinite(srcId) || srcId === tabId) return;
-    if (splitSessions.has(tabId)) return; // already split
-    splitTerminal(tabId, srcId);
+  // Manual tab drag (Termius/VSCode-style split trigger). HTML5 drag events
+  // are unreliable inside WebView2/Tauri, so we track mouse movement instead.
+  tab.addEventListener("mousedown", (ev) => {
+    if (ev.button !== 0 || (ev.target as HTMLElement).closest("button")) return;
+    tabDrag = { srcId: tabId, active: false, x: ev.clientX, y: ev.clientY };
   });
   // Tab context menu. Without this, right-click shows the webview's native
   // menu whose "Refresh" reloads the whole window — killing every tab at once.

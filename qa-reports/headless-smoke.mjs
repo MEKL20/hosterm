@@ -214,9 +214,12 @@ const srcTab = page.locator(".tab", { hasText: "prod-web" }).first();
 const dstTab = page.locator(".tab", { hasText: "db-core" }).first();
 const sBox = await srcTab.boundingBox();
 const dBox = await dstTab.boundingBox();
+// manual mouse drag (HTML5 DnD not used anymore)
 await page.mouse.move(sBox.x + sBox.width / 2, sBox.y + sBox.height / 2);
 await page.mouse.down();
-await page.mouse.move(dBox.x + dBox.width / 2, dBox.y + dBox.height / 2, { steps: 6 });
+await page.mouse.move(sBox.x + sBox.width / 2 + 12, sBox.y + sBox.height / 2); // cross 6px threshold
+await page.mouse.move(dBox.x + dBox.width / 2, dBox.y + dBox.height / 2, { steps: 8 });
+check("drop target highlighted while dragging", (await page.locator(".tab.drop-target").count()) === 1);
 await page.mouse.up();
 await page.waitForTimeout(600);
 const splitPanel = page.locator(".panel.split");
