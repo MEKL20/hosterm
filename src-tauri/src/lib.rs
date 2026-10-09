@@ -413,13 +413,21 @@ fn delete_host(name: String) -> Result<(), String> {
     let path = config_path();
     let text = read_config_text(&path)?;
     let mut cfg = parse_config(&text);
-    let before = cfg.hosts.len();
-    cfg.hosts
-        .retain(|h| h.patterns.first().map(|p| p != &name).unwrap_or(true));
-    if cfg.hosts.len() == before {
-        return Err(format!("Host '{}' not found", name));
+    // Duplicate aliases are legal in ssh configs (ssh merges the blocks), and
+    // hosterm lists each block as its own row. Removing ALL matching blocks
+    // made one delete wipe every row with that name — remove exactly the
+    // first one; a second delete removes the next.
+    let pos = cfg
+        .hosts
+        .iter()
+        .position(|h| h.patterns.first().map(|p| p == &name).unwrap_or(false));
+    match pos {
+        None => Err(format!("Host '{}' not found", name)),
+        Some(i) => {
+            cfg.hosts.remove(i);
+            write_config_file(&path, &serialize_config(&cfg))
+        }
     }
-    write_config_file(&path, &serialize_config(&cfg))
 }
 
 #[tauri::command]
@@ -1556,6 +1564,27 @@ mod auth_key_tests {
         let pw = out.find("\n    Password ").expect("Password present");
         assert!(iu < pw, "migration must reorder, got:\n{out}");
         assert!(out.contains("oldsecret"), "secret must survive migration");
+    }
+
+    #[test]
+    fn delete_removes_only_first_duplicate_block() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = tmp("dupdel");
+        // duplicate aliases are legal in ssh and hosterm lists both rows
+        std::fs::write(
+            &cfg,
+            "Host dup\n    HostName 203.0.113.1\n\nHost dup\n    HostName 203.0.113.2\n\nHost other\n    HostName 203.0.113.3\n",
+        )
+        .unwrap();
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        delete_host("dup".into()).unwrap();
+        let out = std::fs::read_to_string(&cfg).unwrap();
+        std::env::remove_var("HOSTERM_CONFIG");
+        // exactly one "Host dup" must remain, the second block (its HostName untouched)
+        assert_eq!(out.matches("Host dup").count(), 1, "one dup block must survive:\n{out}");
+        assert!(out.contains("203.0.113.2"), "the SECOND block survives (203.0.113.2):\n{out}");
+        assert!(!out.contains("203.0.113.1"), "the FIRST block is the one removed:\n{out}");
+        assert!(out.contains("Host other"), "unrelated hosts untouched:\n{out}");
     }
 
     #[test]
