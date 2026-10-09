@@ -574,7 +574,9 @@ async function openSftp(host: string) {
             <button class="loc-go">Go</button>
             <button class="loc-refresh icon" aria-label="Reload local directory" title="Reload directory">${ICONS.reload}</button>
           </div>
-          <div class="sftp-pane">
+          <div class="loc-list"></div>
+        </div>
+        <div class="sftp-pane">
           <div class="pane-head"><span class="pane-title">${esc(host)} — remote</span></div>
           <div class="sftp-toolbar">
             <button class="sftp-up icon" aria-label="Parent directory" title="Parent directory">${ICONS.up}</button>
@@ -583,8 +585,6 @@ async function openSftp(host: string) {
             <button class="sftp-refresh icon" aria-label="Reload directory" title="Reload directory">${ICONS.reload}</button>
           </div>
           <div class="sftp-list"></div>
-        </div>
-          <div class="loc-list"></div>
         </div>
       </div>
       <div class="xfer-bar"></div>
@@ -959,13 +959,10 @@ function makeTab(tabId: number, kind: "terminal" | "sftp" | "editor", label: str
     `<span class="t-ico">${ico}</span>` +
     `<span class="t-label">${esc(label)}</span>` +
     (kind === "editor" ? `<span class="t-dot" title="Unsaved changes" aria-label="Unsaved changes"></span>` : "") +
-    (kind === "terminal"
-      ? `<button class="split icon" aria-label="Split terminal" title="Split — second terminal of the same host">[${ICONS.terminal}]+</button>`
-      : "") +
     `<button class="x icon" aria-label="Close tab" title="Close">${ICONS.close}</button>`;
+  tab.draggable = true;
   tab.addEventListener("click", (ev) => {
     if ((ev.target as HTMLElement).closest(".x")) closeTab(tabId);
-    else if ((ev.target as HTMLElement).closest(".split")) splitTerminal(tabId);
     else activateTab(tabId);
   });
   tab.addEventListener("keydown", (ev) => {
@@ -982,6 +979,29 @@ function makeTab(tabId: number, kind: "terminal" | "sftp" | "editor", label: str
       next.focus();
       activateTab(Number(next.dataset.tab));
     }
+  });
+  // Termius-style split: drag a terminal tab onto another terminal tab to
+  // open the dragged host beside the target in the same panel.
+  tab.addEventListener("dragstart", (ev) => {
+    ev.dataTransfer?.setData("text/hosterm-tab", String(tabId));
+    ev.dataTransfer!.effectAllowed = "copy";
+  });
+  tab.addEventListener("dragover", (ev) => {
+    if (sessions.has(tabId)) {
+      ev.preventDefault();
+      ev.dataTransfer!.dropEffect = "copy";
+      tab.classList.add("drop-target");
+    }
+  });
+  tab.addEventListener("dragleave", () => tab.classList.remove("drop-target"));
+  tab.addEventListener("drop", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    tab.classList.remove("drop-target");
+    const srcId = Number(ev.dataTransfer?.getData("text/hosterm-tab"));
+    if (!Number.isFinite(srcId) || srcId === tabId) return;
+    if (splitSessions.has(tabId)) return; // already split
+    splitTerminal(tabId, srcId);
   });
   return tab;
 }
@@ -1019,14 +1039,15 @@ const TERMINAL_THEME = {
 
 // Split view: the panel holds a flex row of two .term-host panes sharing one
 // xterm Tab/term per pane; each pane gets its own PTY via openTerminalIn().
-// Split view: a second, independent terminal of the same host beside the
-// first one (own xterm instance + own PTY), like Termius split panes.
-async function splitTerminal(tabId: number) {
-  const session = sessions.get(tabId);
-  const panel = document.querySelector<HTMLElement>(`.panel[data-tab="${tabId}"]`);
-  if (!session || !panel || panel.classList.contains("split")) return;
+// Split view, Termius style: drag one terminal tab onto another and the
+// dragged host opens beside the target in the same panel — its own xterm
+// instance and its own PTY, fully independent of the first session.
+async function splitTerminal(targetTabId: number, sourceTabId: number) {
+  const srcSession = sessions.get(sourceTabId);
+  const panel = document.querySelector<HTMLElement>(`.panel[data-tab="${targetTabId}"]`);
+  if (!srcSession || !panel || panel.classList.contains("split")) return;
   panel.classList.add("split");
-  const host = session.host;
+  const host = srcSession.host;
 
   const term = new Terminal({
     cursorBlink: true,
@@ -1062,8 +1083,8 @@ async function splitTerminal(tabId: number) {
       .catch(() => {});
   });
 
-  const split_session: Session = { id: tabId, ptyId: null, host, term, fit, banner, unlisten: [] };
-  splitSessions.set(tabId, split_session);
+  const split_session: Session = { id: targetTabId, ptyId: null, host, term, fit, banner, unlisten: [] };
+  splitSessions.set(targetTabId, split_session);
   term.onData((data) => {
     if (split_session.ptyId != null) invoke("pty_write", { id: split_session.ptyId, data });
   });

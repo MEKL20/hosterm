@@ -16,6 +16,7 @@ const sampleSftp = [
 ];
 const sampleHosts = [
   { name: "prod-web", host_name: "203.0.113.10", user: "deploy", port: "", identity_file: "", auth_method: "key", options: [] },
+  { name: "db-core", host_name: "203.0.113.20", user: "admin", port: "", identity_file: "", auth_method: "key", options: [] },
 ];
 const sampleConfig = `# demo
 Host prod-web
@@ -72,10 +73,10 @@ const check = (name, ok, extra = "") => results.push(`${ok ? "PASS" : "FAIL"} ${
 
 // 1. host list renders from mock config
 const hosts = await page.locator(".host-item").count();
-check("host list renders", hosts === 1, `count=${hosts}`);
+check("host list renders", hosts === 2, `count=${hosts}`);
 
 // 2. sidebar action buttons are real buttons, visible (not opacity:0)
-const sftpBtn = page.locator(".host-item .h-sftp");
+const sftpBtn = page.locator(".host-item .h-sftp").first();
 check("sidebar sftp action is a button", (await sftpBtn.evaluate((el) => el.tagName)) === "BUTTON");
 const vis = await sftpBtn.evaluate((el) => getComputedStyle(el).opacity);
 check("action buttons not hover-hidden", vis === "1", `opacity=${vis}`);
@@ -88,8 +89,8 @@ check("sftp rows render from mock", sftpRows === 2, `rows=${sftpRows}`);
 const dirSize = await page.locator(".sftp-list .sftp-row", { hasText: "projects" }).locator(".sz").textContent();
 check("dir size cell empty (no em dash)", dirSize.trim() === "", JSON.stringify(dirSize));
 
-// 4. double-click the file row -> editor tab opens with CodeMirror content
-await page.locator(".sftp-row", { hasText: "notes.txt" }).first().dblclick();
+// 4. double-click the file row in the REMOTE pane -> editor tab opens
+await page.locator(".sftp-list .sftp-row", { hasText: "notes.txt" }).first().dblclick();
 await page.waitForTimeout(500);
 const cmContent = await page.locator(".cm-content").textContent();
 check("editor opens with mocked file", cmContent.includes("hello editor"), cmContent.slice(0, 40));
@@ -151,7 +152,7 @@ await page.locator("#btn-expand").click();
 check("expand: class removed", await page.evaluate(() => !document.body.classList.contains("sb-collapsed")));
 
 // 9d. delete button present on host rows, opens confirm dialog, cancel keeps host
-const delBtn = page.locator(".host-item .h-del");
+const delBtn = page.locator(".host-item .h-del").first();
 check("delete button on host row", (await delBtn.count()) === 1);
 await delBtn.click();
 await page.waitForTimeout(250);
@@ -162,10 +163,10 @@ const focusedLabel = await page.evaluate(() => (document.activeElement?.textCont
 check("delete dialog focuses Cancel", focusedLabel === "Cancel", `focus=${focusedLabel}`);
 await page.keyboard.press("Enter"); // activates focused Cancel
 await page.waitForTimeout(250);
-check("cancel keeps host", (await page.locator(".host-item").count()) === 1);
+check("cancel keeps host", (await page.locator(".host-item").count()) === 2);
 
 // 9e. terminal right-click paste handler attached (no context menu, no errors)
-await page.locator(".host-item .h-name").click();
+await page.locator(".host-item .h-name").first().click();
 await page.waitForTimeout(400);
 const rcHandled = await page.evaluate(() => {
   const el = document.querySelector(".term-host");
@@ -176,7 +177,7 @@ const rcHandled = await page.evaluate(() => {
 check("terminal right-click handled (no native menu)", rcHandled);
 
 // 9f. sftp dual-pane: panes render, double-click navigates, single-click selects
-await page.locator(".host-item .h-sftp").click();
+await page.locator(".host-item .h-sftp").first().click();
 await page.waitForTimeout(600);
 check("sftp dual-pane: remote pane", (await page.locator(".panel.active .sftp-list .sftp-row").count()) >= 1);
 check("sftp dual-pane: local pane rows", (await page.locator(".panel.active .loc-list .sftp-row").count()) === 2);
@@ -194,19 +195,41 @@ await page.locator(".panel.active .sftp-download").click();
 await page.waitForTimeout(300);
 check("download without selection shows hint", (await page.locator(".panel.active .sftp-status").textContent()).includes("Select a file"));
 
-// 9g. split: button on terminal tab adds a second terminal pane
+// 9g. split, Termius style: drag one terminal tab onto another terminal tab
+for (let i = 0; i < 15 && (await page.locator(".tab").count()) > 0; i++) {
+  if (await page.locator("#dialog").isVisible().catch(() => false)) {
+    // unsaved-changes prompt: discard to proceed
+    await page.locator("#dialog button").filter({ hasText: "Discard" }).first().click().catch(() => {});
+    await page.waitForTimeout(250);
+    continue;
+  }
+  await page.locator(".tab .x").first().click();
+  await page.waitForTimeout(350);
+}
 await page.locator(".host-item", { hasText: "prod-web" }).first().locator(".h-name").click();
-await page.waitForTimeout(500);
-await page.locator(".tab .split").first().waitFor({ timeout: 5000 });
-check("terminal tab opened", (await page.locator(".tab .split").count()) >= 1);
-await page.locator(".tab.active .split").first().click();
-await page.waitForTimeout(500);
-check("split adds second term-host", (await page.locator(".panel.active .term-host").count()) === 2);
-const w1 = await page.locator(".panel.active .term-host").first().evaluate((el) => el.getBoundingClientRect().width);
-const w2 = await page.locator(".panel.active .term-host").nth(1).evaluate((el) => el.getBoundingClientRect().width);
-check("split panes ~50/50", Math.abs(w1 - w2) < 30, `w1=${Math.round(w1)} w2=${Math.round(w2)}`);
+await page.waitForTimeout(400);
+await page.locator(".host-item", { hasText: "db-core" }).first().locator(".h-name").click();
+await page.waitForTimeout(400);
+const srcTab = page.locator(".tab", { hasText: "prod-web" }).first();
+const dstTab = page.locator(".tab", { hasText: "db-core" }).first();
+const sBox = await srcTab.boundingBox();
+const dBox = await dstTab.boundingBox();
+await page.mouse.move(sBox.x + sBox.width / 2, sBox.y + sBox.height / 2);
+await page.mouse.down();
+await page.mouse.move(dBox.x + dBox.width / 2, dBox.y + dBox.height / 2, { steps: 6 });
+await page.mouse.up();
+await page.waitForTimeout(600);
+const splitPanel = page.locator(".panel.split");
+check("drag tab onto tab adds second term-host", (await splitPanel.locator(".term-host").count()) === 2,
+  `panels=${await page.locator(".panel").count()} split=${await splitPanel.count()}`);
+const w1 = await splitPanel.locator(".term-host").first().evaluate((el) => el.getBoundingClientRect().width);
+const w2 = await splitPanel.locator(".term-host").nth(1).evaluate((el) => el.getBoundingClientRect().width);
+check("split panes side-by-side ~50/50", Math.abs(w1 - w2) < 30, `w1=${Math.round(w1)} w2=${Math.round(w2)}`);
 
 // 9h. sidebar resizer: drag divider widens the host list
+await page.evaluate(() => { localStorage.removeItem("sb-width"); });
+await page.locator(".tab.active .x").click();
+await page.waitForTimeout(300);
 const before = await page.locator("#sidebar").evaluate((el) => el.getBoundingClientRect().width);
 const box = await page.locator("#sb-resize").boundingBox();
 await page.mouse.move(box.x + box.width / 2, box.y + 200);
@@ -219,13 +242,13 @@ const sbw = await page.evaluate(() => localStorage.getItem("sb-width"));
 check("sidebar width persisted", sbw !== null && parseInt(sbw, 10) === Math.round(after), `stored=${sbw}`);
 await page.evaluate(() => { localStorage.removeItem("sb-width"); });
 
-// 9i. sftp panes: This PC (local) is LEFT of remote
-await page.locator(".panel.active .tab .x, .tab.active .x").first().click();
-await page.waitForTimeout(300);
+// 9i. sftp panes: This PC (local) is LEFT of remote — by geometry, not class order
 await page.locator(".host-item .h-sftp").first().click();
 await page.waitForTimeout(500);
-const locX = await page.locator(".panel.active .sftp-pane").first().evaluate((el) => el.querySelector(".pane-title").textContent);
-check("local pane first (left)", locX.includes("This PC"), locX);
+const panes = page.locator(".panel.active .sftp-pane");
+const g1 = await panes.nth(0).evaluate((el) => ({ x: el.getBoundingClientRect().x, t: el.querySelector(".pane-title").textContent }));
+const g2 = await panes.nth(1).evaluate((el) => ({ x: el.getBoundingClientRect().x, t: el.querySelector(".pane-title").textContent }));
+check("local pane is left of remote", g1.x < g2.x && g1.t.includes("This PC") && g2.t.includes("remote"), `L=${g1.t}@${Math.round(g1.x)} R=${g2.t}@${Math.round(g2.x)}`);
 
 check("no console/page errors", errors.length === 0, errors.slice(0, 3).join(" | "));
 
