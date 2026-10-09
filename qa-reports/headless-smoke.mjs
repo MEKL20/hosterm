@@ -37,6 +37,8 @@ const invoke = (cmd, args = {}) => {
     case "home_dir": return Promise.resolve("/tmp/mockhome");
     case "sftp_read_file": return Promise.resolve("hello editor\nline two\n");
     case "sftp_write_file": return Promise.resolve();
+    case "pty_spawn": return Promise.resolve(4242);
+    case "pty_resize": case "pty_kill": case "pty_write": case "clipboard_write": case "clipboard_read": return Promise.resolve("");
     case "save_host": case "delete_host": case "create_identity_file": return Promise.resolve();
     default: return Promise.reject(`unmocked: ${cmd}`);
   }
@@ -191,6 +193,39 @@ check("sftp double-click navigates local dir", (await page.locator(".panel.activ
 await page.locator(".panel.active .sftp-download").click();
 await page.waitForTimeout(300);
 check("download without selection shows hint", (await page.locator(".panel.active .sftp-status").textContent()).includes("Select a file"));
+
+// 9g. split: button on terminal tab adds a second terminal pane
+await page.locator(".host-item", { hasText: "prod-web" }).first().locator(".h-name").click();
+await page.waitForTimeout(500);
+await page.locator(".tab .split").first().waitFor({ timeout: 5000 });
+check("terminal tab opened", (await page.locator(".tab .split").count()) >= 1);
+await page.locator(".tab.active .split").first().click();
+await page.waitForTimeout(500);
+check("split adds second term-host", (await page.locator(".panel.active .term-host").count()) === 2);
+const w1 = await page.locator(".panel.active .term-host").first().evaluate((el) => el.getBoundingClientRect().width);
+const w2 = await page.locator(".panel.active .term-host").nth(1).evaluate((el) => el.getBoundingClientRect().width);
+check("split panes ~50/50", Math.abs(w1 - w2) < 30, `w1=${Math.round(w1)} w2=${Math.round(w2)}`);
+
+// 9h. sidebar resizer: drag divider widens the host list
+const before = await page.locator("#sidebar").evaluate((el) => el.getBoundingClientRect().width);
+const box = await page.locator("#sb-resize").boundingBox();
+await page.mouse.move(box.x + box.width / 2, box.y + 200);
+await page.mouse.down();
+await page.mouse.move(box.x + 200, box.y + 200, { steps: 4 });
+await page.mouse.up();
+const after = await page.locator("#sidebar").evaluate((el) => el.getBoundingClientRect().width);
+check("sidebar drag-resize works", after > before + 100, `before=${before} after=${after}`);
+const sbw = await page.evaluate(() => localStorage.getItem("sb-width"));
+check("sidebar width persisted", sbw !== null && parseInt(sbw, 10) === Math.round(after), `stored=${sbw}`);
+await page.evaluate(() => { localStorage.removeItem("sb-width"); });
+
+// 9i. sftp panes: This PC (local) is LEFT of remote
+await page.locator(".panel.active .tab .x, .tab.active .x").first().click();
+await page.waitForTimeout(300);
+await page.locator(".host-item .h-sftp").first().click();
+await page.waitForTimeout(500);
+const locX = await page.locator(".panel.active .sftp-pane").first().evaluate((el) => el.querySelector(".pane-title").textContent);
+check("local pane first (left)", locX.includes("This PC"), locX);
 
 check("no console/page errors", errors.length === 0, errors.slice(0, 3).join(" | "));
 

@@ -79,9 +79,13 @@ interface Session {
   host: string;
   term: Terminal;
   fit: FitAddon;
+  banner?: HTMLElement;
   unlisten: UnlistenFn[];
 }
 const sessions = new Map<number, Session>();
+// second terminals created by Split (keyed by their tab)
+const splitSessions = new Map<number, Session>();
+// second terminals created by Split (keyed by their tab)
 let nextTab = 1;
 let activeTab: number | null = null;
 
@@ -563,6 +567,14 @@ async function openSftp(host: string) {
     <div class="sftp-wrap">
       <div class="sftp-panes">
         <div class="sftp-pane">
+          <div class="pane-head"><span class="pane-title">This PC — local</span></div>
+          <div class="sftp-toolbar">
+            <button class="loc-up icon" aria-label="Parent local directory" title="Parent directory">${ICONS.up}</button>
+            <input class="loc-path" placeholder="local directory" />
+            <button class="loc-go">Go</button>
+            <button class="loc-refresh icon" aria-label="Reload local directory" title="Reload directory">${ICONS.reload}</button>
+          </div>
+          <div class="sftp-pane">
           <div class="pane-head"><span class="pane-title">${esc(host)} — remote</span></div>
           <div class="sftp-toolbar">
             <button class="sftp-up icon" aria-label="Parent directory" title="Parent directory">${ICONS.up}</button>
@@ -572,14 +584,6 @@ async function openSftp(host: string) {
           </div>
           <div class="sftp-list"></div>
         </div>
-        <div class="sftp-pane">
-          <div class="pane-head"><span class="pane-title">This PC — local</span></div>
-          <div class="sftp-toolbar">
-            <button class="loc-up icon" aria-label="Parent local directory" title="Parent directory">${ICONS.up}</button>
-            <input class="loc-path" placeholder="local directory" />
-            <button class="loc-go">Go</button>
-            <button class="loc-refresh icon" aria-label="Reload local directory" title="Reload directory">${ICONS.reload}</button>
-          </div>
           <div class="loc-list"></div>
         </div>
       </div>
@@ -955,9 +959,13 @@ function makeTab(tabId: number, kind: "terminal" | "sftp" | "editor", label: str
     `<span class="t-ico">${ico}</span>` +
     `<span class="t-label">${esc(label)}</span>` +
     (kind === "editor" ? `<span class="t-dot" title="Unsaved changes" aria-label="Unsaved changes"></span>` : "") +
+    (kind === "terminal"
+      ? `<button class="split icon" aria-label="Split terminal" title="Split — second terminal of the same host">[${ICONS.terminal}]+</button>`
+      : "") +
     `<button class="x icon" aria-label="Close tab" title="Close">${ICONS.close}</button>`;
   tab.addEventListener("click", (ev) => {
     if ((ev.target as HTMLElement).closest(".x")) closeTab(tabId);
+    else if ((ev.target as HTMLElement).closest(".split")) splitTerminal(tabId);
     else activateTab(tabId);
   });
   tab.addEventListener("keydown", (ev) => {
@@ -979,39 +987,96 @@ function makeTab(tabId: number, kind: "terminal" | "sftp" | "editor", label: str
 }
 
 // ---------- terminals ----------
+// shared xterm theme (primary + split terminals)
+const TERMINAL_THEME = {
+  background: "#1a1b26",
+  foreground: "#c8d3f5",
+  cursor: "#7aa2f7",
+  cursorAccent: "#1a1b26",
+  selectionBackground: "#374465",
+  selectionForeground: "#c8d3f5",
+  selectionInactiveBackground: "#293046",
+  // scrollbar sliders are not settable in xterm 5.5's ITheme; S-7 values
+  // (#3b4261 / #6270a2 / #7aa2f7) apply when the addon support lands
+  black: "#3b4261",
+  red: "#f7768e",
+  green: "#9ece6a",
+  yellow: "#e0af68",
+  blue: "#7aa2f7",
+  magenta: "#bb9af7",
+  cyan: "#7dcfff",
+  white: "#a9b1d6",
+  brightBlack: "#737aa2",
+  brightRed: "#f7768e",
+  brightGreen: "#9ece6a",
+  brightYellow: "#e0af68",
+  brightBlue: "#7aa2f7",
+  brightMagenta: "#bb9af7",
+  brightCyan: "#7dcfff",
+  brightWhite: "#c0caf5",
+};
+
+
+// Split view: the panel holds a flex row of two .term-host panes sharing one
+// xterm Tab/term per pane; each pane gets its own PTY via openTerminalIn().
+// Split view: a second, independent terminal of the same host beside the
+// first one (own xterm instance + own PTY), like Termius split panes.
+async function splitTerminal(tabId: number) {
+  const session = sessions.get(tabId);
+  const panel = document.querySelector<HTMLElement>(`.panel[data-tab="${tabId}"]`);
+  if (!session || !panel || panel.classList.contains("split")) return;
+  panel.classList.add("split");
+  const host = session.host;
+
+  const term = new Terminal({
+    cursorBlink: true,
+    fontFamily: FONT_MONO,
+    fontSize: 13,
+    theme: TERMINAL_THEME,
+  });
+  const fit = new FitAddon();
+  term.loadAddon(fit);
+
+  const host_el = document.createElement("div");
+  host_el.className = "term-host";
+  const banner = document.createElement("div");
+  banner.className = "term-banner";
+  banner.innerHTML = `<span class="spinner"></span>Connecting to ${esc(host)}…`;
+  panel.appendChild(host_el);
+  panel.appendChild(banner);
+  term.open(host_el);
+
+  host_el.addEventListener("mouseup", () => {
+    const sel = term.getSelection();
+    if (sel) {
+      invoke("clipboard_write", { text: sel }).catch(() => {});
+      term.clearSelection();
+    }
+  });
+  host_el.addEventListener("contextmenu", (ev) => {
+    ev.preventDefault();
+    invoke("clipboard_read")
+      .then((text) => {
+        if (text && split_session.ptyId != null) invoke("pty_write", { id: split_session.ptyId, data: text });
+      })
+      .catch(() => {});
+  });
+
+  const split_session: Session = { id: tabId, ptyId: null, host, term, fit, banner, unlisten: [] };
+  splitSessions.set(tabId, split_session);
+  term.onData((data) => {
+    if (split_session.ptyId != null) invoke("pty_write", { id: split_session.ptyId, data });
+  });
+  await startPty(split_session);
+}
+
 async function openTerminal(host: string) {
   const tabId = nextTab++;
   const term = new Terminal({
     cursorBlink: true,
     fontFamily: FONT_MONO,
     fontSize: 13,
-    theme: {
-      background: "#1a1b26",
-      foreground: "#c8d3f5",
-      cursor: "#7aa2f7",
-      cursorAccent: "#1a1b26",
-      selectionBackground: "#374465",
-      selectionForeground: "#c8d3f5",
-      selectionInactiveBackground: "#293046",
-      // scrollbar sliders are not settable in xterm 5.5's ITheme; S-7 values
-      // (#3b4261 / #6270a2 / #7aa2f7) apply when the addon support lands
-      black: "#3b4261",
-      red: "#f7768e",
-      green: "#9ece6a",
-      yellow: "#e0af68",
-      blue: "#7aa2f7",
-      magenta: "#bb9af7",
-      cyan: "#7dcfff",
-      white: "#a9b1d6",
-      brightBlack: "#737aa2",
-      brightRed: "#f7768e",
-      brightGreen: "#9ece6a",
-      brightYellow: "#e0af68",
-      brightBlue: "#7aa2f7",
-      brightMagenta: "#bb9af7",
-      brightCyan: "#7dcfff",
-      brightWhite: "#c0caf5",
-    },
+    theme: TERMINAL_THEME,
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
@@ -1053,7 +1118,7 @@ async function openTerminal(host: string) {
       .catch(() => {});
   });
 
-  const session: Session = { id: tabId, ptyId: null, host, term, fit, unlisten: [] };
+  const session: Session = { id: tabId, ptyId: null, host, term, fit, banner, unlisten: [] };
   sessions.set(tabId, session);
   activateTab(tabId);
 
@@ -1062,26 +1127,30 @@ async function openTerminal(host: string) {
     if (session.ptyId != null) invoke("pty_write", { id: session.ptyId, data });
   });
 
-  // spawn pty
+  await startPty(session);
+}
+
+// Spawn the PTY for a terminal session and wire output/exit listeners.
+async function startPty(session: Session) {
   try {
-    fit.fit();
-    const cols = term.cols;
-    const rows = term.rows;
-    const ptyId = await invoke<number>("pty_spawn", { host, cols, rows });
+    session.fit.fit();
+    const cols = session.term.cols;
+    const rows = session.term.rows;
+    const ptyId = await invoke<number>("pty_spawn", { host: session.host, cols, rows });
     session.ptyId = ptyId;
 
     const u1 = await listen<string>(`pty://output/${ptyId}`, (ev) => {
-      banner.remove();
+      session.banner?.remove();
       session.term.write(ev.payload);
     });
     const u2 = await listen(`pty://exit/${ptyId}`, () => {
-      session.term.write("\r\n\x1b[90m[session ended]\x1b[0m\r\n");
+      session.term.write("\\r\\n\\x1b[90m[session ended]\\x1b[0m\\r\\n");
       session.ptyId = null;
     });
     session.unlisten.push(u1, u2);
   } catch (e) {
-    banner.remove();
-    term.write(`\r\n\x1b[31mFailed to start ssh: ${msg(e)}. Fix the host and reopen the tab.\x1b[0m\r\n`);
+    session.banner?.remove();
+    session.term.write(`\\r\\n\\x1b[31mFailed to start ssh: ${msg(e)}. Fix the host and reopen the tab.\\x1b[0m\\r\\n`)
   }
 }
 
@@ -1097,17 +1166,26 @@ function activateTab(tabId: number) {
   });
   const tabEl = document.querySelector(`.tab[data-tab="${tabId}"]`) as HTMLElement | null;
   tabEl?.scrollIntoView({ inline: "nearest" });
-  const s = sessions.get(tabId);
-  if (s) {
-    setTimeout(() => {
-      s.fit.fit();
-      s.term.focus();
-      if (s.ptyId != null) invoke("pty_resize", { id: s.ptyId, cols: s.term.cols, rows: s.term.rows });
-    }, 0);
-  }
+  const fitOne = (s?: Session) => {
+    if (!s) return;
+    s.fit.fit();
+    if (s.ptyId != null) invoke("pty_resize", { id: s.ptyId, cols: s.term.cols, rows: s.term.rows });
+  };
+  setTimeout(() => {
+    fitOne(sessions.get(tabId));
+    fitOne(splitSessions.get(tabId));
+    sessions.get(tabId)?.term.focus();
+  }, 0);
 }
 
 async function closeTab(tabId: number) {
+  const sp = splitSessions.get(tabId);
+  if (sp) {
+    if (sp.ptyId != null) await invoke("pty_kill", { id: sp.ptyId }).catch(() => {});
+    sp.unlisten.forEach((u) => u());
+    sp.term.dispose();
+    splitSessions.delete(tabId);
+  }
   const s = sessions.get(tabId);
   if (s) {
     if (s.ptyId != null) await invoke("pty_kill", { id: s.ptyId }).catch(() => {});
@@ -1153,16 +1231,53 @@ async function closeTab(tabId: number) {
 // resize active terminal with the window
 window.addEventListener("resize", () => {
   if (activeTab != null) {
-    const s = sessions.get(activeTab);
-    if (s) {
-      s.fit.fit();
-      if (s.ptyId != null) invoke("pty_resize", { id: s.ptyId, cols: s.term.cols, rows: s.term.rows });
+    for (const s of [sessions.get(activeTab), splitSessions.get(activeTab)]) {
+      if (s) {
+        s.fit.fit();
+        if (s.ptyId != null) invoke("pty_resize", { id: s.ptyId, cols: s.term.cols, rows: s.term.rows });
+      }
     }
   }
 });
 
 // ---------- wire up ----------
 window.addEventListener("DOMContentLoaded", () => {
+  // sidebar width resizer (drag the divider; width persists in localStorage)
+  const sidebar = document.getElementById("sidebar") as HTMLElement;
+  const divider = document.createElement("div");
+  divider.id = "sb-resize";
+  divider.setAttribute("role", "separator");
+  divider.setAttribute("aria-orientation", "vertical");
+  divider.setAttribute("aria-label", "Resize host list");
+  sidebar.after(divider);
+  const saved = localStorage.getItem("sb-width");
+  if (saved) sidebar.style.width = saved + "px";
+  let dragging = false;
+  divider.addEventListener("mousedown", (e) => {
+    dragging = true;
+    divider.classList.add("dragging");
+    e.preventDefault();
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    const w = Math.min(560, Math.max(160, e.clientX));
+    sidebar.style.width = w + "px";
+  });
+  window.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false;
+    divider.classList.remove("dragging");
+    const w = parseInt(sidebar.style.width, 10);
+    if (w) localStorage.setItem("sb-width", String(w));
+    if (activeTab != null) {
+      const s = sessions.get(activeTab);
+      if (s) {
+        s.fit.fit();
+        if (s.ptyId != null) invoke("pty_resize", { id: s.ptyId, cols: s.term.cols, rows: s.term.rows });
+      }
+    }
+  });
+
   $("#btn-add").addEventListener("click", () => openEditor(null));
   $("#btn-reload").addEventListener("click", loadHosts);
   $("#btn-raw").addEventListener("click", openRaw);
