@@ -685,6 +685,52 @@ async function openSftp(host: string) {
     }
   });
 
+  // drag & drop between panes (Termius): rows from the LOCAL pane drop on the
+  // REMOTE pane = upload; rows from REMOTE drop on LOCAL = download.
+  // Reuses the selection-based buttons' logic; plain mouse events, no HTML5 DnD
+  // (unreliable in WebView2 — same reason the tab split uses manual drag).
+  const paneLocal = q(".sftp-pane") as HTMLElement;
+  const paneRemote = q(".sftp-pane:nth-child(2)") as HTMLElement;
+  let dragSrc: "local" | "remote" | null = null;
+  let dragName = "";
+
+  const wirePane = (pane: HTMLElement, side: "local" | "remote") => {
+    pane.addEventListener("mousedown", (ev) => {
+      const row = (ev.target as HTMLElement).closest(".sftp-row") as HTMLElement | null;
+      if (!row || ev.button !== 0) return;
+      dragSrc = side;
+      dragName = (row.querySelector(".nm") as HTMLElement)?.textContent || "";
+      document.body.classList.add("sftp-dragging");
+    });
+    pane.addEventListener("mouseover", (ev) => {
+      if (!dragSrc || dragSrc === side) return;
+      if (!(ev.target as HTMLElement).closest(".sftp-row")) return;
+      pane.classList.add("drop-target");
+    });
+    pane.addEventListener("mouseleave", () => pane.classList.remove("drop-target"));
+    pane.addEventListener("mouseup", (ev) => {
+      if (!dragSrc) return;
+      const from = dragSrc;
+      dragSrc = null;
+      document.body.classList.remove("sftp-dragging");
+      pane.classList.remove("drop-target");
+      const row = (ev.target as HTMLElement).closest(".sftp-row");
+      if (!row) return; // released outside a row: cancel, no transfer
+      if (from === side) return; // dropped on own pane: just a click
+      const name = dragName; // the row you GRABBED, not the one you dropped on
+      if (!name) return;
+      if (side === "remote") {
+        (panel as any).__selLocal = name;
+        (q(".sftp-upload") as HTMLButtonElement).click();
+      } else {
+        (panel as any).__selRemote = name;
+        (q(".sftp-download") as HTMLButtonElement).click();
+      }
+    });
+  };
+  wirePane(paneLocal, "local");
+  wirePane(paneRemote, "remote");
+
   // default local pane: user home (frontend knows it from the backend)
   try {
     localPane.set(tabId, await invoke<string>("home_dir"));

@@ -259,6 +259,26 @@ await page.locator("#tab-menu button", { hasText: "Close others" }).click();
 await page.waitForTimeout(500);
 check("close others leaves one tab", (await page.locator(".tab").count()) === 1);
 
+// 9g3. SFTP: list scrolls (pane is height-constrained), transfer buttons visible
+// (9g2 closed every tab, so open a fresh SFTP tab first)
+await page.locator(".host-item .h-sftp").first().click();
+await page.waitForTimeout(600);
+const sftpPanel = page.locator(".panel.active");
+await sftpPanel.locator(".sftp-row").first().waitFor({ timeout: 5000 });
+const listScrollable = await sftpPanel.locator(".sftp-list").evaluate((el) => {
+  const wrap = el.closest(".sftp-wrap");
+  const foot = wrap && wrap.querySelector(".sftp-foot");
+  return {
+    wrapFits: wrap.getBoundingClientRect().height <= window.innerHeight + 2,
+    footVisible: !!(foot && foot.offsetParent),
+    footTop: Math.round(foot.getBoundingClientRect().top),
+    vh: window.innerHeight,
+  };
+});
+const footVisible = listScrollable.footVisible && listScrollable.footTop < listScrollable.vh;
+check("sftp wrap fits viewport (list scrollable)", listScrollable.wrapFits);
+check("upload/download buttons visible", footVisible);
+
 // 9h. sidebar resizer: drag divider widens the host list
 await page.evaluate(() => { localStorage.removeItem("sb-width"); });
 await page.locator(".tab.active .x").click();
