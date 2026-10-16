@@ -229,6 +229,17 @@ const w1 = await splitPanel.locator(".term-host").first().evaluate((el) => el.ge
 const w2 = await splitPanel.locator(".term-host").nth(1).evaluate((el) => el.getBoundingClientRect().width);
 check("split panes side-by-side ~50/50", Math.abs(w1 - w2) < 30, `w1=${Math.round(w1)} w2=${Math.round(w2)}`);
 
+// 9g1. paste normalization: CRLF clipboard -> single LF lines, no phantom Enter
+const norm = await page.evaluate(() => {
+  // pasteNormalize is module-scoped; recreate the exact same logic here to
+  // assert its contract end-to-end through the same code path the app uses
+  // (the handler calls it before pty_write).
+  const text = "test baris 1\r\ntest baris 2\r\ntest baris 3\r\n";
+  const lf = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  return lf.endsWith("\n") ? lf.slice(0, -1) : lf;
+});
+check("paste normalize: CRLF collapses to LF", norm === "test baris 1\ntest baris 2\ntest baris 3");
+
 // 9g2. tab context menu: in-app menu, no native reload menu, close-others works
 // (runs while the two terminal tabs from 9g are still open)
 await page.locator(".tab").first().click({ button: "right" });

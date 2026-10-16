@@ -946,6 +946,15 @@ async function openRemoteEditor(host: string, path: string) {
   }
 }
 
+// ---------- clipboard ----------
+// Windows clipboard text is CRLF; a raw \r acts as Enter and the trailing \n
+// adds a phantom blank line on top of the shell echo. Normalize to plain LF
+// (bash/zsh pastes fine) and strip a single trailing newline.
+function pasteNormalize(text: string): string {
+  const lf = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  return lf.endsWith("\n") ? lf.slice(0, -1) : lf;
+}
+
 // ---------- tabs ----------
 // Manual tab-drag state: mousedown arms it, moving >6px activates, mouseup
 // over another TERMINAL tab splits. Plain clicks never activate it.
@@ -1137,7 +1146,8 @@ async function splitTerminal(targetTabId: number, sourceTabId: number) {
   host_el.addEventListener("contextmenu", (ev) => {
     ev.preventDefault();
     invoke("clipboard_read")
-      .then((text) => {
+      .then((raw) => {
+        const text = pasteNormalize(String(raw));
         if (text && split_session.ptyId != null) invoke("pty_write", { id: split_session.ptyId, data: text });
       })
       .catch(() => {});
@@ -1193,7 +1203,8 @@ async function openTerminal(host: string) {
   host_el.addEventListener("contextmenu", (ev) => {
     ev.preventDefault();
     invoke("clipboard_read")
-      .then((text) => {
+      .then((raw) => {
+        const text = pasteNormalize(String(raw));
         if (text && session.ptyId != null) invoke("pty_write", { id: session.ptyId, data: text });
       })
       .catch(() => {});
