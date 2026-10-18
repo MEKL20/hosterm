@@ -1,4 +1,4 @@
-# hosterm
+# Hosterm
 
 A lightweight desktop SSH client (Termius-style) whose **single source of truth is
 `~/.ssh/config`** — no vault, no proprietary store. Switch devices by copying one file.
