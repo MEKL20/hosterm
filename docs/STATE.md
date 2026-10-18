@@ -3,7 +3,7 @@
 Read this before touching code. It is the shared context: architecture, invariants, commands, pitfalls.
 
 ## What hosterm is
-Desktop SSH/SFTP client, Tauri v2 + TypeScript, Windows-first (WebView2) but dev'd on Linux. Founding principle: spawn the OS's REAL `ssh`/`sftp` binaries (portable-pty + xterm.js for terminals; batch `sftp -b -` for transfers) — no ssh2/russh libs.
+Desktop SSH/SFTP client, Tauri v2 + TypeScript, Windows-first (WebView2) but dev'd on Linux. Founding principle: spawn the OS's REAL `ssh`/`sftp` binaries (portable-pty + xterm.js for terminals; batch `sftp -b -` for transfers, interactive persistent `sftp` in a PTY for password-auth hosts — one process per host, shared across tabs) — no ssh2/russh libs.
 
 ## Layout
 - `src/main.ts` — all frontend: tabs, terminals (sessions/splitSessions maps), SFTP browser (openSftp/renderSftp/renderLocalPane), remote editor (editorSessions/CodeMirror), dialogs.
