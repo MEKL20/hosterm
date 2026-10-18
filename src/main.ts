@@ -448,6 +448,7 @@ async function deleteHostByName(name: string) {
   if (choice !== "delete") return;
   try {
     await invoke("delete_host", { name });
+    sftpHostCache.delete(name);
     await loadHosts();
   } catch (e) {
     await dialog(
@@ -475,6 +476,7 @@ async function deleteHost() {
   if (choice !== "delete") return;
   try {
     await invoke("delete_host", { name: editingName });
+    sftpHostCache.delete(editingName);
     closeEditor();
     await loadHosts();
   } catch (e) {
@@ -528,6 +530,13 @@ async function saveRaw() {
 
 // ---------- sftp browser ----------
 type SftpSession = { host: string; path: string };
+// Entries cached per host so N tabs on one host share one listing; invalidated
+// on tab close (last tab of that host drops the cache). Rendering re-fetches
+// via the persistent backend session — no extra login per tab or per refresh.
+const sftpHostCache = new Map<string, SftpEntry[]>();
+function sftpForgetHost(host: string) {
+  if (![...sftpSessions.values()].some((s) => s.host === host)) sftpHostCache.delete(host);
+}
 type SftpEntry = { name: string; is_dir: boolean; is_link: boolean; size: number };
 type LocalEntry = { name: string; is_dir: boolean; size: number };
 const sftpSessions = new Map<number, SftpSession>();
@@ -837,10 +846,18 @@ async function renderSftp(tabId: number, status: StatusFn) {
   let entries: SftpEntry[];
   try {
     entries = await invoke<SftpEntry[]>("sftp_list", { host: s.host, path: s.path });
+    sftpHostCache.set(s.host, entries);
   } catch (err) {
-    list.innerHTML = "";
-    status(`Failed to list ${s.path || "~"}: ${msg(err)}. Fix the path and press Go, or go up one level.`, "err");
-    return;
+    // stale persistent session (server timeout etc.): backend respawns it;
+    // one automatic retry before showing the error
+    try {
+      entries = await invoke<SftpEntry[]>("sftp_list", { host: s.host, path: s.path });
+      sftpHostCache.set(s.host, entries);
+    } catch (err2) {
+      list.innerHTML = "";
+      status(`Failed to list ${s.path || "~"}: ${msg(err2)}. Fix the path and press Go, or go up one level.`, "err");
+      return;
+    }
   }
   list.innerHTML = "";
   if (entries.length === 0) {
@@ -1353,7 +1370,9 @@ async function closeTab(tabId: number) {
     ed.view?.destroy();
     editorSessions.delete(tabId);
   } else if (sftpSessions.has(tabId)) {
+    const host = (sftpSessions.get(tabId) as SftpSession).host;
     sftpSessions.delete(tabId);
+    sftpForgetHost(host);
   } else {
     return;
   }

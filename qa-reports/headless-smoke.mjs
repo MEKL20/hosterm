@@ -17,6 +17,7 @@ const sampleSftp = [
 const sampleHosts = [
   { name: "prod-web", host_name: "203.0.113.10", user: "deploy", port: "", identity_file: "", auth_method: "key", options: [] },
   { name: "db-core", host_name: "203.0.113.20", user: "admin", port: "", identity_file: "", auth_method: "key", options: [] },
+  { name: "pw-host", host_name: "203.0.113.30", user: "ops", port: "", identity_file: "", auth_method: "password", has_password: true, options: [] },
 ];
 const sampleConfig = `# demo
 Host prod-web
@@ -26,6 +27,8 @@ Host prod-web
 Host *`;
 
 const calls = [];
+// Fail the first sftp_list for pw-host to prove the stale-session retry path.
+let sftpFailFirst = false;
 const invoke = (cmd, args = {}) => {
   calls.push({ cmd, args });
   switch (cmd) {
@@ -33,7 +36,10 @@ const invoke = (cmd, args = {}) => {
     case "read_config_raw": return Promise.resolve(sampleConfig);
     case "write_config_raw": return Promise.resolve();
     case "list_identity_files": return Promise.resolve(["~/.ssh/id_test"]);
-    case "sftp_list": return Promise.resolve(sampleSftp);
+    case "sftp_list": {
+      if (sftpFailFirst && args.host === "pw-host") { sftpFailFirst = false; return Promise.reject("sftp session unreachable"); }
+      return Promise.resolve(sampleSftp);
+    }
     case "local_list": return Promise.resolve([{ name: "notes.txt", is_dir: false, size: 5 }, { name: "sub", is_dir: true, size: 0 }]);
     case "home_dir": return Promise.resolve("/tmp/mockhome");
     case "sftp_read_file": return Promise.resolve("hello editor\nline two\n");
@@ -73,7 +79,7 @@ const check = (name, ok, extra = "") => results.push(`${ok ? "PASS" : "FAIL"} ${
 
 // 1. host list renders from mock config
 const hosts = await page.locator(".host-item").count();
-check("host list renders", hosts === 2, `count=${hosts}`);
+check("host list renders", hosts === 3, `count=${hosts}`);
 
 // 2. sidebar action buttons are real buttons, visible (not opacity:0)
 const sftpBtn = page.locator(".host-item .h-sftp").first();
@@ -163,7 +169,7 @@ const focusedLabel = await page.evaluate(() => (document.activeElement?.textCont
 check("delete dialog focuses Cancel", focusedLabel === "Cancel", `focus=${focusedLabel}`);
 await page.keyboard.press("Enter"); // activates focused Cancel
 await page.waitForTimeout(250);
-check("cancel keeps host", (await page.locator(".host-item").count()) === 2);
+check("cancel keeps host", (await page.locator(".host-item").count()) === 3);
 
 // 9e. terminal right-click paste handler attached (no context menu, no errors)
 await page.locator(".host-item .h-name").first().click();
@@ -194,6 +200,28 @@ check("sftp double-click navigates local dir", (await page.locator(".panel.activ
 await page.locator(".panel.active .sftp-download").click();
 await page.waitForTimeout(300);
 check("download without selection shows hint", (await page.locator(".panel.active .sftp-status").textContent()).includes("Select a file"));
+
+// 9f2. password-host persistent session: fail-once retry, shared host cache,
+// tab isolation (one sftp session per host serves many tabs)
+sftpFailFirst = true; // first pw-host listing rejects once; retry must recover
+await page.locator(".host-item", { hasText: "pw-host" }).first().locator(".h-sftp").click();
+await page.waitForTimeout(700);
+check("pw sftp: stale-session retry renders entries", (await page.locator(".panel.active .sftp-list .sftp-row").count()) >= 1);
+const pwListCalls = calls.filter((c) => c.cmd === "sftp_list" && c.args.host === "pw-host").length;
+check("pw sftp: backend re-invoked exactly once on retry", pwListCalls === 2, `calls=${pwListCalls}`);
+await page.locator(".host-item", { hasText: "pw-host" }).first().locator(".h-sftp").click();
+await page.waitForTimeout(500);
+check("pw sftp: second tab on same host lists too", (await page.locator(".panel.active .sftp-list .sftp-row").count()) >= 1);
+const beforeRef = calls.filter((c) => c.cmd === "sftp_list" && c.args.host === "pw-host").length;
+await page.locator(".panel.active .sftp-refresh").click();
+await page.waitForTimeout(400);
+const afterRef = calls.filter((c) => c.cmd === "sftp_list" && c.args.host === "pw-host").length;
+check("pw sftp: refresh rides the persistent session", afterRef === beforeRef + 1, `before=${beforeRef} after=${afterRef}`);
+const tabsNow = await page.locator(".tab").count();
+await page.locator(".tab").last().locator(".x").click();
+await page.waitForTimeout(400);
+check("pw sftp: closing one tab keeps its sibling", (await page.locator(".tab").count()) === tabsNow - 1);
+check("pw sftp: sibling tab still lists", (await page.locator(".panel.active .sftp-list .sftp-row").count()) >= 1);
 
 // 9g. split, Termius style: drag one terminal tab onto another terminal tab
 for (let i = 0; i < 15 && (await page.locator(".tab").count()) > 0; i++) {
