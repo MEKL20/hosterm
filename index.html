@@ -122,5 +122,28 @@
         <div id="dialog-actions" class="modal-actions"></div>
       </div>
     </div>
+
+    <!-- OpenSSH install guide (blocking, FR-W2-2); dynamic text set from main.ts -->
+    <div id="ssh-modal" class="hidden">
+      <div class="modal-box guide-box">
+        <h2>OpenSSH client not found</h2>
+        <p id="ssh-what" class="guide-what"></p>
+        <p>hosterm runs the real <code>ssh</code>/<code>sftp</code> binaries that come with your OS. Without them, connecting to hosts and transferring files cannot work — editing <code>~/.ssh/config</code> keeps working.</p>
+        <h3>Install — Windows Settings</h3>
+        <p>Settings → Apps → Optional features → <em>View features</em> → search for “OpenSSH Client” → Install. (Windows 10 1809+ and Windows 11.)</p>
+        <h3>Install — PowerShell (run as Administrator)</h3>
+        <div class="ps-row">
+          <code id="ssh-ps-cmd"></code>
+          <button id="ssh-copy">Copy</button>
+        </div>
+        <p class="note">The command installs the Windows capability “OpenSSH.Client” and needs an elevated PowerShell.</p>
+        <p class="guide-link">More details: <a href="https://learn.microsoft.com/en-us/windows-server/administration/openssh/openssh_install_firstuse" target="_blank" rel="noopener noreferrer">Microsoft OpenSSH docs</a> (steps above work offline)</p>
+        <div class="modal-actions">
+          <button id="ssh-recheck">Re-check</button>
+          <span class="spacer"></span>
+          <button id="ssh-continue">Continue anyway</button>
+        </div>
+      </div>
+    </div>
   </body>
 </html>

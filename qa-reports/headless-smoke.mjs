@@ -49,10 +49,13 @@ Host *`;
 const calls = [];
 // Fail the first sftp_list for pw-host to prove the stale-session retry path.
 let sftpFailFirst = false;
+// W2-A startup ssh/sftp check state (AC-A1.5); read by the check_binaries case
+let binCheckState = { ssh_missing: false, sftp_missing: false };
 const invoke = (cmd, args = {}) => {
   calls.push({ cmd, args });
   switch (cmd) {
     case "read_ssh_config": return Promise.resolve(sampleHosts);
+    case "check_binaries": return Promise.resolve({ ...binCheckState });
     case "read_config_raw": return Promise.resolve(sampleConfig);
     case "write_config_raw": return Promise.resolve();
     case "list_identity_files": return Promise.resolve(["~/.ssh/id_test"]);
@@ -105,6 +108,113 @@ await page.waitForTimeout(400);
 
 const results = [];
 const check = (name, ok, extra = "") => results.push(`${ok ? "PASS" : "FAIL"} ${name}${extra ? " — " + extra : ""}`);
+
+// ---- W2-A: startup ssh/sftp check + install guide (AC-A1.5, NFR-W2-4) ----
+const PS_CMD = "Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0";
+// present-binary no-op (AC-A1.2): detection ran at launch, guide never appears
+check("check_binaries invoked at launch", calls.some((c) => c.cmd === "check_binaries"));
+check("present binaries: guide never appears", await page.locator("#ssh-modal").evaluate((el) => el.classList.contains("hidden")));
+
+// missing-binary state on Linux (OQ-5): check runs, guide skipped, per-attempt error friendly
+binCheckState = { ssh_missing: true, sftp_missing: false };
+await page.goto("http://localhost:4199/");
+await page.waitForTimeout(400);
+check("missing (Linux): guide skipped, app usable",
+  (await page.locator("#ssh-modal").evaluate((el) => el.classList.contains("hidden"))) &&
+  (await page.locator(".host-item").count()) === 3);
+const spawns0 = calls.filter((c) => c.cmd === "pty_spawn").length;
+await page.locator(".host-item .h-name").first().click();
+await page.waitForTimeout(300);
+const linuxMsg = await page.locator("#dialog-msg").textContent();
+check("missing (Linux): friendly per-attempt error names ssh",
+  !(await page.locator("#dialog").evaluate((el) => el.classList.contains("hidden"))) &&
+  linuxMsg.includes("ssh") && !linuxMsg.includes("No such file"), linuxMsg.slice(0, 60));
+check("missing (Linux): backend spawn never attempted",
+  calls.filter((c) => c.cmd === "pty_spawn").length === spawns0);
+await page.locator("#dialog button", { hasText: "OK" }).click();
+await page.waitForTimeout(200);
+
+// missing-binary state on Windows UA: full guide screen (FR-W2-2)
+const winPage = await browser.newPage({ userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36" });
+winPage.on("pageerror", (e) => errors.push(String(e)));
+winPage.on("console", (m) => m.type() === "error" && errors.push(m.text()));
+await winPage.addInitScript(() => {
+  window.__TAURI_INTERNALS__ = {
+    transformCallback: (cb) => cb,
+    invoke: (cmd, args) => globalThis.__invokeImpl(cmd, args),
+  };
+});
+await winPage.addInitScript(() => {
+  window.__cspViolations = [];
+  document.addEventListener("securitypolicyviolation", (e) => {
+    window.__cspViolations.push(`${e.effectiveDirective}: ${e.blockedURL || e.sourceFile || "inline"}`);
+  });
+});
+await winPage.exposeFunction("__invokeImpl", invoke);
+await winPage.goto("http://localhost:4199/");
+await winPage.waitForTimeout(400);
+check("missing (Windows): blocking guide shown at launch", await winPage.locator("#ssh-modal").evaluate((el) => !el.classList.contains("hidden")));
+check("guide: app inert behind it (blocking, OQ-A1)", await winPage.evaluate(() => document.getElementById("app").hasAttribute("inert")));
+const whatTxt = await winPage.locator("#ssh-what").textContent();
+check("guide: names the missing binary specifically (AC-A1.3)", whatTxt.includes("(ssh)") && !whatTxt.includes("sftp"), whatTxt);
+check("guide: byte-exact PowerShell rendered", (await winPage.locator("#ssh-ps-cmd").textContent()) === PS_CMD);
+check("guide: all 7 content elements (AC-A2.1)", await winPage.evaluate(() =>
+  !!(document.querySelector("#ssh-copy") && document.querySelector("#ssh-recheck") &&
+     document.querySelector("#ssh-continue") && document.querySelector('#ssh-modal a[href*="learn.microsoft.com"]') &&
+     (() => { const t = document.getElementById("ssh-modal").textContent;
+       return t.includes("Optional features") && t.includes("cannot work") && t.includes("OpenSSH.Client~~~~0.0.1.0"); })()
+)));
+const copyIdx = calls.filter((c) => c.cmd === "clipboard_write").length;
+await winPage.locator("#ssh-copy").click();
+await winPage.waitForTimeout(250);
+const copyCall = calls.filter((c) => c.cmd === "clipboard_write")[copyIdx];
+check("guide: Copy writes byte-exact command (AC-A2.1)", !!copyCall && copyCall.args.text === PS_CMD);
+
+// re-check with binaries still missing → same single screen (AC-A4.2)
+await winPage.locator("#ssh-recheck").click();
+await winPage.waitForTimeout(300);
+check("re-check still missing: screen stays, exactly one",
+  (await winPage.locator("#ssh-modal").count()) === 1 &&
+  (await winPage.locator("#ssh-modal").evaluate((el) => !el.classList.contains("hidden"))));
+
+// re-check after install → guide closes, connect works without restart (AC-A4.1)
+binCheckState = { ssh_missing: false, sftp_missing: false };
+const spawns1 = calls.filter((c) => c.cmd === "pty_spawn").length;
+await winPage.locator("#ssh-recheck").click();
+await winPage.waitForTimeout(300);
+check("re-check fixed: guide closes", await winPage.locator("#ssh-modal").evaluate((el) => el.classList.contains("hidden")));
+await winPage.locator(".host-item .h-name").first().click();
+await winPage.waitForTimeout(300);
+check("re-check fixed: connect works without restart",
+  calls.filter((c) => c.cmd === "pty_spawn").length === spawns1 + 1);
+
+// declined guide → config-only works; connect = friendly error + guide button (FR-W2-3)
+binCheckState = { ssh_missing: true, sftp_missing: true };
+await winPage.reload();
+await winPage.waitForTimeout(400);
+await winPage.locator("#ssh-continue").click();
+await winPage.waitForTimeout(200);
+check("Continue anyway dismisses guide", await winPage.locator("#ssh-modal").evaluate((el) => el.classList.contains("hidden")));
+await winPage.locator("#btn-raw").click();
+await winPage.waitForTimeout(200);
+check("declined: raw config still works (AC-A3.1)", await winPage.locator("#raw-modal").evaluate((el) => !el.classList.contains("hidden")));
+await winPage.keyboard.press("Escape");
+await winPage.waitForTimeout(200);
+await winPage.locator(".host-item .h-name").first().click();
+await winPage.waitForTimeout(300);
+const decMsg = await winPage.locator("#dialog-msg").textContent();
+check("declined: connect shows friendly error naming ssh (AC-A3.2)",
+  decMsg.includes("ssh") && !decMsg.includes("No such file"), decMsg.slice(0, 70));
+await winPage.locator("#dialog button", { hasText: "Open install guide" }).click();
+await winPage.waitForTimeout(200);
+check("'Open install guide' re-opens the guide (AC-A3.2)", await winPage.locator("#ssh-modal").evaluate((el) => !el.classList.contains("hidden")));
+check("winPage CSP violations == 0 (NFR-W2-1)", (await winPage.evaluate(() => window.__cspViolations || [])).length === 0);
+await winPage.close();
+
+// back to present-state for the rest of the suite
+binCheckState = { ssh_missing: false, sftp_missing: false };
+await page.goto("http://localhost:4199/");
+await page.waitForTimeout(400);
 
 // 1. host list renders from mock config
 const hosts = await page.locator(".host-item").count();

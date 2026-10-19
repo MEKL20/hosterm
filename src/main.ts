@@ -126,6 +126,7 @@ function onOverlayEscape() {
   else if (top.el.id === "modal") cancelEditor();
   else if (top.el.id === "raw-modal") cancelRaw();
   else if (top.el.id === "key-modal") closeKey();
+  else if (top.el.id === "ssh-modal") closeOverlay("#ssh-modal"); // Escape = Continue anyway
 }
 
 function openOverlay(sel: string, focusTarget?: HTMLElement) {
@@ -216,6 +217,74 @@ function resolveDialog(id: string) {
   dialogResolve = null;
   closeOverlay("#dialog");
   r(id);
+}
+
+// ---------- startup ssh/sftp check + install guide (FR-W2-1..4) ----------
+// Byte-exact install command; rendered AND copied from this single constant (AC-A2.1).
+const PS_INSTALL_CMD = "Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0";
+type BinCheck = { ssh_missing: boolean; sftp_missing: boolean };
+// Launch-lifetime detection result (FR-W2-1); null = check invoke failed → never
+// intercept anything, the backend spawn error speaks for itself.
+let binCheck: BinCheck | null = null;
+const isWindows = navigator.userAgent.includes("Windows");
+
+async function startupBinaryCheck() {
+  try {
+    binCheck = await invoke<BinCheck>("check_binaries");
+    if (isWindows && (binCheck.ssh_missing || binCheck.sftp_missing)) openSshGuide();
+  } catch (e) {
+    console.error("check_binaries failed:", e);
+  }
+}
+
+function openSshGuide() {
+  if (!$("#ssh-modal").classList.contains("hidden")) return; // never stack (AC-A2.2)
+  renderGuideState();
+  openOverlay("#ssh-modal");
+}
+
+function renderGuideState() {
+  if (!binCheck) return; // both call sites guard, but stay total (QA nit b)
+  // dynamic content via textContent only (ADR-8); all static markup lives in index.html
+  $("#ssh-what").textContent =
+    `OpenSSH client (${[binCheck.ssh_missing && "ssh", binCheck.sftp_missing && "sftp"].filter(Boolean).join(" and ")}) not found on this machine.`;
+}
+
+// FR-W2-4: re-run detection in place — close when fixed (no restart needed),
+// else update the same screen. Busy state on the button (AC-A4.3).
+async function recheckBinaries() {
+  const btn = $("#ssh-recheck") as HTMLButtonElement;
+  btn.disabled = true;
+  btn.textContent = "Re-checking…";
+  try {
+    binCheck = await invoke<BinCheck>("check_binaries");
+    if (!binCheck.ssh_missing && !binCheck.sftp_missing) closeOverlay("#ssh-modal");
+    else renderGuideState();
+  } catch (e) {
+    $("#ssh-what").textContent = `Re-check failed: ${msg(e)}. Fix the problem and press Re-check again.`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Re-check";
+  }
+}
+
+// FR-W2-3: friendly per-attempt error, shown immediately (no auto-recheck, OQ-A3).
+// Returns true when the caller must not invoke the backend.
+function binaryBlocked(kind: "ssh" | "sftp"): boolean {
+  if (!binCheck || !(kind === "ssh" ? binCheck.ssh_missing : binCheck.sftp_missing)) return false;
+  const actions = isWindows
+    ? [{ label: "Open install guide", id: "guide", style: "primary" as const }, { label: "OK", id: "ok" }]
+    : [{ label: "OK", id: "ok" }]; // guide content is Windows-specific (OQ-5)
+  void dialog(
+    "OpenSSH client missing",
+    `The ${kind} binary was not found on this machine, so this action cannot run. Install the OpenSSH client, then try again.`,
+    actions,
+    actions[0].id,
+    "ok"
+  ).then((id) => {
+    if (id === "guide") openSshGuide();
+  });
+  return true;
 }
 
 // ---------- sidebar ----------
@@ -563,6 +632,7 @@ function joinRemote(dir: string, name: string): string {
 type StatusFn = (m: string, kind?: "" | "ok" | "err") => void;
 
 async function openSftp(host: string) {
+  if (binaryBlocked("sftp")) return;
   const tabId = nextTab++;
   sftpSessions.set(tabId, { host, path: "" });
   const tab = makeTab(tabId, "sftp", host);
@@ -1175,6 +1245,7 @@ const TERMINAL_THEME = {
 // dragged host opens beside the target in the same panel — its own xterm
 // instance and its own PTY, fully independent of the first session.
 async function splitTerminal(targetTabId: number, sourceTabId: number) {
+  if (binaryBlocked("ssh")) return;
   const srcSession = sessions.get(sourceTabId);
   const panel = document.querySelector<HTMLElement>(`.panel[data-tab="${targetTabId}"]`);
   if (!srcSession || !panel || panel.classList.contains("split")) return;
@@ -1225,6 +1296,7 @@ async function splitTerminal(targetTabId: number, sourceTabId: number) {
 }
 
 async function openTerminal(host: string) {
+  if (binaryBlocked("ssh")) return;
   const tabId = nextTab++;
   const term = new Terminal({
     cursorBlink: true,
@@ -1457,5 +1529,19 @@ window.addEventListener("DOMContentLoaded", () => {
   $("#f-newkey").addEventListener("click", openKeyModal);
   $("#k-cancel").addEventListener("click", closeKey);
   $("#k-save").addEventListener("click", saveKey);
+  // OpenSSH guide (FR-W2-2)
+  $("#ssh-ps-cmd").textContent = PS_INSTALL_CMD;
+  $("#ssh-copy").addEventListener("click", async () => {
+    const btn = $("#ssh-copy");
+    try {
+      await invoke("clipboard_write", { text: PS_INSTALL_CMD });
+      btn.textContent = "Copied!";
+      setTimeout(() => { btn.textContent = "Copy"; }, 1500);
+    } catch { /* clipboard unavailable; the command stays selectable text */ }
+  });
+  $("#ssh-recheck").addEventListener("click", recheckBinaries);
+  $("#ssh-continue").addEventListener("click", () => closeOverlay("#ssh-modal"));
+  // detection off the config-parse path: fire alongside, don't await (NFR-W2-2)
+  startupBinaryCheck();
   loadHosts();
 });

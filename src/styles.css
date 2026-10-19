@@ -322,7 +322,7 @@ body.sftp-dragging { user-select: none; cursor: grabbing; }
 .ed-status.err { color: var(--danger); }
 
 /* modals */
-#modal, #raw-modal, #key-modal, #dialog {
+#modal, #raw-modal, #key-modal, #dialog, #ssh-modal {
   position: fixed; inset: 0;
   background: rgba(0, 0, 0, .5);
   display: flex; align-items: center; justify-content: center;
@@ -349,6 +349,20 @@ body.sftp-dragging { user-select: none; cursor: grabbing; }
 }
 .modal-actions { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
 .spacer { flex: 1; }
+/* OpenSSH install guide (FR-W2-2) */
+.guide-box { width: min(620px, 92vw); }
+.guide-box h3 { margin: 6px 0 0; font-size: 13px; }
+.guide-what { margin: 0; color: var(--warn); font-weight: 600; }
+.ps-row { display: flex; gap: 8px; align-items: stretch; }
+.ps-row code {
+  flex: 1; display: flex; align-items: center;
+  background: var(--bg2); border: 1px solid var(--border-soft); border-radius: 4px;
+  padding: 8px 12px; font-family: var(--font-mono); font-size: 12.5px;
+  white-space: nowrap; overflow-x: auto;
+}
+.ps-row button { white-space: nowrap; }
+.guide-link { margin: 0; }
+.guide-link a { color: var(--accent2); }
 .err { color: var(--danger); font-size: 12px; min-height: 14px; margin: 0; }
 #raw-text { flex: 1; resize: none; font-family: var(--font-mono); font-size: 13px; line-height: 1.5; }
 .id-row { display: flex; gap: 6px; align-items: stretch; }

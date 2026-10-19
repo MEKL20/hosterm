@@ -1356,6 +1356,62 @@ fn pty_kill(state: State<PtyState>, id: u32) -> Result<(), String> {
     Ok(())
 }
 
+/// Result of `check_binaries`: which of the two required OpenSSH client
+/// binaries could not be resolved. Both false = everything present.
+#[derive(Serialize)]
+struct BinCheck {
+    ssh_missing: bool,
+    sftp_missing: bool,
+}
+
+/// Presence-only lookup of `name` in `dirs` (first hit wins; `.exe` suffixed
+/// on Windows). ponytail: no +x probe — exec-bit failures surface at spawn;
+/// add an executable-bit check if a chmod'd binary ever reports "present".
+fn find_in_dirs(name: &str, dirs: &[&std::path::Path]) -> bool {
+    let file = if cfg!(windows) { format!("{name}.exe") } else { name.to_string() };
+    dirs.iter().any(|d| d.join(&file).is_file())
+}
+
+/// Pure core of `check_binaries` (FR-SSH-1 / AC-A1.1): resolves both binaries
+/// over (PATH dirs, `%SystemRoot%\System32\OpenSSH\`, HOSTERM_SFTP_BIN
+/// override) without spawning anything — mirrors how `pty_spawn`/`run_sftp_op`
+/// name their binaries (`ssh`, `sftp`; a set override REPLACES the sftp
+/// lookup entirely, lib.rs:721/856 semantics). Returns the missing flags.
+fn binaries_missing(
+    path_dirs: &[PathBuf],
+    system_dir: Option<&std::path::Path>,
+    sftp_override: Option<&std::ffi::OsStr>,
+) -> (bool, bool) {
+    let mut dirs: Vec<&std::path::Path> = path_dirs.iter().map(|p| p.as_path()).collect();
+    dirs.extend(system_dir);
+    let ssh_missing = !find_in_dirs("ssh", &dirs);
+    let sftp_missing = match sftp_override {
+        Some(bin) => !std::path::Path::new(bin).is_file(),
+        None => !find_in_dirs("sftp", &dirs),
+    };
+    (ssh_missing, sftp_missing)
+}
+
+/// Read-only startup check (FR-SSH-1): which of ssh/sftp are missing on this
+/// machine. No spawn, no network, no side effects; guide screen is frontend.
+#[tauri::command]
+fn check_binaries() -> BinCheck {
+    let path_dirs: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
+    #[cfg(windows)]
+    let system_dir: Option<PathBuf> = std::env::var_os("SystemRoot")
+        .map(|root| PathBuf::from(root).join("System32").join("OpenSSH"));
+    #[cfg(not(windows))]
+    let system_dir: Option<PathBuf> = None;
+    let (ssh_missing, sftp_missing) = binaries_missing(
+        &path_dirs,
+        system_dir.as_deref(),
+        std::env::var_os("HOSTERM_SFTP_BIN").as_deref(),
+    );
+    BinCheck { ssh_missing, sftp_missing }
+}
+
 /// Shared across ALL test modules: HOSTERM_CONFIG is a process-global env var,
 /// so every test that sets it must serialize on ONE mutex. Per-module locks do
 /// not serialize across modules and let concurrent tests clobber each other.
@@ -2328,6 +2384,106 @@ lrwxrwxrwx    1 user user       11 Oct  7 10:03 link -> notes.txt\n";
 
 }
 
+// ---- W2-A: check_binaries pure-core tests (FR-SSH-1 / AC-A1.1, NFR-W2-4) ----
+
+#[cfg(test)]
+mod bin_check_tests {
+    use super::*;
+
+    fn tmp(tag: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!("hosterm-binchk-{}-{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    /// Fake "bin dir": writes `ssh`/`sftp` (`.exe` on Windows) as plain files.
+    fn bin_dir(tag: &str, files: &[&str]) -> PathBuf {
+        let dir = tmp(tag);
+        for f in files {
+            let name = if cfg!(windows) { format!("{f}.exe") } else { f.to_string() };
+            std::fs::write(dir.join(&name), b"#!/bin/sh\n").unwrap();
+        }
+        dir
+    }
+
+    fn in_dir(dir: &PathBuf, name: &str) -> PathBuf {
+        dir.join(if cfg!(windows) { format!("{name}.exe") } else { name.to_string() })
+    }
+
+    #[test]
+    fn all_four_result_states() {
+        let both = bin_dir("both", &["ssh", "sftp"]);
+        assert_eq!(binaries_missing(&[both], None, None), (false, false), "both present");
+
+        let ssh_only = bin_dir("sshonly", &["ssh"]);
+        assert_eq!(
+            binaries_missing(&[ssh_only], None, None),
+            (false, true),
+            "missing: sftp only — result must name the missing one"
+        );
+
+        let sftp_only = bin_dir("sftponly", &["sftp"]);
+        assert_eq!(
+            binaries_missing(&[sftp_only], None, None),
+            (true, false),
+            "missing: ssh only"
+        );
+
+        let none = bin_dir("none", &[]);
+        assert_eq!(binaries_missing(&[none], None, None), (true, true), "missing: both");
+        for tag in ["both", "sshonly", "sftponly", "none"] {
+            let _ = std::fs::remove_dir_all(tmp(tag));
+        }
+    }
+
+    #[test]
+    fn system_dir_fallback_used_for_both() {
+        // analog of %SystemRoot%\System32\OpenSSH holding ssh only
+        let sysdir = bin_dir("sys", &["ssh"]);
+        assert_eq!(
+            binaries_missing(&[], Some(&sysdir), None),
+            (false, true),
+            "ssh found via system dir when PATH empty"
+        );
+
+        // existing-but-empty system dir resolves nothing
+        let empty = bin_dir("sysempty", &[]);
+        assert_eq!(binaries_missing(&[], Some(&empty), None), (true, true));
+
+        // PATH hit takes precedence order; either location satisfies
+        let sys_ssh = bin_dir("sysssh", &["ssh"]);
+        let path_sftp = bin_dir("pathsftp", &["sftp"]);
+        assert_eq!(binaries_missing(&[path_sftp], Some(&sys_ssh), None), (false, false));
+        for tag in ["sys", "sysempty", "sysssh", "pathsftp"] {
+            let _ = std::fs::remove_dir_all(tmp(tag));
+        }
+    }
+
+    #[test]
+    fn sftp_override_replaces_lookup() {
+        let with_sftp = bin_dir("ovrpath", &["ssh", "sftp"]);
+        let fake = bin_dir("ovrbin", &["sftp"]);
+        let real = in_dir(&fake, "sftp");
+
+        // override present → sftp found via the override path (in `fake`),
+        // not via the PATH dir — override is honored
+        assert_eq!(binaries_missing(&[with_sftp.clone()], None, Some(real.as_os_str())), (false, false));
+
+        // dangling override → sftp missing even though PATH has a real sftp
+        let dangling = fake.join("does-not-exist.bin");
+        assert_eq!(
+            binaries_missing(&[with_sftp], None, Some(dangling.as_os_str())),
+            (false, true),
+            "a set HOSTERM_SFTP_BIN must REPLACE the PATH lookup (lib.rs:721/856)"
+        );
+        for tag in ["ovrpath", "ovrbin"] {
+            let _ = std::fs::remove_dir_all(tmp(tag));
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -2352,7 +2508,8 @@ pub fn run() {
             pty_spawn,
             pty_write,
             pty_resize,
-            pty_kill
+            pty_kill,
+            check_binaries
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
