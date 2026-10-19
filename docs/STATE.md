@@ -6,14 +6,16 @@ Read this before touching code. It is the shared context: architecture, invarian
 Desktop SSH/SFTP client, Tauri v2 + TypeScript, Windows-first (WebView2) but dev'd on Linux. Founding principle: spawn the OS's REAL `ssh`/`sftp` binaries (portable-pty + xterm.js for terminals; batch `sftp -b -` for transfers, interactive persistent `sftp` in a PTY for password-auth hosts — one process per host, shared across tabs) — no ssh2/russh libs.
 
 ## Layout
-- `src/main.ts` — all frontend: tabs, terminals (sessions/splitSessions maps), SFTP browser (openSftp/renderSftp/renderLocalPane), remote editor (editorSessions/CodeMirror), dialogs.
-- `src/styles.css` — theme Abyss Emerald (redesign "Arus" §6.5; U1 landed 19 Okt; U2 sidebar Arus landed 19 Okt: 28px host rows, `.h-group`/`.h-dot`/`.h-key`/`.skel`, hover-only `.h-acts` via focus-within, `#host-menu` shared dengan `#tab-menu`); glow `var(--glow)` hanya di 3 selector aktif (`.tab.active`, `.term-side.focused`, `button.primary`); layout chains: `#panels .panel` (absolute) → `.sftp-wrap` height:100% → `.sftp-panes` flex → `.sftp-list` flex:1 overflow-y:auto.
+- `src/main.ts` — all frontend: tabs, terminals (sessions/splitSessions map), SFTP browser (openSftp/renderSftp/renderLocalPane), remote editor (editorSessions/CodeMirror), dialogs. U3 Tab bar Arus landed 19 Okt (c6251db): kind classes `.tab.kind-*` + dataset.kind, dead-tab state (`markTabDead`/`reconnectTab`, PTY exit → ✕ --danger, klik = respawn; **invariant: `markTabDead` innerHTML hanya dari ICONS/kindIcon statis — jangan pernah interpolasi string dinamis**), tab context menu 4 item (Close/Ctrl+W, Close others/Ctrl+Shift+W, Close host via `tabHost()`, Close all), Ctrl+W/Ctrl+Shift+W global (skip saat fokus di input/textarea/select/contentEditable atau overlayStack>0), tab di-insert `$("#tab-split-zone").before(tab)` (JANGAN appendChild ke #tabs — drop-zone harus tetap terakhir), drag → `#tab-split-zone.drag-hot`.
+- `src/styles.css` — theme Abyss Emerald (redesign "Arus" §6.5; U1 landed 19 Okt; U2 sidebar Arus landed 19 Okt: 28px host rows, `.h-group`/`.h-dot`/`.h-key`/`.skel`, hover-only `.h-acts` via focus-within, `#host-menu` shared dengan `#tab-menu`; U3 landed 19 Okt: `.tab.kind-*` icon colors, `.tab.dead` --danger, `.t-dot` 8px, `#tab-split-zone` sticky order:999 + `.drag-hot` --accent); glow `var(--glow)` hanya di 3 selector aktif (`.tab.active`, `.term-side.focused`, `button.primary`); layout chains: `#panels .panel` (absolute) → `.sftp-wrap` height:100% → `.sftp-panes` flex → `.sftp-list` flex:1 overflow-y:auto.
 - `src-tauri/src/lib.rs` — every backend command; config parse/serialize is sacred (preserves comments/order/unknown lines); secrets sidecar `~/.ssh/hosterm.secrets` (0600).
-- `qa-reports/headless-smoke.mjs` — 104 checks, Playwright chromium, mock invoke map (hosts: prod-web, db-core, pw-host).
+- `qa-reports/headless-smoke.mjs` — 124 checks (sejak U3, 19 Okt), Playwright chromium, mock invoke map (hosts: prod-web, db-core, pw-host) + mock event plugin (`__emitTauri("pty://exit/<id>")` untuk uji dead tab).
 
 ## Deferred → U9 (lead t_e0832c58, 19 Okt)
 - Group-label guard: alias berawalan `-` → header kosong (`g &&` guard di main.ts renderHostList); duplikat header bila prefix sama interleave (nit-1/2 + SEC info-a — kosmetik, textContent tanpa vektor).
 - Smoke coverage: empty-state CTA "Add host" + row-level ↑/↓ (QA probe scratch 11/11 t_e0832c58 menunjukkan perilaku benar, tinggal diformalkan jadi cek).
+- (lead t_3087927a, U3) Dead tab tampil dua glyph ✕ (`.t-ico` reconnect + `.x` close) — perilaku persis AC3 U3 (teks spec), ganti icon perlu ICONS baru + rework smoke; polish visual di U9.
+- (lead t_3087927a, U3) Smoke `menuTips[2]/[3]` assert `""` rapuh — tooltip Close host/Close all sengaja kosong; kalau nanti dapat tooltip, update assert sekaligus.
 
 ## Hard invariants (never break)
 1. `~/.ssh/config` must stay parseable by REAL ssh at all times. No secrets in it — ever. Sidecar only.
@@ -26,7 +28,7 @@ Desktop SSH/SFTP client, Tauri v2 + TypeScript, Windows-first (WebView2) but dev
 ## Verify loop (every change)
 1. `cd src-tauri && cargo test --lib` → 52.
 2. `npm run build` → ~500ms, no TS errors.
-3. `npm install --no-save playwright@1.63.0 && node qa-reports/headless-smoke.mjs` → 104 (sejak U2 Sidebar Arus, 19 Okt); then `rm -rf node_modules/playwright node_modules/playwright-core node_modules/.bin/playwright*`.
+3. `npm install --no-save playwright@1.63.0 && node qa-reports/headless-smoke.mjs` → 124 (sejak U3 Tab bar Arus, 19 Okt); then `rm -rf node_modules/playwright node_modules/playwright-core node_modules/.bin/playwright*`.
 4. Add/extend smoke checks for new behavior.
 
 ## Release (orchestrator does this, not children)
