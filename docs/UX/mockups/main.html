@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<title>hosterm redesign — main view (terminal + SFTP)</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<h1>Frame 1 — Main view: sidebar + 2 terminal split + status bar</h1>
+<div class="mock-note">
+  <b>Arah A "Arus".</b> Host rows satu lini + dot sesi (hijau = tab terminal hidup) + grouping PROD/LAB.
+  Edit/Delete pindah ke menu ⋯ (klik salah hilang); ⇅ SFTP muncul saat hover.
+  Split terminal: divider 4px draggable, sisi fokus dapat underline <span style="color:var(--accent)">--accent</span>.
+  Status bar global baru di bawah. <b>Drag tab→tab tetap manual mouse (bukan HTML5 DnD)</b>; drop-zone split permanen terlihat di ujung tab bar.
+</div>
+
+<div class="frame">
+  <div id="app">
+    <aside id="sidebar">
+      <div class="sidebar-head">
+        <span class="brand">hosterm</span>
+        <span class="head-acts">
+          <button class="icon" aria-label="Add host" title="Add host">
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="10" y1="2" x2="10" y2="6"/><line x1="8" y1="4" x2="12" y2="4"/></svg>
+          </button>
+          <button class="icon" aria-label="Collapse sidebar" title="Collapse sidebar (Ctrl+B)">
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6,3 11,8 6,13"/></svg>
+          </button>
+        </span>
+      </div>
+      <div class="search-row">
+        <input id="host-search" type="search" placeholder="Search hosts…" aria-label="Search hosts" />
+        <span class="kbd">Ctrl K</span>
+      </div>
+      <div id="host-list">
+        <div class="group-label">Prod</div>
+        <div class="host-row live" role="button" tabindex="0" aria-label="Open terminal to prod-web" title="mekl@203.0.113.10:22 · 2 tab">
+          <span class="dot"></span>
+          <span class="h-name">prod-web</span>
+          <button class="h-sftp" aria-label="Open SFTP for prod-web" title="Open SFTP"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="3" x2="5" y2="13"/><polyline points="3,5 5,3 7,5"/><line x1="11" y1="13" x2="11" y2="3"/><polyline points="9,11 11,13 13,11"/></svg></button>
+          <button class="h-menu" aria-label="Host menu prod-web" title="Edit · Duplicate · Delete">⋯</button>
+        </div>
+        <div class="host-row live" role="button" tabindex="0" title="mekl@10.0.4.2:22">
+          <span class="dot"></span>
+          <span class="h-name">db-core</span>
+          <button class="h-sftp" aria-label="Open SFTP for db-core" title="Open SFTP"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="3" x2="5" y2="13"/><polyline points="3,5 5,3 7,5"/><line x1="11" y1="13" x2="11" y2="3"/><polyline points="9,11 11,13 13,11"/></svg></button>
+          <button class="h-menu" aria-label="Host menu db-core" title="Edit · Duplicate · Delete">⋯</button>
+        </div>
+        <div class="host-row" role="button" tabindex="0" title="deploy@prod-cache:22">
+          <span class="dot"></span>
+          <span class="h-name">prod-cache</span>
+          <span class="h-pw" title="Password auth — stored (sidecar, 0600)" aria-label="Password auth"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="4" y="7" width="8" height="6" rx="1.5"/><path d="M6 7V5.5a2 2 0 0 1 4 0V7"/></svg></span>
+          <button class="h-sftp" aria-label="Open SFTP for prod-cache" title="Open SFTP"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="3" x2="5" y2="13"/><polyline points="3,5 5,3 7,5"/><line x1="11" y1="13" x2="11" y2="3"/><polyline points="9,11 11,13 13,11"/></svg></button>
+          <button class="h-menu" aria-label="Host menu prod-cache" title="Edit · Duplicate · Delete">⋯</button>
+        </div>
+        <div class="group-label">Lab</div>
+        <div class="host-row" role="button" tabindex="0" title="root@192.168.7.20:2222">
+          <span class="dot"></span>
+          <span class="h-name">jumphost-lab</span>
+          <button class="h-sftp" aria-label="Open SFTP for jumphost-lab" title="Open SFTP"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="3" x2="5" y2="13"/><polyline points="3,5 5,3 7,5"/><line x1="11" y1="13" x2="11" y2="3"/><polyline points="9,11 11,13 13,11"/></svg></button>
+          <button class="h-menu" aria-label="Host menu jumphost-lab" title="Edit · Duplicate · Delete">⋯</button>
+        </div>
+        <div class="host-row" role="button" tabindex="0" title="test@192.168.7.31:22">
+          <span class="dot"></span>
+          <span class="h-name">sandbox</span>
+          <button class="h-sftp" aria-label="Open SFTP for sandbox" title="Open SFTP"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="3" x2="5" y2="13"/><polyline points="3,5 5,3 7,5"/><line x1="11" y1="13" x2="11" y2="3"/><polyline points="9,11 11,13 13,11"/></svg></button>
+          <button class="h-menu" aria-label="Host menu sandbox" title="Edit · Duplicate · Delete">⋯</button>
+        </div>
+      </div>
+      <div class="sidebar-foot">
+        <button id="btn-raw">Raw config</button>
+        <button id="btn-reload" class="icon" aria-label="Reload config" title="Reload config">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8a5 5 0 1 1-1.7-3.75"/><polyline points="13,1.5 13,4.5 10,4.5"/></svg>
+        </button>
+      </div>
+    </aside>
+
+    <main id="main">
+      <div id="tabs" role="tablist">
+        <div class="tab active" role="tab" aria-selected="true">
+          <span class="t-ico"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><polyline points="4,6 6,8 4,10"/><line x1="8" y1="10" x2="11" y2="10"/></svg></span>
+          <span class="t-label">prod-web</span>
+          <button class="x" aria-label="Close tab" title="Close"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg></button>
+        </div>
+        <div class="tab" role="tab" aria-selected="false">
+          <span class="t-ico"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><polyline points="4,6 6,8 4,10"/><line x1="8" y1="10" x2="11" y2="10"/></svg></span>
+          <span class="t-label">db-core</span>
+          <button class="x" aria-label="Close tab" title="Close"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg></button>
+        </div>
+        <div class="tab kind-sftp" role="tab" aria-selected="false" title="SFTP prod-web">
+          <span class="t-ico"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="3" x2="5" y2="13"/><polyline points="3,5 5,3 7,5"/><line x1="11" y1="13" x2="11" y2="3"/><polyline points="9,11 11,13 13,11"/></svg></span>
+          <span class="t-label">prod-web</span>
+          <button class="x" aria-label="Close tab" title="Close"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg></button>
+        </div>
+        <div class="tab" role="tab" aria-selected="false" title="Editor nginx.conf — unsaved">
+          <span class="t-ico"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="13" x2="12" y2="4"/><line x1="10.5" y1="5.5" x2="12" y2="7"/></svg></span>
+          <span class="t-label">nginx.conf</span>
+          <span class="t-dot" title="Unsaved changes" aria-label="Unsaved changes"></span>
+          <button class="x" aria-label="Close tab" title="Close"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg></button>
+        </div>
+        <div class="tab dead" role="tab" aria-selected="false" title="Session ended — click to reconnect">
+          <span class="t-ico"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="4" y1="8" x2="12" y2="8"/></svg></span>
+          <span class="t-label">sandbox</span>
+          <button class="x" aria-label="Close tab" title="Close"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg></button>
+        </div>
+        <div id="tab-split-zone" title="Tarik tab ke sini untuk split terminal (drag manual mouse)">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><line x1="8" y1="2.5" x2="8" y2="13.5"/></svg>
+          split
+        </div>
+      </div>
+
+      <div id="panels">
+        <div class="panel">
+          <div class="term-split">
+            <div class="term-side focused">
+              <div class="term-host"><div>
+<span class="dim">Last login: Mon Oct 19 09:14:02 2026 from 10.0.0.4</span>
+<span class="prompt">mekl@prod-web</span>:<span class="tok-prop">~</span>$ tail -f /var/log/nginx/access.log
+<span class="dim">203.0.113.44 - - [19/Oct/2026:09:31:02] "GET / HTTP/2.0" 200</span>
+<span class="dim">198.51.100.7  - - [19/Oct/2026:09:31:04] "GET /health HTTP/2.0" 200</span>
+<span class="prompt">mekl@prod-web</span>:<span class="tok-prop">~</span>$ <span style="border-left:7px solid var(--accent2); margin-left:-2px;">&nbsp;</span>
+</div></div>
+            </div>
+            <div class="term-divider" title="Tarik untuk resize · double-click reset 50/50"></div>
+            <div class="term-side">
+              <div class="term-host"><div>
+<span class="prompt">root@prod-web</span>:<span class="tok-prop">/var/www</span>$ htop
+<span class="dim">  1  [|||||||||||||||||      62.4%]   Tasks:  132</span>
+<span class="dim">  2  [|||||                  21.0%]   Load:  0.42 0.38 0.31</span>
+<span class="dim">  Mem[||||||||||||    3.12G/7.76G]   Uptime: 41 days</span>
+<span class="dim">  Swp[                  0B/2.00G]</span>
+</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="status-bar">
+        <span class="mono">mekl@prod-web</span>
+        <span>auth: key</span>
+        <span><b class="sb-live">●</b> 3 sesi · 5 tab</span>
+        <span class="sb-right">
+          <span class="mono">⇅ idle</span>
+          <span class="mono">v0.9.0</span>
+        </span>
+      </div>
+    </main>
+  </div>
+</div>
+
+<h1>Frame 2 — SFTP view aktif: sumber → target eksplisit</h1>
+<div class="mock-note">
+  <b>Transfer 3 jalur, semuanya tanpa HTML5 DnD (invariant STATE #4):</b>
+  (1) drag manual mouse antar pane — drop-target dashed menyala;
+  (2) klik-klik ala VSCode — klik sumber (chip <span style="color:var(--warn)">▲ sumber</span>) → klik file tujuan;
+  (3) tombol <b>Upload ▸</b> / <b>◂ Download</b> di pane head target.
+  Keyboard: <span class="kbd">Space</span> pilih · <span class="kbd">Ctrl Enter</span> transfer.
+  Progress per-file di strip transfer (bukan satu status line).
+</div>
+
+<div class="frame">
+  <div id="app">
+    <aside id="sidebar">
+      <div class="sidebar-head">
+        <span class="brand">hosterm</span>
+        <span class="head-acts">
+          <button class="icon" aria-label="Add host" title="Add host">
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="10" y1="2" x2="10" y2="6"/><line x1="8" y1="4" x2="12" y2="4"/></svg>
+          </button>
+          <button class="icon" aria-label="Collapse sidebar" title="Collapse sidebar (Ctrl+B)">
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6,3 11,8 6,13"/></svg>
+          </button>
+        </span>
+      </div>
+      <div class="search-row">
+        <input id="host-search" type="search" placeholder="Search hosts…" aria-label="Search hosts" />
+        <span class="kbd">Ctrl K</span>
+      </div>
+      <div id="host-list">
+        <div class="group-label">Prod</div>
+        <div class="host-row live" role="button" tabindex="0" title="mekl@203.0.113.10:22 · 3 tab">
+          <span class="dot"></span>
+          <span class="h-name">prod-web</span>
+          <button class="h-sftp" aria-label="Open SFTP for prod-web" title="Open SFTP"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="3" x2="5" y2="13"/><polyline points="3,5 5,3 7,5"/><line x1="11" y1="13" x2="11" y2="3"/><polyline points="9,11 11,13 13,11"/></svg></button>
+          <button class="h-menu" aria-label="Host menu prod-web" title="Edit · Duplicate · Delete">⋯</button>
+        </div>
+        <div class="host-row" role="button" tabindex="0" title="deploy@prod-cache:22">
+          <span class="dot"></span>
+          <span class="h-name">prod-cache</span>
+          <span class="h-pw" title="Password auth — stored (sidecar, 0600)" aria-label="Password auth"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="4" y="7" width="8" height="6" rx="1.5"/><path d="M6 7V5.5a2 2 0 0 1 4 0V7"/></svg></span>
+          <button class="h-sftp" aria-label="Open SFTP for prod-cache" title="Open SFTP"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="3" x2="5" y2="13"/><polyline points="3,5 5,3 7,5"/><line x1="11" y1="13" x2="11" y2="3"/><polyline points="9,11 11,13 13,11"/></svg></button>
+          <button class="h-menu" aria-label="Host menu prod-cache" title="Edit · Duplicate · Delete">⋯</button>
+        </div>
+      </div>
+      <div class="sidebar-foot">
+        <button id="btn-raw">Raw config</button>
+        <button id="btn-reload" class="icon" aria-label="Reload config" title="Reload config">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8a5 5 0 1 1-1.7-3.75"/><polyline points="13,1.5 13,4.5 10,4.5"/></svg>
+        </button>
+      </div>
+    </aside>
+
+    <main id="main">
+      <div id="tabs" role="tablist">
+        <div class="tab" role="tab" aria-selected="false">
+          <span class="t-ico"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><polyline points="4,6 6,8 4,10"/><line x1="8" y1="10" x2="11" y2="10"/></svg></span>
+          <span class="t-label">prod-web</span>
+          <button class="x" aria-label="Close tab" title="Close"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg></button>
+        </div>
+        <div class="tab kind-sftp active" role="tab" aria-selected="true" title="SFTP prod-web">
+          <span class="t-ico"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="3" x2="5" y2="13"/><polyline points="3,5 5,3 7,5"/><line x1="11" y1="13" x2="11" y2="3"/><polyline points="9,11 11,13 13,11"/></svg></span>
+          <span class="t-label">prod-web</span>
+          <button class="x" aria-label="Close tab" title="Close"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg></button>
+        </div>
+        <div id="tab-split-zone" title="Tarik tab ke sini untuk split terminal (drag manual mouse)">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><line x1="8" y1="2.5" x2="8" y2="13.5"/></svg>
+          split
+        </div>
+      </div>
+
+      <div id="panels">
+        <div class="sftp-wrap">
+          <div class="sftp-panes">
+            <div class="sftp-pane">
+              <div class="pane-head">
+                <span>This PC — local</span>
+                <span class="chip src">▲ sumber: build.tar.gz</span>
+                <span class="ph-acts"><button class="primary" title="Upload selection (Ctrl+Enter)">Upload ▸</button></span>
+              </div>
+              <div class="sftp-toolbar">
+                <button class="icon" aria-label="Parent local directory" title="Parent directory"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="13" x2="8" y2="4"/><polyline points="4.5,7.5 8,4 11.5,7.5"/></svg></button>
+                <input value="C:\Users\mekl\deploy" readonly />
+                <button class="icon" aria-label="Reload local directory" title="Reload directory"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8a5 5 0 1 1-1.7-3.75"/><polyline points="13,1.5 13,4.5 10,4.5"/></svg></button>
+              </div>
+              <div class="sftp-list">
+                <div class="sftp-row" role="button" tabindex="0">
+                  <span class="f-ico dir"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M1.5,4 h4 l1.5,2 h7.5 v7 h-13 z"/></svg></span>
+                  <span class="nm">releases</span><span class="sz"></span>
+                </div>
+                <div class="sftp-row sel" role="button" tabindex="0" aria-selected="true" title="Dipilih sebagai sumber upload — Space = pilih, klik pane tujuan / Upload">
+                  <span class="f-ico"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M3.5,1.5 h6 l3,3 v10 h-9 z"/><polyline points="9.5,1.5 9.5,4.5 12.5,4.5"/></svg></span>
+                  <span class="nm">build.tar.gz</span><span class="sz">12.4 MB</span>
+                </div>
+                <div class="sftp-row" role="button" tabindex="0">
+                  <span class="f-ico"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M3.5,1.5 h6 l3,3 v10 h-9 z"/><polyline points="9.5,1.5 9.5,4.5 12.5,4.5"/></svg></span>
+                  <span class="nm">notes.md</span><span class="sz">2.1 KB</span>
+                </div>
+                <div class="sftp-row" role="button" tabindex="0">
+                  <span class="f-ico"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M3.5,1.5 h6 l3,3 v10 h-9 z"/><polyline points="9.5,1.5 9.5,4.5 12.5,4.5"/></svg></span>
+                  <span class="nm">deploy.ps1</span><span class="sz">890 B</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="sftp-pane drop-target" title="Drop-target: lepas file di sini untuk upload — atau klik-klik sumber lalu file di sini">
+              <div class="pane-head">
+                <span>prod-web — remote</span>
+                <span class="chip dst">▼ target: drop di sini / klik file lalu Upload ▸</span>
+                <span class="ph-acts"><button title="Download selection (Ctrl+Enter)">◂ Download</button></span>
+              </div>
+              <div class="sftp-toolbar">
+                <button class="icon" aria-label="Parent directory" title="Parent directory"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="13" x2="8" y2="4"/><polyline points="4.5,7.5 8,4 11.5,7.5"/></svg></button>
+                <input value="/var/www" readonly />
+                <button class="icon" aria-label="Reload directory" title="Reload directory"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8a5 5 0 1 1-1.7-3.75"/><polyline points="13,1.5 13,4.5 10,4.5"/></svg></button>
+              </div>
+              <div class="sftp-list">
+                <div class="sftp-row" role="button" tabindex="0">
+                  <span class="f-ico dir"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M1.5,4 h4 l1.5,2 h7.5 v7 h-13 z"/></svg></span>
+                  <span class="nm">releases</span><span class="sz"></span>
+                </div>
+                <div class="sftp-row drop-hint" role="button" tabindex="0" title="Lepas / klik di sini = upload ke /var/www">
+                  <span class="f-ico dir"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M1.5,4 h4 l1.5,2 h7.5 v7 h-13 z"/></svg></span>
+                  <span class="nm">current</span><span class="sz"></span>
+                </div>
+                <div class="sftp-row" role="button" tabindex="0">
+                  <span class="f-ico"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M3.5,1.5 h6 l3,3 v10 h-9 z"/><polyline points="9.5,1.5 9.5,4.5 12.5,4.5"/></svg></span>
+                  <span class="nm">nginx.conf</span><span class="sz">3.8 KB</span>
+                </div>
+                <div class="sftp-row" role="button" tabindex="0">
+                  <span class="f-ico"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M3.5,1.5 h6 l3,3 v10 h-9 z"/><polyline points="9.5,1.5 9.5,4.5 12.5,4.5"/></svg></span>
+                  <span class="nm">.env</span><span class="sz">412 B</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="xfer-strip">
+            <div class="xfer-line run">
+              <span class="spinner" aria-hidden="true"></span>
+              <span class="x-name">build.tar.gz</span>
+              <span class="x-path">→ prod-web:/var/www/build.tar.gz</span>
+              <span class="x-state">berjalan · 12.4 MB</span>
+            </div>
+            <div class="xfer-line ok">
+              <span aria-hidden="true">✓</span>
+              <span class="x-name">notes.md</span>
+              <span class="x-path">← prod-web:/var/www/notes.md</span>
+              <span class="x-state">ok</span>
+            </div>
+          </div>
+          <div class="drag-hint">
+            Pilih file (<span class="kbd">Space</span>) → klik pane tujuan / drag manual mouse · transfer (<span class="kbd">Ctrl Enter</span>) · HTML5 DnD tidak dipakai (WebView2)
+          </div>
+        </div>
+      </div>
+
+      <div id="status-bar">
+        <span class="mono">mekl@prod-web</span>
+        <span>auth: key</span>
+        <span><b class="sb-live">●</b> 1 sesi · 2 tab</span>
+        <span class="sb-right">
+          <span class="mono"><span class="spinner" aria-hidden="true"></span> ⇅ 1 transfer</span>
+          <span class="mono">v0.9.0</span>
+        </span>
+      </div>
+    </main>
+  </div>
+</div>
+
+</body>
+</html>

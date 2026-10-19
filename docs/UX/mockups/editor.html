@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<title>hosterm redesign — editor view</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<h1>Editor view — remote file, dirty state terlihat di ed-bar</h1>
+<div class="mock-note">
+  <b>Perubahan dari tampilan sekarang:</b> indikator <span style="color:var(--warn)">● unsaved</span> di ed-bar
+  (bukan hanya titik kecil di tab); Ctrl+S terpasang di level panel (fokus di mana pun di panel tetap save);
+  well editor <span style="font-family:var(--font-mono)">--well</span> lebih dalam dari chrome (motif arus);
+  ed-status kiri = lines/host:path, kanan = posisi kursor + Ctrl+G go-to-line (v1.1).
+</div>
+
+<div class="frame">
+  <div id="app">
+    <aside id="sidebar">
+      <div class="sidebar-head">
+        <span class="brand">hosterm</span>
+        <span class="head-acts">
+          <button class="icon" aria-label="Add host" title="Add host">
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="10" y1="2" x2="10" y2="6"/><line x1="8" y1="4" x2="12" y2="4"/></svg>
+          </button>
+          <button class="icon" aria-label="Collapse sidebar" title="Collapse sidebar (Ctrl+B)">
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6,3 11,8 6,13"/></svg>
+          </button>
+        </span>
+      </div>
+      <div class="search-row">
+        <input id="host-search" type="search" placeholder="Search hosts…" aria-label="Search hosts" />
+        <span class="kbd">Ctrl K</span>
+      </div>
+      <div id="host-list">
+        <div class="group-label">Prod</div>
+        <div class="host-row live" role="button" tabindex="0" title="mekl@203.0.113.10:22 · 3 tab">
+          <span class="dot"></span>
+          <span class="h-name">prod-web</span>
+          <button class="h-sftp" aria-label="Open SFTP for prod-web" title="Open SFTP"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="3" x2="5" y2="13"/><polyline points="3,5 5,3 7,5"/><line x1="11" y1="13" x2="11" y2="3"/><polyline points="9,11 11,13 13,11"/></svg></button>
+          <button class="h-menu" aria-label="Host menu prod-web" title="Edit · Duplicate · Delete">⋯</button>
+        </div>
+        <div class="host-row" role="button" tabindex="0" title="deploy@prod-cache:22">
+          <span class="dot"></span>
+          <span class="h-name">prod-cache</span>
+          <span class="h-pw" title="Password auth — stored (sidecar, 0600)" aria-label="Password auth"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="4" y="7" width="8" height="6" rx="1.5"/><path d="M6 7V5.5a2 2 0 0 1 4 0V7"/></svg></span>
+          <button class="h-sftp" aria-label="Open SFTP for prod-cache" title="Open SFTP"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="3" x2="5" y2="13"/><polyline points="3,5 5,3 7,5"/><line x1="11" y1="13" x2="11" y2="3"/><polyline points="9,11 11,13 13,11"/></svg></button>
+          <button class="h-menu" aria-label="Host menu prod-cache" title="Edit · Duplicate · Delete">⋯</button>
+        </div>
+      </div>
+      <div class="sidebar-foot">
+        <button id="btn-raw">Raw config</button>
+        <button id="btn-reload" class="icon" aria-label="Reload config" title="Reload config">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8a5 5 0 1 1-1.7-3.75"/><polyline points="13,1.5 13,4.5 10,4.5"/></svg>
+        </button>
+      </div>
+    </aside>
+
+    <main id="main">
+      <div id="tabs" role="tablist">
+        <div class="tab" role="tab" aria-selected="false">
+          <span class="t-ico"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><polyline points="4,6 6,8 4,10"/><line x1="8" y1="10" x2="11" y2="10"/></svg></span>
+          <span class="t-label">prod-web</span>
+          <button class="x" aria-label="Close tab" title="Close"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg></button>
+        </div>
+        <div class="tab active" role="tab" aria-selected="true" title="Editor nginx.conf — unsaved">
+          <span class="t-ico"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="13" x2="12" y2="4"/><line x1="10.5" y1="5.5" x2="12" y2="7"/></svg></span>
+          <span class="t-label">nginx.conf</span>
+          <span class="t-dot" title="Unsaved changes" aria-label="Unsaved changes"></span>
+          <button class="x" aria-label="Close tab" title="Close"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg></button>
+        </div>
+        <div id="tab-split-zone" title="Tarik tab ke sini untuk split terminal (drag manual mouse)">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><line x1="8" y1="2.5" x2="8" y2="13.5"/></svg>
+          split
+        </div>
+      </div>
+
+      <div id="panels">
+        <div class="ed-wrap">
+          <div class="ed-bar">
+            <span class="ed-path" title="prod-web:/etc/nginx/nginx.conf">prod-web:/etc/nginx/nginx.conf</span>
+            <span class="ed-dirty" title="Ada perubahan yang belum disimpan">● unsaved</span>
+            <button title="Buang perubahan, muat ulang dari server">Reload</button>
+            <button class="primary" title="Save (Ctrl+S)">Save</button>
+          </div>
+          <div class="ed-editor">
+            <div class="ed-gutter" aria-hidden="true">
+              <div>1</div><div>2</div><div>3</div><div>4</div><div class="active-line">5</div><div>6</div><div>7</div><div>8</div><div>9</div><div>10</div><div>11</div><div>12</div><div>13</div><div>14</div>
+            </div>
+            <div class="ed-content" aria-label="Isi file nginx.conf (ilustrasi)"><div><span class="tok-com"># nginx.conf — prod-web</span></div><div><span class="tok-kw">user</span> <span class="tok-var">www-data</span>;</div><div><span class="tok-kw">worker_processes</span> <span class="tok-num">auto</span>;</div><div></div><div class="cm-active"><span class="tok-kw">events</span> {</div><div>    <span class="tok-prop">worker_connections</span> <span class="tok-num">1024</span>;</div><div>}</div><div></div><div><span class="tok-kw">http</span> {</div><div>    <span class="tok-prop">include</span>       <span class="tok-str">/etc/nginx/mime.types</span>;</div><div>    <span class="tok-prop">default_type</span>  <span class="tok-str">application/octet-stream</span>;</div><div></div><div>    <span class="tok-prop">gzip</span> <span class="tok-num">on</span>;</div><div>    <span class="tok-com"># keepalive 64;  ← fix typo here</span></div><div>}</div></div>
+          </div>
+          <div class="ed-status">
+            <span>14 lines · prod-web:/etc/nginx/nginx.conf</span>
+            <span style="margin-left:auto">Ln 5, Col 1 · <span class="kbd">Ctrl G</span> go-to-line · LF · UTF-8</span>
+          </div>
+        </div>
+      </div>
+
+      <div id="status-bar">
+        <span class="mono">mekl@prod-web</span>
+        <span>auth: key</span>
+        <span><b class="sb-live">●</b> 1 sesi · 2 tab</span>
+        <span class="sb-right">
+          <span class="mono" style="color:var(--warn)">● 1 unsaved editor</span>
+          <span class="mono">v0.9.0</span>
+        </span>
+      </div>
+    </main>
+  </div>
+</div>
+
+</body>
+</html>
