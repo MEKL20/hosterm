@@ -183,7 +183,9 @@ Roadmap rule: nothing enters "Next" without a feature spec like wave 1's; nothin
 - Mobile/web clients.
 - Rewriting config semantics — hosterm is a faithful editor/spawner for OpenSSH config, not a superset of it.
 
-### 6.2 OPEN QUESTIONS (for MEKL — each with PM recommendation; old habit: recommendation always attached)
+### 6.2 OPEN QUESTIONS — RESOLVED (MEKL via nano, 19 Okt)
+
+Keputusan: Q1 fix README (sidecar 0600 opt-in = kanonik); Q2 tambah cek startup + panduan install OpenSSH; Q3 opt-in per host; Q4 gas — spec wave 2 (sign → auto-update, urutan fix) setelah v0.9.0; Q5 NFR-6 diukur on first complaint; Q6 mtime-check-on-focus di wave 2; Q7 limit editor tetap 2 MB. Tabel asli (arsip):
 
 | # | Question | Recommendation |
 |---|---|---|

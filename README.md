@@ -27,7 +27,7 @@ command line would honor it (ProxyJump, IdentityFile, forwarding, Match blocks, 
 - Add / edit / delete hosts via a form — writes straight back to `~/.ssh/config`,
   **preserving comments, ordering, and unknown directives** (round-trip safe)
 - Choose auth per host: **key** (pick an `IdentityFile` from a dropdown) or
-  **password** (ssh prompts you on connect — no secret is ever stored)
+  **password** (ssh prompts you on connect — with your opt-in, the password is stored once in a 0600 sidecar file next to your config and auto-typed on connect; nothing leaves your machine)
 - **Create an identity key by pasting the private key text** — hosterm writes it
   to `~/.ssh/<name>` at `0600`, then it appears in the key dropdown (Termius-style)
 - "Raw config" editor to hand-edit the file directly inside the app
