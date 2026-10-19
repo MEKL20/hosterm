@@ -211,10 +211,14 @@ body.sb-collapsed #sidebar > :not(#btn-expand) { display: none; }
 }
 .tab:hover { background: var(--panel); }
 .tab.active { color: var(--fg); background: var(--bg); border-bottom-color: var(--accent); }
-.t-ico { display: inline-flex; flex: 0 0 auto; }
+/* kind color (redesign §4.2): terminal muted→fg saat aktif, SFTP --accent2, dead --danger */
+.tab.kind-sftp .t-ico { color: var(--accent2); }
+.tab.active.kind-terminal:not(.dead) .t-ico { color: var(--fg); }
+.tab.dead .t-ico { color: var(--danger); }
+.t-ico { display: inline-flex; flex: 0 0 auto; color: var(--muted); }
 .t-label { overflow: hidden; text-overflow: ellipsis; }
 .t-dot {
-  width: 6px; height: 6px; border-radius: 50%;
+  width: 8px; height: 8px; border-radius: 50%;
   background: var(--warn);
   flex: 0 0 auto;
   display: none;
@@ -238,6 +242,21 @@ body.sb-collapsed #sidebar > :not(#btn-expand) { display: none; }
 .panel.split .term-host { width: 50%; height: 100%; float: left; }
 .tab.drop-target { outline: 2px dashed var(--accent); outline-offset: -2px; }
 .tab.dragging { opacity: 0.5; }
+/* split drop-zone: statik di ujung kanan tab bar, menyala saat tab didrag (§4.2) */
+#tab-split-zone {
+  order: 999; /* tetap terakhir meski tab di-append setelahnya */
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  background: var(--bg2);
+  flex: 1;
+  min-width: 56px;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  color: var(--border-soft);
+  border-left: 1px dashed var(--border-soft);
+  font-size: 11px;
+}
+#tab-split-zone.drag-hot { color: var(--accent); border-left-color: var(--accent); }
 #tab-menu, #host-menu {
   position: fixed; z-index: 1000;
   min-width: 140px; padding: 4px;

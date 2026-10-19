@@ -93,9 +93,27 @@ const errors = [];
 page.on("pageerror", (e) => errors.push(String(e)));
 page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
 await page.addInitScript(() => {
+  window.__cbMap = {};
+  window.__events = {};
+  window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
+  // emit mock Tauri events from tests, e.g. __emitTauri("pty://exit/4242")
+  window.__emitTauri = (event, payload) =>
+    (window.__events[event] || []).forEach((cb) => cb({ event, id: 0, payload }));
   window.__TAURI_INTERNALS__ = {
-    transformCallback: (cb) => cb,
-    invoke: (cmd, args) => globalThis.__invokeImpl(cmd, args),
+    transformCallback: (cb) => {
+      const id = (window.__cbN = (window.__cbN || 0) + 1);
+      window.__cbMap[id] = cb;
+      return id;
+    },
+    invoke: (cmd, args) => {
+      // event listen/unlisten handled in-page so tests can emit via __emitTauri
+      if (cmd === "plugin:event|listen") {
+        (window.__events[args.event] = window.__events[args.event] || []).push(window.__cbMap[args.handler]);
+        return Promise.resolve(1);
+      }
+      if (cmd === "plugin:event|unlisten") return Promise.resolve("");
+      return globalThis.__invokeImpl(cmd, args);
+    },
   };
 });
 // CSP-violation collector (AC R1.4): securitypolicyviolation events for the whole run
@@ -143,9 +161,27 @@ const winPage = await browser.newPage({ userAgent: "Mozilla/5.0 (Windows NT 10.0
 winPage.on("pageerror", (e) => errors.push(String(e)));
 winPage.on("console", (m) => m.type() === "error" && errors.push(m.text()));
 await winPage.addInitScript(() => {
+  window.__cbMap = {};
+  window.__events = {};
+  window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
+  // emit mock Tauri events from tests, e.g. __emitTauri("pty://exit/4242")
+  window.__emitTauri = (event, payload) =>
+    (window.__events[event] || []).forEach((cb) => cb({ event, id: 0, payload }));
   window.__TAURI_INTERNALS__ = {
-    transformCallback: (cb) => cb,
-    invoke: (cmd, args) => globalThis.__invokeImpl(cmd, args),
+    transformCallback: (cb) => {
+      const id = (window.__cbN = (window.__cbN || 0) + 1);
+      window.__cbMap[id] = cb;
+      return id;
+    },
+    invoke: (cmd, args) => {
+      // event listen/unlisten handled in-page so tests can emit via __emitTauri
+      if (cmd === "plugin:event|listen") {
+        (window.__events[args.event] = window.__events[args.event] || []).push(window.__cbMap[args.handler]);
+        return Promise.resolve(1);
+      }
+      if (cmd === "plugin:event|unlisten") return Promise.resolve("");
+      return globalThis.__invokeImpl(cmd, args);
+    },
   };
 });
 await winPage.addInitScript(() => {
@@ -258,6 +294,10 @@ await page.keyboard.type("X");
 await page.waitForTimeout(200);
 const dirty = await page.locator(".tab .t-dot").count();
 check("dirty dot appears on edit", dirty === 1, `dots=${dirty}`);
+check("dirty dot is 8px --warn (U3)", await page.locator(".tab .t-dot").first().evaluate((el) => {
+  const s = getComputedStyle(el);
+  return s.width === "8px" && s.backgroundColor === "rgb(255, 221, 128)";
+}));
 
 // 6. closing dirty tab opens in-app dialog with 3 choices (not native confirm)
 let dialogInfo = null;
@@ -450,7 +490,7 @@ check("paste normalize: CRLF collapses to LF", norm === "test baris 1\ntest bari
 await page.locator(".tab").first().click({ button: "right" });
 await page.waitForTimeout(200);
 check("right-click tab opens in-app menu", (await page.locator("#tab-menu").count()) === 1);
-check("menu has close items", (await page.locator("#tab-menu button").count()) === 3);
+check("menu has close items (U3 adds Close host: 4)", (await page.locator("#tab-menu button").count()) === 4);
 const ctxBlocked = await page.evaluate(() => {
   let blocked = false;
   const t = document.querySelector(".tab");
@@ -613,6 +653,113 @@ const noShadow = await page.evaluate(() => {
   return { tab: sh(tab), btn: sh(btn) };
 });
 check("no glow on inactive tab / plain button", noShadow.tab === "none" && noShadow.btn === "none", `${noShadow.tab} / ${noShadow.btn}`);
+
+// ---- U3 tab bar Arus (EPIC-TSD §U3): kind color, dead+reconnect, scroll, menu, Ctrl+W, drop-zone ----
+// start clean: close leftover tabs (discard unsaved editor if prompted)
+for (let i = 0; i < 10 && (await page.locator(".tab").count()) > 0; i++) {
+  if (await page.locator("#dialog").isVisible().catch(() => false)) {
+    await page.locator("#dialog button").filter({ hasText: "Discard" }).first().click().catch(() => {});
+    await page.waitForTimeout(250);
+    continue;
+  }
+  await page.locator(".tab .x").first().click();
+  await page.waitForTimeout(300);
+}
+// AC1 kind colors: SFTP icon --accent2; active terminal icon --fg
+await page.locator(".host-item .h-sftp").first().click();
+await page.waitForTimeout(600);
+const sftpIco = await page.locator(".tab.kind-sftp .t-ico").evaluate((el) => getComputedStyle(el).color);
+check("U3: SFTP tab icon is --accent2", sftpIco === "rgb(129, 140, 248)", sftpIco);
+await page.locator(".host-item", { hasText: "prod-web" }).first().locator(".h-name").click();
+await page.waitForTimeout(400);
+const termIco = await page.locator(".tab.active .t-ico").evaluate((el) => getComputedStyle(el).color);
+check("U3: active terminal icon is --fg", termIco === "rgb(242, 242, 242)", termIco);
+// AC3 dead tab: mock PTY exit -> ✕ --danger + exact title; click respawns
+const spawnsU3 = calls.filter((c) => c.cmd === "pty_spawn").length;
+await page.evaluate(() => window.__emitTauri("pty://exit/4242"));
+await page.waitForTimeout(300);
+check("U3: PTY exit marks terminal tab dead", (await page.locator(".tab.dead").count()) === 1);
+const deadTab = page.locator(".tab.dead");
+check("U3: dead tab title exact", (await deadTab.getAttribute("title")) === "Session ended — click to reconnect");
+check("U3: dead icon is --danger", (await deadTab.locator(".t-ico").evaluate((el) => getComputedStyle(el).color)) === "rgb(253, 156, 159)");
+await deadTab.locator(".t-label").click();
+await page.waitForTimeout(400);
+check("U3: clicking dead tab respawns PTY", calls.filter((c) => c.cmd === "pty_spawn").length === spawnsU3 + 1);
+check("U3: reconnect clears dead state", (await page.locator(".tab.dead").count()) === 0);
+// AC2 auto-scroll: 12 tabs overflow the bar; scrollIntoView brings targets into view
+await page.setViewportSize({ width: 800, height: 600 });
+for (let i = 0; i < 10; i++) {
+  await page.locator(".host-item", { hasText: "prod-web" }).first().locator(".h-name").click();
+  await page.waitForTimeout(120);
+}
+check("U3: 12 tabs open", (await page.locator(".tab").count()) === 12, `tabs=${await page.locator(".tab").count()}`);
+await page.locator(".tab").last().click();
+await page.waitForTimeout(300);
+const scLast = await page.locator("#tabs").evaluate((el) => el.scrollLeft);
+check("U3: activating last tab scrolls bar (scrollIntoView)", scLast > 0, `scrollLeft=${scLast}`);
+await page.locator(".tab").first().click();
+await page.waitForTimeout(300);
+const scFirst = await page.locator("#tabs").evaluate((el) => el.scrollLeft);
+check("U3: activating first tab scrolls back", scFirst < scLast, `first=${scFirst} last=${scLast}`);
+await page.setViewportSize({ width: 1280, height: 720 });
+// AC4 context menu: Close others + Close host (+ shortcut tooltips)
+await page.locator(".host-item", { hasText: "db-core" }).first().locator(".h-name").click();
+await page.waitForTimeout(300);
+await page.locator(".tab").first().click({ button: "right" });
+await page.waitForTimeout(200);
+const menuLabels = await page.locator("#tab-menu button").allTextContents();
+check("U3: menu = Close/Close others/Close host/Close all",
+  JSON.stringify(menuLabels) === JSON.stringify(["Close", "Close others", "Close host", "Close all"]), menuLabels.join("|"));
+const menuTips = await page.evaluate(() => [...document.querySelectorAll("#tab-menu button")].map((b) => b.title));
+check("U3: menu tooltips name new shortcuts", menuTips[0] === "Ctrl+W" && menuTips[1] === "Ctrl+Shift+W", menuTips.join("|"));
+await page.locator("#tab-menu button", { hasText: "Close host" }).click();
+await page.waitForTimeout(500);
+check("U3: Close host keeps only other hosts' tabs", (await page.locator(".tab").count()) === 1 &&
+  (await page.locator(".tab .t-label").first().textContent()) === "db-core");
+// AC5 Ctrl+W / Ctrl+Shift+W; skipped while typing in a text field
+await page.evaluate(() => { const a = document.activeElement; if (a instanceof HTMLElement) a.blur(); });
+await page.keyboard.press("Control+w");
+await page.waitForTimeout(300);
+check("U3: Ctrl+W closes active tab", (await page.locator(".tab").count()) === 0);
+await page.locator(".host-item", { hasText: "prod-web" }).first().locator(".h-name").click();
+await page.waitForTimeout(300);
+await page.locator(".host-item", { hasText: "db-core" }).first().locator(".h-name").click();
+await page.waitForTimeout(300);
+await page.locator("#host-search").fill("zzz");
+await page.keyboard.press("Control+Shift+w");
+await page.waitForTimeout(300);
+check("U3: Ctrl+Shift+W no-op while typing", (await page.locator(".tab").count()) === 2);
+await page.locator("#host-search").fill("");
+await page.evaluate(() => { const a = document.activeElement; if (a instanceof HTMLElement) a.blur(); });
+await page.keyboard.press("Control+Shift+w");
+await page.waitForTimeout(400);
+check("U3: Ctrl+Shift+W closes all but active", (await page.locator(".tab").count()) === 1);
+// AC6 split stays manual-mouse; drop-zone static affordance lights --accent while dragging
+const u3src = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");
+check("U3: no draggable attribute (grep = 0)", !/draggable/i.test(u3src) &&
+  (await page.evaluate(() => document.querySelectorAll("[draggable]").length)) === 0);
+check("U3: drop-zone rests --border-soft",
+  (await page.locator("#tab-split-zone").evaluate((el) => getComputedStyle(el).color)) === "rgb(38, 36, 35)");
+await page.locator(".host-item", { hasText: "prod-web" }).first().locator(".h-name").click();
+await page.waitForTimeout(300);
+const dzBox = await page.locator(".tab", { hasText: "prod-web" }).first().boundingBox();
+await page.mouse.move(dzBox.x + dzBox.width / 2, dzBox.y + dzBox.height / 2);
+await page.mouse.down();
+await page.mouse.move(dzBox.x + dzBox.width / 2 + 12, dzBox.y + dzBox.height / 2);
+const dzHot = await page.locator("#tab-split-zone").evaluate((el) => ({ hot: el.classList.contains("drag-hot"), c: getComputedStyle(el).color }));
+check("U3: drop-zone lights --accent while dragging", dzHot.hot && dzHot.c === "rgb(0, 217, 146)", JSON.stringify(dzHot));
+await page.mouse.up();
+await page.waitForTimeout(400);
+// clean up for the final checks
+for (let i = 0; i < 6 && (await page.locator(".tab").count()) > 0; i++) {
+  if (await page.locator("#dialog").isVisible().catch(() => false)) {
+    await page.locator("#dialog button").filter({ hasText: "Discard" }).first().click().catch(() => {});
+    await page.waitForTimeout(250);
+    continue;
+  }
+  await page.locator(".tab .x").first().click();
+  await page.waitForTimeout(300);
+}
 
 check("no console/page errors", errors.length === 0, errors.slice(0, 3).join(" | "));
 

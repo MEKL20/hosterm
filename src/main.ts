@@ -721,7 +721,7 @@ async function openSftp(host: string) {
   const tabId = nextTab++;
   sftpSessions.set(tabId, { host, path: "" });
   const tab = makeTab(tabId, "sftp", host);
-  $("#tabs").appendChild(tab);
+  $("#tab-split-zone").before(tab);
 
   const panel = document.createElement("div");
   panel.className = "panel";
@@ -1074,7 +1074,7 @@ async function openRemoteEditor(host: string, path: string) {
     tab.classList.toggle("dirty", sess.dirty);
   };
 
-  $("#tabs").appendChild(tab);
+  $("#tab-split-zone").before(tab);
 
   const panel = document.createElement("div");
   panel.className = "panel";
@@ -1188,6 +1188,7 @@ window.addEventListener("mousemove", (ev) => {
     if (Math.hypot(ev.clientX - tabDrag.x, ev.clientY - tabDrag.y) < 6) return;
     tabDrag.active = true;
     document.querySelector(`.tab[data-tab="${tabDrag.srcId}"]`)?.classList.add("dragging");
+    document.getElementById("tab-split-zone")?.classList.add("drag-hot");
   }
   document.querySelectorAll(".tab.drop-target").forEach((t) => t.classList.remove("drop-target"));
   const over = tabFromPoint(ev.clientX, ev.clientY);
@@ -1202,6 +1203,7 @@ window.addEventListener("mouseup", (ev) => {
   tabDrag = null;
   if (!d) return;
   document.querySelector(`.tab[data-tab="${d.srcId}"]`)?.classList.remove("dragging");
+  document.getElementById("tab-split-zone")?.classList.remove("drag-hot");
   document.querySelectorAll(".tab.drop-target").forEach((t) => t.classList.remove("drop-target"));
   if (!d.active) return; // plain click — not a drag
   const over = tabFromPoint(ev.clientX, ev.clientY);
@@ -1213,8 +1215,9 @@ window.addEventListener("mouseup", (ev) => {
 
 function makeTab(tabId: number, kind: "terminal" | "sftp" | "editor", label: string): HTMLElement {
   const tab = document.createElement("div");
-  tab.className = "tab";
+  tab.className = `tab kind-${kind}`;
   tab.dataset.tab = String(tabId);
+  tab.dataset.kind = kind;
   tab.setAttribute("role", "tab");
   tab.tabIndex = 0;
   tab.setAttribute("aria-selected", "false");
@@ -1226,6 +1229,7 @@ function makeTab(tabId: number, kind: "terminal" | "sftp" | "editor", label: str
     `<button class="x icon" aria-label="Close tab" title="Close">${ICONS.close}</button>`;
   tab.addEventListener("click", (ev) => {
     if ((ev.target as HTMLElement).closest(".x")) closeTab(tabId);
+    else if (tab.classList.contains("dead")) reconnectTab(tabId).catch(() => {}); // fail-safe: tab tetap dead
     else activateTab(tabId);
   });
   tab.addEventListener("keydown", (ev) => {
@@ -1259,23 +1263,56 @@ function makeTab(tabId: number, kind: "terminal" | "sftp" | "editor", label: str
   return tab;
 }
 
-// In-app tab context menu: Close / Close others / Close all.
+// U3 §4.2: dead terminal tab = ✕ icon --danger; clicking it respawns the PTY.
+const DEAD_TITLE = "Session ended — click to reconnect";
+function kindIcon(kind: string): string {
+  return kind === "sftp" ? ICONS.arrows : kind === "editor" ? ICONS.pencil : ICONS.terminal;
+}
+function markTabDead(tabId: number, dead: boolean) {
+  const tab = document.querySelector<HTMLElement>(`.tab[data-tab="${tabId}"]`);
+  if (!tab) return;
+  tab.classList.toggle("dead", dead);
+  const ico = tab.querySelector(".t-ico");
+  if (ico) ico.innerHTML = dead ? ICONS.close : kindIcon(tab.dataset.kind || "terminal");
+  if (dead) tab.title = DEAD_TITLE;
+  else tab.removeAttribute("title");
+}
+async function reconnectTab(tabId: number) {
+  activateTab(tabId);
+  const s = sessions.get(tabId);
+  if (!s || s.ptyId != null) return;
+  await startPty(s);
+  markTabDead(tabId, false);
+}
+// host a tab belongs to — Close host / Ctrl+Shift+W group by it
+function tabHost(id: number): string | null {
+  return sessions.get(id)?.host ?? splitSessions.get(id)?.host
+    ?? sftpSessions.get(id)?.host ?? editorSessions.get(id)?.host ?? null;
+}
+
+// In-app tab context menu: Close / Close others / Close host / Close all.
 function showTabMenu(ev: MouseEvent, tabId: number) {
   document.getElementById("tab-menu")?.remove();
   const menu = document.createElement("div");
   menu.id = "tab-menu";
   menu.setAttribute("role", "menu");
-  const items: Array<[string, () => void]> = [
-    ["Close", () => void closeTab(tabId)],
-    ["Close others", () => {
+  const closeHost = () => {
+    const h = tabHost(tabId);
+    if (h) for (const id of openTabIds()) if (tabHost(id) === h) void closeTab(id);
+  };
+  const items: Array<[string, string | null, () => void]> = [
+    ["Close", "Ctrl+W", () => void closeTab(tabId)],
+    ["Close others", "Ctrl+Shift+W", () => {
       for (const id of openTabIds()) if (id !== tabId) void closeTab(id);
     }],
-    ["Close all", () => { for (const id of openTabIds()) void closeTab(id); }],
+    ["Close host", null, closeHost],
+    ["Close all", null, () => { for (const id of openTabIds()) void closeTab(id); }],
   ];
-  for (const [label, fn] of items) {
+  for (const [label, tip, fn] of items) {
     const b = document.createElement("button");
     b.setAttribute("role", "menuitem");
     b.textContent = label;
+    if (tip) b.title = tip;
     b.addEventListener("click", () => { menu.remove(); fn(); });
     menu.appendChild(b);
   }
@@ -1394,7 +1431,7 @@ async function openTerminal(host: string) {
   term.loadAddon(fit);
 
   const tab = makeTab(tabId, "terminal", host);
-  $("#tabs").appendChild(tab);
+  $("#tab-split-zone").before(tab);
 
   // panel
   const panel = document.createElement("div");
@@ -1460,6 +1497,7 @@ async function startPty(session: Session) {
     const u2 = await listen(`pty://exit/${ptyId}`, () => {
       session.term.write("\\r\\n\\x1b[90m[session ended]\\x1b[0m\\r\\n");
       session.ptyId = null;
+      if (sessions.get(session.id) === session) markTabDead(session.id, true); // split sides share the tab
       refreshHostDots();
     });
     session.unlisten.push(u1, u2);
@@ -1608,6 +1646,18 @@ window.addEventListener("DOMContentLoaded", () => {
       s.focus();
       s.select();
     }
+  });
+  // Ctrl+W closes the active tab; Ctrl+Shift+W closes the others (§5, FR-G3).
+  // Ignored while focus sits in a text field so typing is never interrupted.
+  window.addEventListener("keydown", (ev) => {
+    if (!(ev.ctrlKey || ev.metaKey) || ev.key.toLowerCase() !== "w") return;
+    if (activeTab == null || overlayStack.length > 0) return;
+    const a = document.activeElement as HTMLElement | null;
+    if (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.tagName === "SELECT" || a.isContentEditable)) return;
+    ev.preventDefault();
+    if (ev.shiftKey) {
+      for (const id of openTabIds()) if (id !== activeTab) void closeTab(id);
+    } else void closeTab(activeTab);
   });
   // ↑/↓ host navigation (§5): ArrowDown from search enters the list
   ($("#host-search") as HTMLInputElement).addEventListener("keydown", (ev) => {
