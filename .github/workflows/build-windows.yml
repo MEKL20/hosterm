@@ -173,6 +173,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: hosterm-windows
+          if-no-files-found: error
           path: |
             src-tauri/target/release/bundle/msi/*.msi
             src-tauri/target/release/bundle/nsis/*.exe
@@ -195,6 +196,13 @@ jobs:
       - name: Attach to release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
+          # v0.9.0 repair: upload-artifact v4 nests paths under their LCA
+          # (msi/, nsis/), so after download-artifact the files are NOT at
+          # repo root. Match both layouts; fail loudly instead of shipping
+          # an asset-less release (what happened to v0.9.0 on first tag).
+          fail_on_unmatched_files: true
           files: |
             *.msi
             *.exe
+            msi/*.msi
+            nsis/*.exe
