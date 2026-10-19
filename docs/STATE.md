@@ -27,6 +27,7 @@ Desktop SSH/SFTP client, Tauri v2 + TypeScript, Windows-first (WebView2) but dev
 
 ## Release (orchestrator does this, not children)
 Commit → bump version (package.json, tauri.conf.json, Cargo.toml + `cargo update -p hosterm --offline`) → commit → tag → push tag → poll Actions API → report release URL.
+Release-scope note: tag v0.9.0 = 7a8bd8c (glob fix, assets attached); SEC-6 withGlobalTauri=false landed post-tag (5339962) → rides the NEXT release.
 
 ## Risks & waivers
 | Risiko/waiver | Status | Basis | Cadangan |
