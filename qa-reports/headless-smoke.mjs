@@ -51,6 +51,10 @@ const calls = [];
 let delayRead = 0;
 // Fail the first sftp_list for pw-host to prove the stale-session retry path.
 let sftpFailFirst = false;
+// U5: force sftp_upload/sftp_download to reject (retry-row path) + delay a
+// listing so the skeleton loading state is observable.
+let xferFail = false;
+let delayList = 0;
 // W2-A startup ssh/sftp check state (AC-A1.5); read by the check_binaries case
 let binCheckState = { ssh_missing: false, sftp_missing: false };
 const invoke = (cmd, args = {}) => {
@@ -65,7 +69,14 @@ const invoke = (cmd, args = {}) => {
     case "list_identity_files": return Promise.resolve(["~/.ssh/id_test"]);
     case "sftp_list": {
       if (sftpFailFirst && args.host === "pw-host") { sftpFailFirst = false; return Promise.reject("sftp session unreachable"); }
-      return Promise.resolve(sampleSftp);
+      return delayList > 0
+        ? new Promise((r) => setTimeout(() => r(sampleSftp), delayList))
+        : Promise.resolve(sampleSftp);
+    }
+    case "sftp_upload": case "sftp_download": {
+      if (xferFail) return Promise.reject("permission denied (mock)");
+      // 150ms so tests can observe the .xf-row.run (spinner) state
+      return new Promise((r) => setTimeout(r, 150));
     }
     case "local_list": return Promise.resolve([{ name: "notes.txt", is_dir: false, size: 5 }, { name: "sub", is_dir: true, size: 0 }]);
     case "home_dir": return Promise.resolve("/tmp/mockhome");
@@ -130,7 +141,13 @@ await page.addInitScript(() => {
   const origAdd = window.addEventListener.bind(window);
   window.addEventListener = (type, fn, opts) => {
     const sig = (type === "mousemove" || type === "mouseup") && opts && typeof opts === "object" ? opts.signal : undefined;
-    if (sig && !window.__sigList.includes(sig)) window.__sigList.push(sig);
+    if (sig) {
+      // tag by listener types so split (mousemove+mouseup) vs sftp (mouseup-only)
+      // teardown checks can count their own registrations (U5)
+      let e = window.__sigList.find((x) => x.sig === sig);
+      if (!e) { e = { sig, types: [] }; window.__sigList.push(e); }
+      if (!e.types.includes(type)) e.types.push(type);
+    }
     return origAdd(type, fn, opts);
   };
 });
@@ -541,10 +558,14 @@ check("U4: focus follows clicked side", focIdx1 === 1, `focused=${focIdx1}`);
 check("U4: focused side underline 2px --accent", focUl === "2px rgb(0, 217, 146)", focUl);
 // U4 teardown hygiene (SEC LOW t_fb1d18d6): split drag listeners share one
 // AbortController signal, registered on window and aborted by closeTab.
-const sigAfterSplit = await page.evaluate(() => ({
-  n: window.__sigList.length,
-  live: window.__sigList.filter((s) => !s.aborted).length,
-}));
+// Scoped to mousemove-type entries = splits only (sftp uses mouseup-only).
+const sigAfterSplit = await page.evaluate(() => {
+  const splitEntries = window.__sigList.filter((e) => e.types.includes("mousemove"));
+  return {
+    n: splitEntries.length,
+    live: splitEntries.filter((e) => !e.sig.aborted).length,
+  };
+});
 check("U4: split registers an abortable window-listener signal",
   sigAfterSplit.n >= 1 && sigAfterSplit.live === sigAfterSplit.n, JSON.stringify(sigAfterSplit));
 // status bar global: always visible, left "user@host · auth:key · N sesi"
@@ -612,25 +633,34 @@ await page.locator("#tab-menu button", { hasText: "Close others" }).click();
 await page.waitForTimeout(500);
 check("close others leaves one tab", (await page.locator(".tab").count()) === 1);
 
-// 9g3. SFTP: list scrolls (pane is height-constrained), transfer buttons visible
+// 9g3. SFTP: list scrolls (pane is height-constrained), U5 strip + head buttons
 // (9g2 closed every tab, so open a fresh SFTP tab first)
 await page.locator(".host-item .h-sftp").first().click();
 await page.waitForTimeout(600);
 const sftpPanel = page.locator(".panel.active");
 await sftpPanel.locator(".sftp-row").first().waitFor({ timeout: 5000 });
-const listScrollable = await sftpPanel.locator(".sftp-list").evaluate((el) => {
+const stripInfo = await sftpPanel.locator(".sftp-list").evaluate((el) => {
   const wrap = el.closest(".sftp-wrap");
-  const foot = wrap && wrap.querySelector(".sftp-foot");
+  const strip = wrap && wrap.querySelector(".xfer-strip");
+  const up = wrap.querySelector(".sftp-pane:nth-child(2) .pane-head .sftp-upload");
+  const dl = wrap.querySelector(".sftp-pane:nth-child(1) .pane-head .sftp-download");
+  const head = up && up.closest(".pane-head");
   return {
     wrapFits: wrap.getBoundingClientRect().height <= window.innerHeight + 2,
-    footVisible: !!(foot && foot.offsetParent),
-    footTop: Math.round(foot.getBoundingClientRect().top),
+    stripVisible: !!(strip && strip.offsetParent),
+    upInHead: !!head && head.contains(up) && !!up.offsetParent,
+    dlInHead: !!(dl && dl.closest(".pane-head") && dl.offsetParent),
+    stripTop: Math.round(strip.getBoundingClientRect().top),
     vh: window.innerHeight,
   };
 });
-const footVisible = listScrollable.footVisible && listScrollable.footTop < listScrollable.vh;
-check("sftp wrap fits viewport (list scrollable)", listScrollable.wrapFits);
-check("upload/download buttons visible", footVisible);
+check("sftp wrap fits viewport (list scrollable)", stripInfo.wrapFits);
+check("upload/download buttons visible", stripInfo.stripVisible && stripInfo.stripTop < stripInfo.vh);
+check("U5: Upload/Download live in .pane-head (target pane), not a foot",
+  stripInfo.upInHead && stripInfo.dlInHead && (await page.locator(".panel.active .sftp-foot").count()) === 0, JSON.stringify(stripInfo));
+const srcFiles = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8") +
+  readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+check("U5: grep .sftp-foot in main.ts+styles.css = 0", !srcFiles.includes(".sftp-foot") && !srcFiles.includes("sftp-foot"));
 // U4 height chain: panel == #panels container even with the 24px status bar eating #main
 const chain = await page.evaluate(() => {
   const panels = document.getElementById("panels");
@@ -685,7 +715,7 @@ const sbIdle = await page.evaluate(() => ({
 check("U4: status bar visible with 0 tabs, '0 sesi'", sbIdle.vis && sbIdle.h === 24 && sbIdle.left === "0 sesi", JSON.stringify(sbIdle));
 // U4 teardown hygiene (SEC LOW t_fb1d18d6): every split signal aborted after closeTab
 const sigAfterClose = await page.evaluate(() => {
-  const live = window.__sigList.filter((s) => !s.aborted);
+  const live = window.__sigList.filter((e) => !e.sig.aborted);
   return { n: window.__sigList.length, live: live.length };
 });
 check("U4: split window listeners released on closeTab (no leak)",
@@ -891,6 +921,162 @@ for (let i = 0; i < 6 && (await page.locator(".tab").count()) > 0; i++) {
   await page.locator(".tab .x").first().click();
   await page.waitForTimeout(300);
 }
+
+// ---- U5 SFTP Arus: pane-head chips/actions + per-file strip + selection/drop (EPIC-TSD §U5) ----
+// cleanup above closed all tabs — reopen a fresh SFTP tab (smoke quirk)
+delayList = 600; // observe skeleton loading state (§4.4: loading = skeleton rows)
+await page.locator(".host-item .h-sftp").first().click();
+await page.waitForTimeout(250);
+check("U5: loading shows 3 skeleton rows, no spinner text",
+  (await page.locator(".panel.active .sftp-list .skel").count()) === 3 &&
+  (await page.locator(".panel.active .sftp-list .spinner").count()) === 0);
+delayList = 0;
+await page.locator(".panel.active .sftp-list .sftp-row").first().waitFor({ timeout: 5000 });
+// AC6: row height 28px measured
+const u5rowH = await page.locator(".panel.active .sftp-list .sftp-row").first().evaluate((el) => el.offsetHeight);
+check("U5 AC6: .sftp-row is 28px measured", u5rowH === 28, `h=${u5rowH}`);
+// AC4 (Space): selects sumber WITHOUT opening the editor (stage-1 must stay on selection path)
+const tabsBeforeSpace = await page.locator(".tab").count();
+await page.locator(".panel.active .loc-list .sftp-row").first().focus(); // notes.txt local
+await page.keyboard.press("Space");
+await page.waitForTimeout(150);
+check("U5 AC4: Space selects, no editor opened",
+  (await page.locator(".panel.active .loc-list .sftp-row.sel").count()) === 1 &&
+  (await page.locator(".tab").count()) === tabsBeforeSpace &&
+  (await page.locator(".panel.active .ed-wrap").count()) === 0);
+// AC1: .sel = bg --sel AND 1px solid --accent outline, on the CLICKED row (not last-child)
+const selPaint = await page.locator(".panel.active .loc-list .sftp-row").first().evaluate((el) => {
+  const cs = getComputedStyle(el);
+  return { nm: el.dataset.name, last: el.parentNode.lastElementChild === el, bg: cs.backgroundColor, oW: cs.outlineWidth, oS: cs.outlineStyle, oC: cs.outlineColor };
+});
+check("U5 AC1: .sel paints bg var(--sel) + 1px solid --accent outline on clicked row",
+  selPaint.nm === "notes.txt" && !selPaint.last && selPaint.bg === "rgb(14, 42, 32)" &&
+  selPaint.oW === "1px" && selPaint.oS === "solid" && selPaint.oC === "rgb(0, 217, 146)", JSON.stringify(selPaint));
+// chips: ▲ sumber (--warn) on source head, ▼ target on opposite head (F)
+const chips = await page.evaluate(() => {
+  const p = document.querySelector(".panel.active");
+  const src = p.querySelector(".sftp-pane:nth-child(1) .chip");
+  const dst = p.querySelector(".sftp-pane:nth-child(2) .chip");
+  return { src: src.textContent, c: getComputedStyle(src).color, dst: dst.textContent };
+});
+check("U5: chips ▲ sumber / ▼ target light on select (src --warn)",
+  chips.src === "▲ sumber: notes.txt" && chips.c === "rgb(255, 221, 128)" && chips.dst.startsWith("▼ target:"), JSON.stringify(chips));
+// Tab jumps focus to the opposite pane (keyboard path §4.4)
+await page.keyboard.press("Tab");
+const tabJump = await page.evaluate(() => ({ inRemote: !!document.activeElement?.closest(".sftp-list"), nm: document.activeElement?.dataset?.name || "" }));
+check("U5: Tab moves focus to opposite pane", tabJump.inRemote && tabJump.nm === "notes.txt", JSON.stringify(tabJump));
+// AC4 (Ctrl+Enter): transfer the pending sumber from the other pane
+const upN0 = calls.filter((c) => c.cmd === "sftp_upload").length;
+await page.keyboard.press("Control+Enter");
+await page.waitForTimeout(450);
+const upCall = calls.filter((c) => c.cmd === "sftp_upload").at(-1);
+check("U5 AC4: Ctrl+Enter transfers selection with correct paths",
+  calls.filter((c) => c.cmd === "sftp_upload").length === upN0 + 1 &&
+  upCall?.args.localPath === "/tmp/mockhome/notes.txt" && upCall?.args.remotePath === "notes.txt", JSON.stringify(upCall?.args));
+check("U5: strip row reaches ok state", (await page.locator(".panel.active .xf-row.ok").count()) === 1);
+// spinner state visible while running (transfer strip §4.4)
+await page.locator(".panel.active .loc-list .sftp-row").first().click();
+await page.waitForTimeout(400);
+await page.locator(".panel.active .sftp-pane:nth-child(2) .pane-head .sftp-upload").click();
+await page.waitForTimeout(80);
+check("U5: running transfer shows 12px spinner row",
+  (await page.locator(".panel.active .xf-row.run .spinner").count()) === 1 &&
+  (await page.locator(".panel.active .xf-row.run .spinner").first().evaluate((el) => getComputedStyle(el).width)) === "12px");
+// click-click two-stage: remote file = sumber, then local file row = target → download
+await page.waitForTimeout(400);
+await page.locator(".panel.active .sftp-list .sftp-row").first().click(); // remote notes.txt
+await page.waitForTimeout(400);
+const dlN0 = calls.filter((c) => c.cmd === "sftp_download").length;
+await page.locator(".panel.active .loc-list .sftp-row").first().click(); // stage-2 target
+await page.waitForTimeout(450);
+const dlCall = calls.filter((c) => c.cmd === "sftp_download").at(-1);
+check("U5: click-click two-stage transfer (remote→local, correct paths)",
+  calls.filter((c) => c.cmd === "sftp_download").length === dlN0 + 1 &&
+  dlCall?.args.remotePath === "notes.txt" && dlCall?.args.localPath === "/tmp/mockhome/notes.txt", JSON.stringify(dlCall?.args));
+// AC5: two consecutive transfers keep TWO rows (no overwrite) — after older rows fade
+await page.waitForTimeout(4700); // let all ok rows auto-fade (4s + 320ms fade) clear the strip first
+check("U5: ok rows auto-fade after 4s", (await page.locator(".panel.active .xf-row").count()) === 0);
+await page.locator(".panel.active .loc-list .sftp-row").first().click();
+await page.waitForTimeout(400);
+await page.locator(".panel.active .sftp-pane:nth-child(2) .pane-head .sftp-upload").click();
+await page.waitForTimeout(350);
+await page.locator(".panel.active .loc-list .sftp-row").first().click();
+await page.waitForTimeout(400);
+await page.locator(".panel.active .sftp-pane:nth-child(2) .pane-head .sftp-upload").click();
+await page.waitForTimeout(350);
+const xfN = await page.locator(".panel.active .xf-row").count();
+check("U5 AC5: two consecutive transfers = 2 strip rows (not overwritten)", xfN === 2, `rows=${xfN}`);
+// AC5: failure persists with retry, retry re-runs same job
+xferFail = true;
+await page.locator(".panel.active .loc-list .sftp-row").first().click();
+await page.waitForTimeout(400);
+await page.locator(".panel.active .sftp-pane:nth-child(2) .pane-head .sftp-upload").click();
+await page.waitForTimeout(400);
+const failInfo = await page.evaluate(() => {
+  const r = [...document.querySelectorAll(".panel.active .xf-row.fail")].pop();
+  return { n: document.querySelectorAll(".panel.active .xf-row.fail").length, retry: !!r?.querySelector(".xf-retry"), title: r?.title || "", c: r ? getComputedStyle(r.querySelector(".xf-state")).color : "" };
+});
+check("U5 AC5: failed transfer shows --danger row with retry button",
+  failInfo.n === 1 && failInfo.retry && failInfo.title.includes("Failed to upload notes.txt") && failInfo.c === "rgb(253, 156, 159)", JSON.stringify(failInfo));
+const upN1 = calls.filter((c) => c.cmd === "sftp_upload").length;
+xferFail = false;
+await page.locator(".panel.active .xf-row.fail .xf-retry").last().click();
+await page.waitForTimeout(450);
+check("U5: retry replaces the failed row and succeeds",
+  calls.filter((c) => c.cmd === "sftp_upload").length === upN1 + 1 &&
+  (await page.locator(".panel.active .xf-row.fail").count()) === 0 &&
+  (await page.locator(".panel.active .xf-row.ok").count()) >= 1);
+// AC3: manual mouse drag remote→local = download (no HTML5 DnD anywhere)
+const dlN1 = calls.filter((c) => c.cmd === "sftp_download").length;
+const gb = await page.locator(".panel.active .sftp-list .sftp-row").first().boundingBox();
+const tb = await page.locator(".panel.active .sftp-pane:nth-child(1)").boundingBox();
+await page.mouse.move(gb.x + gb.width / 2, gb.y + gb.height / 2);
+await page.mouse.down();
+await page.mouse.move(tb.x + tb.width / 2, tb.y + tb.height - 10, { steps: 5 });
+const dragState = await page.evaluate(() => {
+  const p = document.querySelector(".panel.active .sftp-pane:nth-child(1)");
+  const cs = getComputedStyle(p);
+  return { cls: p.classList.contains("drop-target"), body: document.body.classList.contains("sftp-dragging"), oS: cs.outlineStyle, oW: cs.outlineWidth, oC: cs.outlineColor };
+});
+check("U5 AC3: drag lights opposite pane dashed 2px --accent",
+  dragState.cls && dragState.body && dragState.oS === "dashed" && dragState.oW === "2px" && dragState.oC === "rgb(0, 217, 146)", JSON.stringify(dragState));
+await page.mouse.up();
+await page.waitForTimeout(450);
+const dlCall2 = calls.filter((c) => c.cmd === "sftp_download").at(-1);
+check("U5 AC3: manual drag remote→local invokes sftp_download (correct paths)",
+  calls.filter((c) => c.cmd === "sftp_download").length === dlN1 + 1 &&
+  dlCall2?.args.remotePath === "notes.txt" && dlCall2?.args.localPath === "/tmp/mockhome/notes.txt", JSON.stringify(dlCall2?.args));
+check("U5 AC3: zero [draggable] elements + no sftp-dragging stuck on body",
+  (await page.evaluate(() => document.querySelectorAll("[draggable]").length)) === 0 &&
+  !(await page.evaluate(() => document.body.classList.contains("sftp-dragging"))));
+// strip layout: max 3 rows + scroll, static hint 11px --muted
+const stripLayout = await page.evaluate(() => {
+  const rows = document.querySelector(".panel.active .xs-rows");
+  const h = document.querySelector(".panel.active .sftp-hint");
+  const cs = getComputedStyle(h);
+  return { maxH: getComputedStyle(rows).maxHeight, scrollable: rows.scrollHeight >= rows.clientHeight, hint: h.textContent, fs: cs.fontSize, c: cs.color };
+});
+check("U5: strip caps 3 rows + scroll", stripLayout.maxH === "64px", JSON.stringify(stripLayout));
+check("U5: static hint 11px --muted names click/drag paths",
+  stripLayout.hint === "Pilih file → klik pane tujuan / drag manual mouse — HTML5 DnD tidak dipakai" &&
+  stripLayout.fs === "11px" && stripLayout.c === "rgb(184, 179, 176)", `${stripLayout.fs}/${stripLayout.c}`);
+// close tabs — sftp window-mouseup signal must abort (U4 registry invariant)
+for (let i = 0; i < 6 && (await page.locator(".tab").count()) > 0; i++) {
+  if (await page.locator("#dialog").isVisible().catch(() => false)) {
+    await page.locator("#dialog button").filter({ hasText: "Discard" }).first().click().catch(() => {});
+    await page.waitForTimeout(250);
+    continue;
+  }
+  await page.locator(".tab .x").first().click();
+  await page.waitForTimeout(300);
+}
+const sigAfterU5 = await page.evaluate(() => ({
+  n: window.__sigList.length,
+  live: window.__sigList.filter((e) => !e.sig.aborted).length,
+  sftp: window.__sigList.filter((e) => !e.types.includes("mousemove")).length,
+}));
+check("U5: sftp drag listener released on closeTab (AbortController, live==0)",
+  sigAfterU5.live === 0 && sigAfterU5.sftp >= 1, JSON.stringify(sigAfterU5));
 
 check("no console/page errors", errors.length === 0, errors.slice(0, 3).join(" | "));
 

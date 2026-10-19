@@ -707,7 +707,9 @@ async function saveRaw() {
 }
 
 // ---------- sftp browser ----------
-type SftpSession = { host: string; path: string };
+// unlisten: teardown for the window-level drag listener (AbortController, U4
+// invariant) + pending strip fade timers — closeTab must run it (SEC LOW t_fb1d18d6).
+type SftpSession = { host: string; path: string; unlisten: (() => void)[] };
 // Entries cached per host so N tabs on one host share one listing; invalidated
 // on tab close (last tab of that host drops the cache). Rendering re-fetches
 // via the persistent backend session — no extra login per tab or per refresh.
@@ -738,12 +740,31 @@ function joinRemote(dir: string, name: string): string {
   return d ? `${d}/${name}` : name;
 }
 
+function joinLocal(dir: string, name: string): string {
+  const d = dir.replace(/[\\/]+$/, "");
+  if (!name) return d;
+  return d ? `${d}/${name}` : name;
+}
+
+// U5 §4.4 F: single pending source per SFTP panel ("sumber"). Click-click
+// stage 1 sets it; stage 2 (pick in the opposite pane) or a mouse drag drop
+// consumes it. Stored on the panel so the module-level render fns can paint
+// .sel + read it without threading state through every call site.
+type SftpSide = "local" | "remote";
+type SftpSel = { side: SftpSide; name: string; size: number };
+const sftpSelOf = (panel: HTMLElement): SftpSel | null =>
+  ((panel as any).__sel as SftpSel | undefined) || null;
+const sftpSelIs = (panel: HTMLElement, side: SftpSide, name: string): boolean => {
+  const s = sftpSelOf(panel);
+  return !!s && s.side === side && s.name === name;
+};
+
 type StatusFn = (m: string, kind?: "" | "ok" | "err") => void;
 
 async function openSftp(host: string) {
   if (binaryBlocked("sftp")) return;
   const tabId = nextTab++;
-  sftpSessions.set(tabId, { host, path: "" });
+  sftpSessions.set(tabId, { host, path: "", unlisten: [] });
   const tab = makeTab(tabId, "sftp", host);
   $("#tab-split-zone").before(tab);
 
@@ -755,7 +776,10 @@ async function openSftp(host: string) {
     <div class="sftp-wrap">
       <div class="sftp-panes">
         <div class="sftp-pane">
-          <div class="pane-head"><span class="pane-title">This PC — local</span></div>
+          <div class="pane-head">
+            <span class="pane-title">This PC — local</span><span class="chip"></span>
+            <span class="ph-acts"><button class="sftp-download" title="Download ke pane ini — pilih file remote dulu, atau Ctrl+Enter">◂ Download</button></span>
+          </div>
           <div class="sftp-toolbar">
             <button class="loc-up icon" aria-label="Parent local directory" title="Parent directory">${ICONS.up}</button>
             <input class="loc-path" placeholder="local directory" />
@@ -765,7 +789,10 @@ async function openSftp(host: string) {
           <div class="loc-list"></div>
         </div>
         <div class="sftp-pane">
-          <div class="pane-head"><span class="pane-title">${esc(host)} — remote</span></div>
+          <div class="pane-head">
+            <span class="pane-title">${esc(host)} — remote</span><span class="chip"></span>
+            <span class="ph-acts"><button class="sftp-upload" title="Upload ke pane ini — pilih file lokal dulu, atau Ctrl+Enter">Upload ▸</button></span>
+          </div>
           <div class="sftp-toolbar">
             <button class="sftp-up icon" aria-label="Parent directory" title="Parent directory">${ICONS.up}</button>
             <input class="sftp-path" placeholder="remote path (empty = home)" />
@@ -776,11 +803,8 @@ async function openSftp(host: string) {
         </div>
       </div>
       <div class="xfer-bar"></div>
-      <div class="sftp-foot">
-        <button class="sftp-upload">Upload selection</button>
-        <button class="sftp-download">Download selection</button>
-      </div>
-      <div class="sftp-status"></div>
+      <div class="xfer-strip"><div class="xs-rows"></div><div class="sftp-status"></div></div>
+      <div class="sftp-hint">Pilih file → klik pane tujuan / drag manual mouse — HTML5 DnD tidak dipakai</div>
     </div>`;
   $("#panels").appendChild(panel);
 
@@ -793,10 +817,12 @@ async function openSftp(host: string) {
     el.classList.toggle("ok", kind === "ok");
     el.classList.toggle("err", kind === "err");
   };
+  let xferN = 0; // concurrent transfers (drag one, then another) — counter, not flag
   const busy = (on: boolean) => {
-    q(".xfer-bar").classList.toggle("on", on);
-    (q(".sftp-upload") as HTMLButtonElement).disabled = on;
-    (q(".sftp-download") as HTMLButtonElement).disabled = on;
+    xferN = Math.max(0, xferN + (on ? 1 : -1));
+    q(".xfer-bar").classList.toggle("on", xferN > 0);
+    (q(".sftp-upload") as HTMLButtonElement).disabled = xferN > 0;
+    (q(".sftp-download") as HTMLButtonElement).disabled = xferN > 0;
     updateStatusBar(); // indikator transfer di status bar global (§4.3)
   };
 
@@ -833,92 +859,217 @@ async function openSftp(host: string) {
   });
   q(".loc-refresh").addEventListener("click", () => renderLocalPane(tabId, status));
 
-  // selection-based transfers, Termius style
-  q(".sftp-upload").addEventListener("click", async () => {
-    const name = (panel as any).__selLocal || "";
-    if (!name) return status("Select a file in the local pane first (single click).", "err");
-    const localDir = localPane.get(tabId) || "";
-    const localPath = `${localDir.replace(/[\\/]+$/, "")}/${name}`;
-    const remote = joinRemote((sftpSessions.get(tabId) as SftpSession).path, name);
-    busy(true);
-    status(`Uploading ${name}…`);
-    try {
-      await invoke("sftp_upload", { host, localPath, remotePath: remote });
-      status(`Uploaded to ${remote}`, "ok");
-      (panel as any).__selLocal = "";
-      renderSftp(tabId, status);
-    } catch (e) {
-      status(`Failed to upload ${name}: ${msg(e)}. Check the path and try again.`, "err");
-    } finally {
-      busy(false);
-    }
-  });
-  q(".sftp-download").addEventListener("click", async () => {
-    const name = (panel as any).__selRemote || "";
-    if (!name) return status("Select a file in the remote pane first (single click).", "err");
-    const localDir = (localPane.get(tabId) || "").replace(/[\\/]+$/, "");
-    if (!localDir) return status("Open a local directory on the right first.", "err");
-    const local = `${localDir}/${name}`;
-    const s = sftpSessions.get(tabId) as SftpSession;
-    busy(true);
-    status(`Downloading ${name}…`);
-    try {
-      await invoke("sftp_download", { host, remotePath: joinRemote(s.path, name), localPath: local });
-      status(`Saved to ${local}`, "ok");
-      (panel as any).__selRemote = "";
-      renderLocalPane(tabId, status);
-    } catch (e) {
-      status(`Failed to download ${name}: ${msg(e)}. Check the path and try again.`, "err");
-    } finally {
-      busy(false);
-    }
-  });
-
-  // drag & drop between panes (Termius): rows from the LOCAL pane drop on the
-  // REMOTE pane = upload; rows from REMOTE drop on LOCAL = download.
-  // Reuses the selection-based buttons' logic; plain mouse events, no HTML5 DnD
-  // (unreliable in WebView2 — same reason the tab split uses manual drag).
-  const paneLocal = q(".sftp-pane") as HTMLElement;
-  const paneRemote = q(".sftp-pane:nth-child(2)") as HTMLElement;
-  let dragSrc: "local" | "remote" | null = null;
-  let dragName = "";
-
-  const wirePane = (pane: HTMLElement, side: "local" | "remote") => {
-    pane.addEventListener("mousedown", (ev) => {
-      const row = (ev.target as HTMLElement).closest(".sftp-row") as HTMLElement | null;
-      if (!row || ev.button !== 0) return;
-      dragSrc = side;
-      dragName = (row.querySelector(".nm") as HTMLElement)?.textContent || "";
-      document.body.classList.add("sftp-dragging");
-    });
-    pane.addEventListener("mouseover", (ev) => {
-      if (!dragSrc || dragSrc === side) return;
-      if (!(ev.target as HTMLElement).closest(".sftp-row")) return;
-      pane.classList.add("drop-target");
-    });
-    pane.addEventListener("mouseleave", () => pane.classList.remove("drop-target"));
-    pane.addEventListener("mouseup", (ev) => {
-      if (!dragSrc) return;
-      const from = dragSrc;
-      dragSrc = null;
-      document.body.classList.remove("sftp-dragging");
-      pane.classList.remove("drop-target");
-      const row = (ev.target as HTMLElement).closest(".sftp-row");
-      if (!row) return; // released outside a row: cancel, no transfer
-      if (from === side) return; // dropped on own pane: just a click
-      const name = dragName; // the row you GRABBED, not the one you dropped on
-      if (!name) return;
-      if (side === "remote") {
-        (panel as any).__selLocal = name;
-        (q(".sftp-upload") as HTMLButtonElement).click();
+  // ---- U5 §4.4: sumber/target chips + per-file transfer strip + 3 transfer paths ----
+  const chipEls = {
+    local: panel.querySelector(".sftp-pane:nth-child(1) .chip") as HTMLElement,
+    remote: panel.querySelector(".sftp-pane:nth-child(2) .chip") as HTMLElement,
+  };
+  let sel: SftpSel | null = null;
+  const setSel = (s: SftpSel | null) => {
+    sel = s;
+    (panel as any).__sel = s;
+    (["local", "remote"] as SftpSide[]).forEach((side) => {
+      const el = chipEls[side];
+      el.classList.remove("src", "dst");
+      el.textContent = "";
+      if (!sel) return;
+      if (sel.side === side) {
+        el.classList.add("src");
+        el.textContent = `▲ sumber: ${sel.name}`;
       } else {
-        (panel as any).__selRemote = name;
-        (q(".sftp-download") as HTMLButtonElement).click();
+        el.classList.add("dst");
+        el.textContent = `▼ target: drop di sini / klik file lalu ${sel.side === "local" ? "Upload ▸" : "◂ Download"}`;
       }
     });
   };
-  wirePane(paneLocal, "local");
-  wirePane(paneRemote, "remote");
+  (panel as any).__clearSel = () => setSel(null);
+  // A list re-render only invalidates a sumber that lived in THAT pane.
+  (panel as any).__clearSelIf = (side: SftpSide) => {
+    if (sel && sel.side === side) setSel(null);
+  };
+
+  // Transfer strip (§4.4): one row per file, "⇅ name → path · size · state".
+  // ok rows auto-fade after 4s; failed rows persist with retry (AC5). Timers
+  // tracked so tab close cancels pending fades.
+  const rowsEl = panel.querySelector(".xs-rows") as HTMLElement;
+  const fadeTimers = new Set<number>();
+  const addXferRow = (
+    dir: "up" | "down",
+    name: string,
+    path: string,
+    size: number,
+    retry: () => void,
+  ) => {
+    const row = document.createElement("div");
+    row.className = "xf-row run";
+    const ico = document.createElement("span");
+    ico.className = "xf-ico";
+    ico.setAttribute("aria-hidden", "true");
+    ico.textContent = "⇅";
+    const nm = document.createElement("span");
+    nm.className = "xf-name";
+    nm.textContent = name;
+    const pth = document.createElement("span");
+    pth.className = "xf-path";
+    pth.textContent = `${dir === "up" ? "→" : "←"} ${path}`;
+    const sz = document.createElement("span");
+    sz.className = "xf-size";
+    sz.textContent = size >= 0 ? fmtSize(size) : "";
+    const st = document.createElement("span");
+    st.className = "xf-state";
+    row.append(ico, nm, pth, sz, st);
+    rowsEl.appendChild(row);
+    const later = (fn: () => void, ms: number) => {
+      const t = window.setTimeout(() => {
+        fadeTimers.delete(t);
+        fn();
+      }, ms);
+      fadeTimers.add(t);
+    };
+    return {
+      row,
+      run(label: string) {
+        const spin = document.createElement("span");
+        spin.className = "spinner";
+        spin.setAttribute("aria-hidden", "true");
+        st.replaceChildren(spin, document.createTextNode(label));
+      },
+      ok() {
+        row.classList.remove("run");
+        row.classList.add("ok");
+        st.textContent = "ok";
+        later(() => {
+          row.classList.add("out");
+          later(() => row.remove(), 320);
+        }, 4000);
+      },
+      fail(detail: string) {
+        row.classList.remove("run");
+        row.classList.add("fail");
+        row.title = detail;
+        const btn = document.createElement("button");
+        btn.className = "xf-retry";
+        btn.textContent = "coba lagi";
+        // retry replaces its own row (fresh run row), else the strip would
+        // keep the dead row forever (§4.4 max-3 + scroll cap).
+        btn.addEventListener("click", () => {
+          row.remove();
+          retry();
+        });
+        st.replaceChildren(document.createTextNode("gagal"), btn);
+      },
+    };
+  };
+
+  // One transfer engine — all three paths (manual drag, click-click, head
+  // buttons) route here. Narrative copies byte-identical to pre-U5 baseline,
+  // only their home moved to the strip note.
+  const transfer = (src: SftpSide, name: string, size: number, intoDir = "") => {
+    const s = sftpSessions.get(tabId) as SftpSession;
+    if (src === "local") {
+      if (!name) return status("Select a file in the local pane first (single click).", "err");
+      const localPath = joinLocal(localPane.get(tabId) || "", name);
+      const remotePath = joinRemote(intoDir ? joinRemote(s.path, intoDir) : s.path, name);
+      const job = () => {
+        const r = addXferRow("up", name, `${host}:${remotePath}`, size, job);
+        r.run("berjalan");
+        busy(true);
+        status(`Uploading ${name}…`);
+        invoke("sftp_upload", { host, localPath, remotePath })
+          .then(() => {
+            r.ok();
+            status(`Uploaded to ${remotePath}`, "ok");
+            setSel(null);
+            renderSftp(tabId, status);
+          })
+          .catch((e) => {
+            const m = `Failed to upload ${name}: ${msg(e)}. Check the path and try again.`;
+            r.fail(m);
+            status(m, "err");
+          })
+          .finally(() => busy(false));
+      };
+      job();
+      return;
+    }
+    if (!name) return status("Select a file in the remote pane first (single click).", "err");
+    const localDir = localPane.get(tabId) || "";
+    if (!localDir) return status("Open a local directory on the right first.", "err");
+    const remotePath = joinRemote(s.path, name);
+    const localPath = joinLocal(joinLocal(localDir, intoDir), name);
+    const job = () => {
+      const r = addXferRow("down", name, `${host}:${remotePath}`, size, job);
+      r.run("berjalan");
+      busy(true);
+      status(`Downloading ${name}…`);
+      invoke("sftp_download", { host, remotePath, localPath })
+        .then(() => {
+          r.ok();
+          status(`Saved to ${localPath}`, "ok");
+          setSel(null);
+          renderLocalPane(tabId, status);
+        })
+        .catch((e) => {
+          const m = `Failed to download ${name}: ${msg(e)}. Check the path and try again.`;
+          r.fail(m);
+          status(m, "err");
+        })
+        .finally(() => busy(false));
+    };
+    job();
+  };
+
+  // Click-click path (VSCode-style): stage 1 pick file = sumber; stage 2 pick
+  // in the opposite pane = target (dir row → into that dir). Stage-1 clicks
+  // never open the editor — they only travel the selection path (pitfall U5).
+  const pickSource = (side: SftpSide, e: { name: string; is_dir: boolean; size: number }) => {
+    if (e.is_dir) return setSel(null);
+    setSel({ side, name: e.name, size: e.size });
+  };
+  (panel as any).__pickSource = pickSource;
+  (panel as any).__onRowPick = (side: SftpSide, e: { name: string; is_dir: boolean; size: number }) => {
+    if (sel && sel.side !== side) return transfer(sel.side, sel.name, sel.size, e.is_dir ? e.name : "");
+    pickSource(side, e);
+    if (!e.is_dir) status(side === "local" ? `Selected ${e.name} for upload.` : `Selected ${e.name} for download.`);
+  };
+  (panel as any).__onDrop = (side: SftpSide, intoDir: string, from: SftpSide, name: string, size: number) => {
+    if (from === side || !name) return;
+    transfer(from, name, size, intoDir);
+  };
+  (panel as any).__xferFrom = (side: SftpSide) => {
+    if (sel) return transfer(sel.side, sel.name, sel.size);
+    status(side === "local" ? "Select a file in the local pane first (single click)." : "Select a file in the remote pane first (single click).", "err");
+  };
+
+  // Head buttons live in the TARGET pane head (Upload → remote head, ◂
+  // Download → local head) — §4.4 F; no transfer controls left in a foot.
+  q(".sftp-upload").addEventListener("click", () => {
+    if (sel && sel.side === "local") transfer("local", sel.name, sel.size);
+    else status("Select a file in the local pane first (single click).", "err");
+  });
+  q(".sftp-download").addEventListener("click", () => {
+    if (sel && sel.side === "remote") transfer("remote", sel.name, sel.size);
+    else status("Select a file in the remote pane first (single click).", "err");
+  });
+
+  // Window-level mouseup clears a drag released anywhere (even off-panel).
+  // AbortController teardown on tab close — U4 listener-registry invariant.
+  const dragAc = new AbortController();
+  window.addEventListener("mouseup", clearSftpDrag, { signal: dragAc.signal });
+  (sftpSessions.get(tabId) as SftpSession).unlisten.push(() => {
+    dragAc.abort();
+    fadeTimers.forEach(clearTimeout);
+    fadeTimers.clear();
+    clearSftpDrag();
+  });
+
+  // drag & drop between panes (Termius): rows from the LOCAL pane drop on the
+  // REMOTE pane = upload; rows from REMOTE drop on LOCAL = download. Manual
+  // mouse events only — no HTML5 DnD (STATE.md invariant: unreliable in
+  // WebView2; proven dead). The window-level mouseup safety-net lives in the
+  // wiring above (AbortController, torn down on tab close).
+  wirePane(q(".sftp-pane") as HTMLElement, "local");
+  wirePane(q(".sftp-pane:nth-child(2)") as HTMLElement, "remote");
 
   // default local pane: user home (frontend knows it from the backend)
   try {
@@ -932,6 +1083,67 @@ async function openSftp(host: string) {
   renderLocalPane(tabId, status);
 }
 
+// Manual mouse drag between SFTP panes (STATE.md invariant: HTML5 DnD is
+// banned — dead in WebView2). One drag can be live at a time, so the grab
+// state is module-level; the window mouseup net + pane mouseup call
+// clearSftpDrag, which is also the AbortController-listener target.
+let sftpDragSide: SftpSide | null = null;
+let sftpDragName = "";
+let sftpDragSize = -1;
+
+function clearSftpDrag() {
+  sftpDragSide = null;
+  sftpDragName = "";
+  sftpDragSize = -1;
+  document.body.classList.remove("sftp-dragging");
+  document.querySelectorAll(".sftp-pane.drop-target").forEach((p) => p.classList.remove("drop-target"));
+}
+
+function wirePane(pane: HTMLElement, side: SftpSide) {
+  const panel = pane.closest(".panel") as HTMLElement;
+  pane.addEventListener("mousedown", (ev) => {
+    const row = (ev.target as HTMLElement).closest(".sftp-row") as HTMLElement | null;
+    if (!row || ev.button !== 0) return;
+    sftpDragSide = side;
+    sftpDragName = row.dataset.name || "";
+    sftpDragSize = Number(row.dataset.size ?? "-1");
+    document.body.classList.add("sftp-dragging");
+    // Opposite (target) pane gets the dashed drop outline for the whole drag
+    // (§4.4 F); mousedown arms sumber so chips light up before the release.
+    panel.querySelectorAll(".sftp-pane.drop-target").forEach((p) => p.classList.remove("drop-target"));
+    panel.querySelector(side === "local" ? ".sftp-pane:nth-child(2)" : ".sftp-pane:nth-child(1)")?.classList.add("drop-target");
+    // Arm sumber ONLY when no opposite-pane source is pending — otherwise the
+    // mousedown of a stage-2 click-click would overwrite the source and the
+    // transfer never fires (pitfall: stage-2 pick must reach __onRowPick).
+    const cur = sftpSelOf(panel);
+    if (!row.dataset.dir && (!cur || cur.side === side)) (panel as any).__pickSource?.(side, { name: sftpDragName, is_dir: false, size: sftpDragSize });
+  });
+  pane.addEventListener("mouseup", (ev) => {
+    if (!sftpDragSide) return;
+    const from = sftpDragSide;
+    const name = sftpDragName;
+    const size = sftpDragSize;
+    clearSftpDrag();
+    if (from === side || !name) return; // own pane = plain click
+    const row = (ev.target as HTMLElement).closest(".sftp-row") as HTMLElement | null;
+    const into = row && row.dataset.dir === "1" ? row.dataset.name || "" : "";
+    (panel as any).__onDrop?.(side, into, from, name, size);
+  });
+  // Keyboard path (§4.4): Ctrl+Enter transfers the pending selection;
+  // Tab from a row jumps focus to the opposite pane.
+  pane.addEventListener("keydown", (ev) => {
+    if (ev.target instanceof HTMLElement && ev.target.closest("input")) return;
+    if ((ev.ctrlKey || ev.metaKey) && ev.key === "Enter") {
+      ev.preventDefault();
+      (panel as any).__xferFrom?.(side);
+    } else if (ev.key === "Tab" && (ev.target as HTMLElement)?.closest?.(".sftp-row")) {
+      ev.preventDefault();
+      const other = panel.querySelector(side === "local" ? ".sftp-pane:nth-child(2)" : ".sftp-pane:nth-child(1)");
+      (other?.querySelector(".sftp-row") as HTMLElement | null)?.focus();
+    }
+  });
+}
+
 function rowFor(
   list: HTMLElement,
   e: { name: string; is_dir: boolean; is_link?: boolean; size: number },
@@ -940,9 +1152,25 @@ function rowFor(
   isSelected: () => boolean
 ) {
   const row = document.createElement("div");
-  row.className = "sftp-row" + (isSelected() ? " sel" : "");
+  row.className = "sftp-row";
+  // dataset carries the entry to the drag path — rows are rebuilt on every
+  // render, so the grab state must survive via attributes, not closures.
+  row.dataset.name = e.name;
+  row.dataset.size = String(e.size);
+  if (e.is_dir) row.dataset.dir = "1";
+  if (e.is_link) row.dataset.link = "1";
   row.setAttribute("role", "button");
   row.tabIndex = 0;
+  // AC1: .sel paints on the CLICKED row (old code highlighted last-child —
+  // wrong row when clicking mid-list), and only from the shared sumber state.
+  const paint = () => {
+    const on = isSelected();
+    list.querySelectorAll(".sftp-row.sel").forEach((r) => r.classList.remove("sel"));
+    row.classList.toggle("sel", on);
+    if (on) row.setAttribute("aria-selected", "true");
+    else row.removeAttribute("aria-selected");
+  };
+  if (isSelected()) paint();
   const ico = e.is_dir ? ICONS.folder : e.is_link ? ICONS.link : ICONS.file;
   row.innerHTML =
     `<span class="f-ico${e.is_dir ? " dir" : ""}"${e.is_link ? ' title="Symbolic link"' : ""}>${ico}</span>` +
@@ -954,6 +1182,7 @@ function rowFor(
     clickTimer = window.setTimeout(() => {
       clickTimer = null;
       onSelect();
+      paint();
     }, 250);
   });
   row.addEventListener("dblclick", () => {
@@ -964,13 +1193,27 @@ function rowFor(
     onOpen();
   });
   row.addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter") onOpen();
+    // Ctrl/Cmd+Enter belongs to the transfer path (wirePane), not open-editor
+    if (ev.key === "Enter" && !ev.ctrlKey && !ev.metaKey) onOpen();
     else if (ev.key === " ") {
+      // Space = select (spec: double-click/Enter opens, no hidden click dbl)
       ev.preventDefault();
       onSelect();
+      paint();
     }
   });
   list.appendChild(row);
+}
+
+// Loading state = skeleton rows (U2 .skel pattern, §4.4 — no spinner text).
+function skelRows(list: HTMLElement, n = 3) {
+  list.replaceChildren(
+    ...Array.from({ length: n }, () => {
+      const d = document.createElement("div");
+      d.className = "skel";
+      return d;
+    })
+  );
 }
 
 async function renderLocalPane(tabId: number, status: StatusFn) {
@@ -978,7 +1221,8 @@ async function renderLocalPane(tabId: number, status: StatusFn) {
   if (!panel) return;
   const list = panel.querySelector(".loc-list") as HTMLElement;
   const dir = localPane.get(tabId) || "";
-  list.innerHTML = `<div class="list-state"><span class="spinner"></span>Loading ${esc(dir || "~")}…</div>`;
+  (panel as any).__clearSelIf?.("local");
+  skelRows(list);
   let entries: LocalEntry[];
   try {
     entries = await invoke<LocalEntry[]>("local_list", { path: dir });
@@ -1004,12 +1248,8 @@ async function renderLocalPane(tabId: number, status: StatusFn) {
           status(`Selected ${e.name} for upload.`, "");
         }
       },
-      () => {
-        (panel as any).__selLocal = e.name;
-        list.querySelectorAll(".sftp-row.sel").forEach((r) => r.classList.remove("sel"));
-        (list.querySelector(".sftp-row:last-child") as HTMLElement)?.classList.add("sel");
-      },
-      () => ((panel as any).__selLocal || "") === e.name
+      () => (panel as any).__onRowPick?.("local", e),
+      () => sftpSelIs(panel, "local", e.name)
     );
   }
   status(`${entries.length} local items · ${dir || "~"}`);
@@ -1022,7 +1262,8 @@ async function renderSftp(tabId: number, status: StatusFn) {
   const list = panel.querySelector(".sftp-list") as HTMLElement;
   const inp = panel.querySelector(".sftp-path") as HTMLInputElement;
   inp.value = s.path;
-  list.innerHTML = `<div class="list-state"><span class="spinner"></span>Listing ${esc(s.path || "~")}…</div>`;
+  (panel as any).__clearSelIf?.("remote");
+  skelRows(list);
   let entries: SftpEntry[];
   try {
     entries = await invoke<SftpEntry[]>("sftp_list", { host: s.host, path: s.path });
@@ -1055,15 +1296,8 @@ async function renderSftp(tabId: number, status: StatusFn) {
           openRemoteEditor(s.host, joinRemote(s.path, e.name));
         }
       },
-      () => {
-        (panel as any).__selRemote = e.is_dir ? "" : e.name;
-        list.querySelectorAll(".sftp-row.sel").forEach((r) => r.classList.remove("sel"));
-        if (!e.is_dir) {
-          (list.querySelector(".sftp-row:last-child") as HTMLElement)?.classList.add("sel");
-          status(`Selected ${e.name} for download.`, "");
-        }
-      },
-      () => ((panel as any).__selRemote || "") === e.name && !e.is_dir
+      () => (panel as any).__onRowPick?.("remote", e),
+      () => sftpSelIs(panel, "remote", e.name)
     );
   }
   status(`${entries.length} ${entries.length === 1 ? "item" : "items"} · ${s.host}:${s.path || "~"}`);
@@ -1679,9 +1913,10 @@ async function closeTab(tabId: number) {
     ed.view?.destroy();
     editorSessions.delete(tabId);
   } else if (sftpSessions.has(tabId)) {
-    const host = (sftpSessions.get(tabId) as SftpSession).host;
+    const s = sftpSessions.get(tabId) as SftpSession;
+    s.unlisten.forEach((u) => u()); // window mouseup net + strip fade timers (U4 invariant)
     sftpSessions.delete(tabId);
-    sftpForgetHost(host);
+    sftpForgetHost(s.host);
   } else {
     return;
   }

@@ -327,6 +327,7 @@ body.sb-collapsed #sidebar > :not(#btn-expand) { display: none; }
 @media (prefers-reduced-motion: reduce) {
   .spinner { animation: none; }
   .xfer-bar.on::before { animation: none; }
+  .xf-row { transition: none; }
 }
 
 /* sftp browser */
@@ -343,7 +344,7 @@ body.sb-collapsed #sidebar > :not(#btn-expand) { display: none; }
 }
 .sftp-row {
   display: flex; align-items: center; gap: 10px;
-  height: 32px; padding: 6px 10px;
+  height: 28px; padding: 0 10px; /* U5 §4.4: 32 → 28 */
   cursor: pointer;
   border-bottom: 1px solid var(--border-soft);
   transition: background-color 120ms ease;
@@ -365,9 +366,22 @@ body.sb-collapsed #sidebar > :not(#btn-expand) { display: none; }
   display: inline-flex; align-items: center; justify-content: center;
 }
 .sftp-row .dl:hover { background: var(--hover); color: var(--fg); }
-.sftp-foot { display: flex; gap: 8px; }
-.sftp-foot input.sftp-local { flex: 1; font-family: var(--font-mono); }
-.sftp-status { font-size: 12px; color: var(--muted); min-height: 16px; }
+/* U5 §4.4 — transfer strip per-file (menggantikan foot lama + status tunggal) */
+.xfer-strip { display: flex; flex-direction: column; gap: 2px; flex: 0 0 auto; border: 1px solid var(--border-soft); border-radius: 6px; background: var(--bg2); padding: 2px 8px; }
+.xs-rows { display: flex; flex-direction: column; gap: 2px; max-height: 64px; overflow-y: auto; }
+.xf-row { display: flex; align-items: center; gap: 8px; min-height: 20px; font-size: 11px; transition: opacity 300ms ease; }
+.xf-row.out { opacity: 0; }
+.xf-ico { color: var(--muted); flex: 0 0 auto; }
+.xf-name { color: var(--fg); flex: 0 1 auto; min-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.xf-path { font-family: var(--font-mono); color: var(--muted); flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.xf-size { font-family: var(--font-mono); color: var(--muted); flex: 0 0 auto; }
+.xf-state { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; color: var(--muted); }
+.xf-row.ok .xf-state { color: var(--ok); }
+.xf-row.fail .xf-state { color: var(--danger); }
+.xf-retry { padding: 0 7px; height: 16px; font-size: 11px; border-radius: 4px; border: 1px solid var(--danger); color: var(--danger); background: transparent; }
+.xf-retry:hover { background: var(--hover); }
+.sftp-hint { font-size: 11px; color: var(--muted); flex: 0 0 auto; }
+.sftp-status { font-size: 12px; color: var(--muted); min-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sftp-status.ok { color: var(--ok); }
 .sftp-status.err { color: var(--danger); }
 
@@ -375,8 +389,16 @@ body.sb-collapsed #sidebar > :not(#btn-expand) { display: none; }
 .ed-wrap { display: flex; flex-direction: column; height: 100%; }
 .sftp-panes { display: flex; gap: 8px; flex: 1; min-height: 0; }
 .sftp-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--border-soft); border-radius: 6px; overflow: hidden; }
-.pane-head { padding: 5px 8px; background: var(--bg2); color: var(--muted); font-size: 11px; letter-spacing: .4px; text-transform: uppercase; }
-.sftp-row.sel { background: var(--hover); outline: 1px solid var(--accent); }
+.pane-head { height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 8px; background: var(--bg2); color: var(--muted); font-size: 11px; letter-spacing: .4px; text-transform: uppercase; border-bottom: 1px solid var(--border-soft); flex: 0 0 28px; }
+.pane-head .pane-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* U5 §4.4 — chip sumber (▲, --warn) / target (▼, --accent2) di pane head */
+.pane-head .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; text-transform: none; letter-spacing: 0; border-radius: 4px; padding: 1px 6px; background: var(--hover); max-width: 46%; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pane-head .chip.src { color: var(--warn); }
+.pane-head .chip.dst { color: var(--accent2); }
+.pane-head .chip:empty { display: none; }
+.pane-head .ph-acts { margin-left: auto; display: inline-flex; gap: 4px; flex: 0 0 auto; }
+.pane-head .ph-acts button { height: 22px; padding: 0 8px; font-size: 11px; border-radius: 4px; }
+.sftp-row.sel { background: var(--sel); outline: 1px solid var(--accent); } /* §6.4.2: bg+outline WAJIB berdua — bg alone FAIL non-text */
 .sftp-pane.drop-target { outline: 2px dashed var(--accent); outline-offset: -3px; }
 body.sftp-dragging { user-select: none; cursor: grabbing; }
 .loc-list { flex: 1; overflow-y: auto; padding: 4px; }
