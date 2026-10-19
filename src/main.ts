@@ -413,6 +413,30 @@ function refreshHostDots() {
   });
 }
 
+// app version for the status bar; keep in sync with package.json / tauri.conf.json
+const APP_VERSION = "v0.10.0";
+
+// status bar updater (§4.3): kiri "user@host · auth:key|pw · N sesi" dari
+// sesi aktif, kanan indikator transfer + versi. Dipanggil dari activateTab
+// (semua jenis tab), openTerminal/splitTerminal/closeTab dan busy() SFTP.
+function updateStatusBar() {
+  const id = activeTab;
+  const hostName =
+    sessions.get(id as number)?.host ??
+    splitSessions.get(id as number)?.host ??
+    sftpSessions.get(id as number)?.host ??
+    editorSessions.get(id as number)?.host;
+  const h = hostName ? hosts.find((x) => x.name === hostName) : undefined;
+  const n = sessions.size + splitSessions.size;
+  const left: string[] = [];
+  if (hostName) left.push(`${h?.user ?? "user"}@${hostName} · auth:${h?.has_password ? "pw" : "key"}`);
+  left.push(`${n} sesi`);
+  const el = document.getElementById("sb-left");
+  if (el) el.textContent = left.join(" · ");
+  const xfer = document.getElementById("sb-xfer");
+  if (xfer) xfer.innerHTML = document.querySelectorAll(".xfer-bar.on").length > 0 ? '<span class="spinner"></span>⇅ transfer' : "⇅ idle";
+}
+
 function moveRowFocus(row: HTMLElement, dir: 1 | -1) {
   const rows = [...document.querySelectorAll<HTMLElement>(".host-item")];
   rows[rows.indexOf(row) + dir]?.focus();
@@ -773,6 +797,7 @@ async function openSftp(host: string) {
     q(".xfer-bar").classList.toggle("on", on);
     (q(".sftp-upload") as HTMLButtonElement).disabled = on;
     (q(".sftp-download") as HTMLButtonElement).disabled = on;
+    updateStatusBar(); // indikator transfer di status bar global (§4.3)
   };
 
   q(".sftp-go").addEventListener("click", () => {
@@ -1373,6 +1398,82 @@ async function splitTerminal(targetTabId: number, sourceTabId: number) {
   const panel = document.querySelector<HTMLElement>(`.panel[data-tab="${targetTabId}"]`);
   if (!srcSession || !panel || panel.classList.contains("split")) return;
   panel.classList.add("split");
+
+  // Arus split layout (§4.3): flex row .term-split — sisi lama, divider 4px,
+  // sisi baru. Drag manual mousedown/mousemove/mouseup (STATE.md #4, bukan
+  // HTML5 DnD); double-click reset 50/50; klik sisi = fokus + underline.
+  const termSplit = document.createElement("div");
+  termSplit.className = "term-split";
+  const leftSide = document.createElement("div");
+  leftSide.className = "term-side focused";
+  const rightSide = document.createElement("div");
+  rightSide.className = "term-side";
+  const divider = document.createElement("div");
+  divider.className = "term-divider";
+  divider.setAttribute("role", "separator");
+  divider.setAttribute("aria-orientation", "vertical");
+  divider.setAttribute("aria-label", "Resize split");
+  divider.title = "Tarik untuk resize · double-click reset 50/50";
+  termSplit.append(leftSide, divider, rightSide);
+  while (panel.firstChild) leftSide.appendChild(panel.firstChild); // host_el + banner pindah
+  panel.appendChild(termSplit);
+
+  const setSplitFocus = (side: HTMLElement) => {
+    leftSide.classList.toggle("focused", side === leftSide);
+    rightSide.classList.toggle("focused", side === rightSide);
+  };
+  // window-level listeners must die with the tab, else they retain the detached
+  // DOM (SEC LOW t_fb1d18d6): splitAbort is pushed into split_session.unlisten,
+  // so the existing closeTab loop removes them.
+  const splitAbort = new AbortController();
+  const splitSig = { signal: splitAbort.signal };
+  let dragX = false;
+  divider.addEventListener("mousedown", (e) => {
+    dragX = true;
+    divider.classList.add("dragging");
+    e.preventDefault();
+  });
+  window.addEventListener(
+    "mousemove",
+    (e) => {
+      if (!dragX) return;
+      const r = termSplit.getBoundingClientRect();
+      const pct = Math.min(80, Math.max(20, ((e.clientX - r.left) / r.width) * 100));
+      leftSide.style.flex = `0 0 ${pct}%`;
+    },
+    splitSig,
+  );
+  const fitSplit = () => {
+    for (const s of [sessions.get(targetTabId), split_session]) {
+      if (s) {
+        s.fit.fit();
+        if (s.ptyId != null) invoke("pty_resize", { id: s.ptyId, cols: s.term.cols, rows: s.term.rows });
+      }
+    }
+  };
+  window.addEventListener(
+    "mouseup",
+    () => {
+      if (!dragX) return;
+      dragX = false;
+      divider.classList.remove("dragging");
+      fitSplit();
+    },
+    splitSig,
+  );
+  divider.addEventListener("dblclick", () => {
+    leftSide.style.flex = "";
+    fitSplit();
+  });
+  leftSide.addEventListener("mousedown", () => {
+    setSplitFocus(leftSide);
+    sessions.get(targetTabId)?.term.focus();
+  });
+  rightSide.addEventListener("mousedown", () => {
+    setSplitFocus(rightSide);
+    split_session.term.focus();
+  });
+
   const host = srcSession.host;
 
   const term = new Terminal({
@@ -1389,8 +1490,8 @@ async function splitTerminal(targetTabId: number, sourceTabId: number) {
   const banner = document.createElement("div");
   banner.className = "term-banner";
   banner.innerHTML = `<span class="spinner"></span>Connecting to ${esc(host)}…`;
-  panel.appendChild(host_el);
-  panel.appendChild(banner);
+  rightSide.appendChild(host_el);
+  rightSide.appendChild(banner);
   term.open(host_el);
 
   host_el.addEventListener("mouseup", () => {
@@ -1411,7 +1512,9 @@ async function splitTerminal(targetTabId: number, sourceTabId: number) {
   });
 
   const split_session: Session = { id: targetTabId, ptyId: null, host, term, fit, banner, unlisten: [] };
+  split_session.unlisten.push(() => splitAbort.abort()); // drop window drag listeners (SEC LOW t_fb1d18d6)
   splitSessions.set(targetTabId, split_session);
+  updateStatusBar();
   term.onData((data) => {
     if (split_session.ptyId != null) invoke("pty_write", { id: split_session.ptyId, data });
   });
@@ -1519,6 +1622,14 @@ function activateTab(tabId: number) {
   });
   const tabEl = document.querySelector(`.tab[data-tab="${tabId}"]`) as HTMLElement | null;
   tabEl?.scrollIntoView({ inline: "nearest" });
+  // split fokus kembali ke sisi utama saat tab diaktifkan (underline ikut).
+  // Query .term-side, bukan indeks children[] — tak tergantung posisi divider.
+  const sides = document.querySelectorAll(`.panel[data-tab="${tabId}"] .term-side`);
+  if (sides.length) {
+    sides[0].classList.add("focused");
+    sides[sides.length - 1].classList.remove("focused");
+  }
+  updateStatusBar();
   const fitOne = (s?: Session) => {
     if (!s) return;
     s.fit.fit();
@@ -1577,6 +1688,7 @@ async function closeTab(tabId: number) {
   document.querySelector(`.tab[data-tab="${tabId}"]`)?.remove();
   document.querySelector(`.panel[data-tab="${tabId}"]`)?.remove();
   refreshHostDots();
+  updateStatusBar();
   if (activeTab === tabId) {
     const remaining = [...sessions.keys(), ...editorSessions.keys(), ...sftpSessions.keys()];
     if (remaining.length) activateTab(remaining[remaining.length - 1]);
@@ -1697,6 +1809,8 @@ window.addEventListener("DOMContentLoaded", () => {
   $("#ssh-recheck").addEventListener("click", recheckBinaries);
   $("#ssh-continue").addEventListener("click", () => closeOverlay("#ssh-modal"));
   // detection off the config-parse path: fire alongside, don't await (NFR-W2-2)
+  $("#sb-ver").textContent = APP_VERSION;
+  updateStatusBar();
   startupBinaryCheck();
   loadHosts();
 });

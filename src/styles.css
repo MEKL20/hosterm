@@ -238,8 +238,36 @@ body.sb-collapsed #sidebar > :not(#btn-expand) { display: none; }
 #panels { flex: 1; position: relative; min-height: 0; }
 .panel { position: absolute; inset: 0; display: none; }
 .panel.active { display: block; }
-.term-host { width: 100%; height: 100%; padding: 8px; background: var(--bg); }
-.panel.split .term-host { width: 50%; height: 100%; float: left; }
+/* terminal well (§4.3): bg --well, padding 8, radius 0 */
+.term-host { width: 100%; height: 100%; padding: 8px; background: var(--well); overflow: hidden; }
+/* split layout (§4.3): flex + divider 4px bisa digeser, bukan float (B1) */
+.term-split { display: flex; width: 100%; height: 100%; min-width: 0; }
+.term-side { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+.term-side.focused { border-top: 2px solid var(--accent); } /* arus motif */
+.term-side.focused .term-host { padding-top: 6px; } /* kompensasi 2px underline */
+.term-divider {
+  flex: 0 0 4px;
+  width: 4px;
+  background: var(--border-soft);
+  cursor: col-resize;
+}
+.term-divider:hover, .term-divider.dragging { background: var(--accent); }
+
+/* status bar global (§4.3, G1): selalu tampil, 24px --bar-h, bg --bg2 */
+#status-bar {
+  flex: 0 0 var(--bar-h);
+  height: var(--bar-h);
+  background: var(--bg2);
+  border-top: 1px solid var(--border-soft);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+#status-bar .sb-right { margin-left: auto; display: inline-flex; gap: 16px; align-items: center; }
+#sb-left, #sb-xfer, #sb-ver { font-family: var(--font-mono); font-size: 11px; }
 .tab.drop-target { outline: 2px dashed var(--accent); outline-offset: -2px; }
 .tab.dragging { opacity: 0.5; }
 /* split drop-zone: statik di ujung kanan tab bar, menyala saat tab didrag (§4.2) */

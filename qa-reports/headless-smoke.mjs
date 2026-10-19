@@ -85,7 +85,12 @@ const server = createServer((req, res) => {
   res.setHeader("content-type", MIME[extname(p)] || "text/plain");
   res.end(readFileSync(p));
 });
-await new Promise((r) => server.listen(4199, r));
+// Fail fast with an actionable message instead of an unhandled 'EADDRINUSE'
+// stack (QA t_81aec02e: stale server from a previous run holding 4199).
+await new Promise((resolve, reject) => {
+  server.once("error", (e) => reject(new Error(`port 4199 busy — kill the stale smoke server: ${e.code || e.message}`)));
+  server.listen(4199, resolve);
+});
 
 const browser = await chromium.launch();
 const page = await browser.newPage();
@@ -114,6 +119,19 @@ await page.addInitScript(() => {
       if (cmd === "plugin:event|unlisten") return Promise.resolve("");
       return globalThis.__invokeImpl(cmd, args);
     },
+  };
+});
+await page.addInitScript(() => {
+  // Track AbortController signals passed to window listeners (U4 split drag).
+  // Each split registers its mousemove/mouseup under ONE shared signal; if the
+  // split is torn down, that signal must be aborted (SEC LOW t_fb1d18d6 fix).
+  // Scoped to the two drag types so library signals can't pollute the count.
+  window.__sigList = [];
+  const origAdd = window.addEventListener.bind(window);
+  window.addEventListener = (type, fn, opts) => {
+    const sig = (type === "mousemove" || type === "mouseup") && opts && typeof opts === "object" ? opts.signal : undefined;
+    if (sig && !window.__sigList.includes(sig)) window.__sigList.push(sig);
+    return origAdd(type, fn, opts);
   };
 });
 // CSP-violation collector (AC R1.4): securitypolicyviolation events for the whole run
@@ -287,6 +305,13 @@ await page.locator(".sftp-list .sftp-row", { hasText: "notes.txt" }).first().dbl
 await page.waitForTimeout(500);
 const cmContent = await page.locator(".cm-content").textContent();
 check("editor opens with mocked file", cmContent.includes("hello editor"), cmContent.slice(0, 40));
+// U4 height chain (EPIC-TSD pitfall): editor wrap still fills its panel
+const edChain = await page.evaluate(() => {
+  const panel = document.querySelector(".panel.active");
+  const w = panel.querySelector(".ed-wrap");
+  return { ph: panel.offsetHeight, wh: w ? w.offsetHeight : -1 };
+});
+check("U4: ed-wrap fills panel (height chain)", edChain.wh === edChain.ph, JSON.stringify(edChain));
 
 // 5. dirty dot appears after edit
 await page.locator(".cm-content").click();
@@ -474,6 +499,89 @@ const w1 = await splitPanel.locator(".term-host").first().evaluate((el) => el.ge
 const w2 = await splitPanel.locator(".term-host").nth(1).evaluate((el) => el.getBoundingClientRect().width);
 check("split panes side-by-side ~50/50", Math.abs(w1 - w2) < 30, `w1=${Math.round(w1)} w2=${Math.round(w2)}`);
 
+// ---- U4: terminal well + divider split + status bar (EPIC-TSD §U4, redesign §4.3) ----
+const wellBg = await splitPanel.locator(".term-host").first().evaluate((el) => getComputedStyle(el).backgroundColor);
+check("U4: term-host well bg --well #020203", wellBg === "rgb(2, 2, 3)", wellBg);
+const divBox = await splitPanel.locator(".term-divider").boundingBox();
+check("U4: split divider is 4px", !!divBox && Math.round(divBox.width) === 4, `w=${divBox && Math.round(divBox.width)}`);
+const divGeo = await splitPanel.locator(".term-split").evaluate((el) => {
+  const [a, d, b] = [...el.children].map((c) => c.getBoundingClientRect());
+  return { g1: Math.round(d.left - a.right), g2: Math.round(b.left - d.right) };
+});
+check("U4: divider sits between the two sides", divGeo.g1 >= -1 && divGeo.g2 >= -1, JSON.stringify(divGeo));
+// drag manual mouse (mousedown/mousemove/mouseup — STATE.md #4): ratio changes
+const sidePct = () => splitPanel.evaluate((el) => {
+  const total = el.querySelector(".term-split").getBoundingClientRect().width;
+  const [l, r] = [...el.querySelectorAll(".term-side")].map((s) => (s.getBoundingClientRect().width / total) * 100);
+  return { l: Math.round(l * 10) / 10, r: Math.round(r * 10) / 10 };
+});
+await page.mouse.move(divBox.x + divBox.width / 2, divBox.y + divBox.height / 2);
+await page.mouse.down();
+const dragCol = await splitPanel.locator(".term-divider").evaluate((el) => getComputedStyle(el).backgroundColor);
+await page.mouse.move(divBox.x + 60, divBox.y + 10, { steps: 6 });
+await page.mouse.up();
+await page.waitForTimeout(250);
+const dragged = await sidePct();
+check("U4: divider lights --accent while dragging", dragCol === "rgb(0, 217, 146)", dragCol);
+check("U4: divider drag resizes split (manual mouse)",
+  Math.abs(dragged.l - dragged.r) > 2 && dragged.l > 40 && dragged.r < 60, JSON.stringify(dragged));
+await splitPanel.locator(".term-divider").dblclick();
+await page.waitForTimeout(250);
+const reset = await sidePct();
+check("U4: divider dblclick resets 50/50", Math.abs(reset.l - 50) <= 2 && Math.abs(reset.r - 50) <= 2, JSON.stringify(reset));
+// focus follows clicked side: underline 2px --accent (arus motif)
+await splitPanel.locator(".term-side").nth(1).click();
+const focIdx1 = await splitPanel.evaluate((el) => [...el.querySelectorAll(".term-side")].findIndex((s) => s.classList.contains("focused")));
+await splitPanel.locator(".term-side").nth(0).click();
+const focUl = await splitPanel.locator(".term-side.focused").evaluate((el) => {
+  const cs = getComputedStyle(el);
+  return `${cs.borderTopWidth} ${cs.borderTopColor}`;
+});
+check("U4: focus follows clicked side", focIdx1 === 1, `focused=${focIdx1}`);
+check("U4: focused side underline 2px --accent", focUl === "2px rgb(0, 217, 146)", focUl);
+// U4 teardown hygiene (SEC LOW t_fb1d18d6): split drag listeners share one
+// AbortController signal, registered on window and aborted by closeTab.
+const sigAfterSplit = await page.evaluate(() => ({
+  n: window.__sigList.length,
+  live: window.__sigList.filter((s) => !s.aborted).length,
+}));
+check("U4: split registers an abortable window-listener signal",
+  sigAfterSplit.n >= 1 && sigAfterSplit.live === sigAfterSplit.n, JSON.stringify(sigAfterSplit));
+// status bar global: always visible, left "user@host · auth:key · N sesi"
+const sb = await page.evaluate(() => {
+  const el = document.getElementById("status-bar");
+  return { h: el.offsetHeight, vis: !!el.offsetParent, left: document.getElementById("sb-left").textContent, ver: document.getElementById("sb-ver").textContent };
+});
+check("U4: status bar always visible, 24px", sb.vis && sb.h === 24, `h=${sb.h} vis=${sb.vis}`);
+check("U4: status bar left format user@host · auth:key · N sesi",
+  sb.left === "admin@db-core · auth:key · 3 sesi", sb.left);
+check("U4: status bar shows app version", /^v\d+\.\d+\.\d+$/.test(sb.ver), sb.ver);
+const cnt = (t) => Number((t.match(/(\d+) sesi/) || [])[1]);
+await page.locator(".host-item", { hasText: "prod-web" }).first().locator(".h-name").click();
+await page.waitForTimeout(400);
+const sbLeft2 = await page.locator("#sb-left").textContent();
+check("U4: status bar session count increments on tab open", cnt(sbLeft2) === cnt(sb.left) + 1, `${sb.left} -> ${sbLeft2}`);
+// activateTab restores split focus to the first .term-side (QA nit t_81aec02e:
+// query by class, not positional children[] of .term-split). Re-activate the
+// split tab first — opening prod-web above hid the split panel.
+await page.locator(".tab", { hasText: "db-core" }).first().click();
+await page.waitForTimeout(300);
+await splitPanel.locator(".term-side").nth(1).click();
+const preReactivate = await splitPanel.evaluate((el) =>
+  [...el.querySelectorAll(".term-side")].findIndex((s) => s.classList.contains("focused")));
+await page.locator(".tab", { hasText: "prod-web" }).first().click();
+await page.waitForTimeout(300);
+await page.locator(".tab", { hasText: "db-core" }).first().click();
+await page.waitForTimeout(300);
+const focBack = await splitPanel.evaluate((el) =>
+  [...el.querySelectorAll(".term-side")].findIndex((s) => s.classList.contains("focused")));
+check("U4: activateTab restores split focus to first side",
+  preReactivate === 1 && focBack === 0, `pre=${preReactivate} post=${focBack}`);
+// AC4: legacy float layout gone — split is flex + divider now
+const cssU4 = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+check("U4: legacy 'float: left' split layout removed (grep 0)", !/float:\s*left/i.test(cssU4));
+
+
 // 9g1. paste normalization: CRLF clipboard -> single LF lines, no phantom Enter
 const norm = await page.evaluate(() => {
   // pasteNormalize is module-scoped; recreate the exact same logic here to
@@ -523,6 +631,15 @@ const listScrollable = await sftpPanel.locator(".sftp-list").evaluate((el) => {
 const footVisible = listScrollable.footVisible && listScrollable.footTop < listScrollable.vh;
 check("sftp wrap fits viewport (list scrollable)", listScrollable.wrapFits);
 check("upload/download buttons visible", footVisible);
+// U4 height chain: panel == #panels container even with the 24px status bar eating #main
+const chain = await page.evaluate(() => {
+  const panels = document.getElementById("panels");
+  const panel = document.querySelector(".panel.active");
+  const wrap = panel.querySelector(".sftp-wrap");
+  return { ph: panel.offsetHeight, ch: panels.clientHeight, wh: wrap.offsetHeight };
+});
+check("U4: panel == #panels height (status bar ate 24px)", chain.ph === chain.ch, JSON.stringify(chain));
+check("U4: sftp-wrap fills panel (height chain)", chain.wh === chain.ph, JSON.stringify(chain));
 
 // 9h. sidebar resizer: drag divider widens the host list
 await page.evaluate(() => { localStorage.removeItem("sb-width"); });
@@ -559,6 +676,20 @@ for (let i = 0; i < 10 && (await page.locator(".tab").count()) > 0; i++) {
   await page.locator(".tab .x").first().click();
   await page.waitForTimeout(300);
 }
+// U4: status bar survives with zero tabs (G1 — always visible), count drops to 0
+const sbIdle = await page.evaluate(() => ({
+  vis: !!document.getElementById("status-bar").offsetParent,
+  h: document.getElementById("status-bar").offsetHeight,
+  left: document.getElementById("sb-left").textContent,
+}));
+check("U4: status bar visible with 0 tabs, '0 sesi'", sbIdle.vis && sbIdle.h === 24 && sbIdle.left === "0 sesi", JSON.stringify(sbIdle));
+// U4 teardown hygiene (SEC LOW t_fb1d18d6): every split signal aborted after closeTab
+const sigAfterClose = await page.evaluate(() => {
+  const live = window.__sigList.filter((s) => !s.aborted);
+  return { n: window.__sigList.length, live: live.length };
+});
+check("U4: split window listeners released on closeTab (no leak)",
+  sigAfterClose.n >= 1 && sigAfterClose.live === 0, JSON.stringify(sigAfterClose));
 // (1) single-line 28px row; subtitle is a title tooltip, not a second element
 const rowH = await page.locator(".host-item").first().evaluate((el) => el.offsetHeight);
 check("host row is exactly 28px (single line)", rowH === 28, `h=${rowH}`);
