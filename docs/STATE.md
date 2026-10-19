@@ -27,3 +27,8 @@ Desktop SSH/SFTP client, Tauri v2 + TypeScript, Windows-first (WebView2) but dev
 
 ## Release (orchestrator does this, not children)
 Commit → bump version (package.json, tauri.conf.json, Cargo.toml + `cargo update -p hosterm --offline`) → commit → tag → push tag → poll Actions API → report release URL.
+
+## Risks & waivers
+| Risiko/waiver | Status | Basis | Cadangan |
+|---|---|---|---|
+| SEC-5 runtime pass WebView2 Windows — **WAIVED** (MEKL, 19 Okt) | Terbuka, risiko rendah | Spike: policy memblokir payload di Chromium; smoke 51/51 violation==0; WebView2 = Chromium base | Versi runtime WebView2 bisa beda perilaku; rekomendasi wave depan: self-hosted Windows runner + tauri-driver biar matrix otomatis |
