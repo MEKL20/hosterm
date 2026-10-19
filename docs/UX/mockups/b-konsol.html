@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hosterm — mockup B "Konsol" (tiling + command palette)</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+/* ===== Arah B — "Konsol": app = window manager mini =====
+   Semua chrome monospace, sidebar jadi buffer list ala Vim,
+   tiling grid hairline, navigasi primer via command palette Ctrl+P. */
+body { font-family: var(--font-mono); }
+#sidebar { width: 244px; font-family: var(--font-mono); }
+.brand { font-weight: 400; }
+.buf-head, .grp {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
+  color: var(--muted); padding: 10px 4px 4px;
+}
+.buf {
+  display: flex; gap: 8px; align-items: center;
+  height: 26px; padding: 0 8px; border-radius: 4px;
+  cursor: pointer; white-space: nowrap; font-size: 12px;
+}
+.buf:hover { background: var(--panel); }
+.buf.active { background: var(--sel); outline: 1px solid var(--accent); }
+.buf .n { color: var(--muted); width: 14px; text-align: right; flex: 0 0 auto; }
+.buf .kind { color: var(--accent2); width: 42px; flex: 0 0 auto; }
+.buf .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.buf .flag { color: var(--warn); }
+/* tiling: hairline grid, tanpa radius, resize keyboard */
+#tile {
+  flex: 1; display: flex; min-height: 0;
+  background: var(--border-soft); gap: 1px; padding: 1px;
+}
+#tile .col { flex: 1; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+#tile .col.wide { flex: 1.7; }
+.tile {
+  background: var(--well); flex: 1; min-height: 0; overflow: hidden;
+  display: flex; flex-direction: column; gap: 2px;
+  font-family: var(--font-mono); font-size: 12px; padding: 8px 10px;
+}
+.tile.focused { box-shadow: inset 0 2px 0 var(--accent); }
+.tile .th { color: var(--muted); font-size: 11px; padding-bottom: 4px; }
+.tile .prompt { color: var(--accent2); }
+.tile .dim { color: var(--muted); }
+/* command palette: gerbang semua aksi */
+.palette {
+  position: absolute; top: 56px; left: 50%; transform: translateX(-50%);
+  width: 540px; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.55);
+  z-index: 50; overflow: hidden; font-family: var(--font-mono);
+}
+.palette input {
+  border: none; border-bottom: 1px solid var(--border-soft);
+  border-radius: 0; font-family: var(--font-mono); font-size: 13px;
+}
+.p-row { display: flex; gap: 10px; align-items: center; padding: 7px 12px; font-size: 12px; cursor: pointer; }
+.p-row .p-kind { color: var(--accent2); width: 52px; flex: 0 0 auto; }
+.p-row .p-hint { margin-left: auto; color: var(--muted); font-size: 11px; flex: 0 0 auto; }
+.p-row.sel { background: var(--sel); outline: 1px solid var(--accent); outline-offset: -1px; }
+#status-bar { font-family: var(--font-mono); }
+</style>
+</head>
+<body>
+<div class="mock-note"><b>Arah B — "Konsol"</b> — chrome full mono, sidebar = buffer list ala Vim, tiling grid hairline (resize keyboard), command palette <span class="kbd">Ctrl+P</span> jadi gerbang utama semua aksi. <b>Trade-off:</b> mouse-first jadi warga kelas dua, palette = komponen baru ber-state sendiri (biaya besar), melanggar DESIGN.md ("chrome stays sans", ENERGY 1). Bukan arah rekomendasi.</div>
+
+<div class="frame">
+  <div id="app">
+    <div id="sidebar">
+      <div class="sidebar-head">
+        <span class="brand">hosterm</span>
+        <span class="head-acts"><button class="icon" title="add host">+</button></span>
+      </div>
+      <div id="host-list">
+        <div class="buf-head">buffers</div>
+        <div class="buf active"><span class="n">1</span><span class="kind">term</span><span class="nm">prod-web</span></div>
+        <div class="buf"><span class="n">2</span><span class="kind">term</span><span class="nm">db-core</span></div>
+        <div class="buf"><span class="n">3</span><span class="kind">sftp</span><span class="nm">prod-web:/var/www</span></div>
+        <div class="buf"><span class="n">4</span><span class="kind">edit</span><span class="nm">nginx.conf</span><span class="flag" title="dirty">+</span></div>
+        <div class="grp">hosts · ~/.ssh/config</div>
+        <div class="buf"><span class="n">&nbsp;</span><span class="kind">host</span><span class="nm">prod-web</span></div>
+        <div class="buf"><span class="n">&nbsp;</span><span class="kind">host</span><span class="nm">db-core</span></div>
+        <div class="buf"><span class="n">&nbsp;</span><span class="kind">host</span><span class="nm">jumphost</span></div>
+        <div class="buf"><span class="n">&nbsp;</span><span class="kind">host</span><span class="nm">staging-app</span></div>
+      </div>
+      <div class="sidebar-foot">
+        <button id="btn-raw">raw config</button>
+        <button id="btn-reload" class="icon" title="reload">⟳</button>
+      </div>
+    </div>
+
+    <div id="main" style="position:relative">
+      <div id="tile">
+        <div class="col wide">
+          <div class="tile focused">
+            <div class="th">%1 · prod-web · mekl@prod-web · key · 41m</div>
+            <div><span class="prompt">mekl@prod-web</span>:<span style="color:#bb9af7">~</span>$ tail -f /var/log/nginx/access.log</div>
+            <div class="dim">10.2.1.9 - - [19/Oct/2026:09:12:44 +0700] "GET / HTTP/1.1" 200 4312</div>
+            <div class="dim">10.2.1.4 - - [19/Oct/2026:09:12:46 +0700] "POST /api/login HTTP/1.1" 200 118</div>
+            <div class="dim">84.21.7.3 - - [19/Oct/2026:09:12:51 +0700] "GET /wp-admin HTTP/1.1" 404 146</div>
+            <div><span class="prompt">mekl@prod-web</span>:<span style="color:#bb9af7">~</span>$ <span style="background:var(--accent2);color:var(--bg)">&nbsp;</span></div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="tile">
+            <div class="th">%2 · db-core · 12m</div>
+            <div><span class="prompt">mekl@db-core</span>:~$ htop</div>
+            <div class="dim">cpu [||||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;] 41%&nbsp;&nbsp;mem [|||&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;] 2.1G/15G</div>
+            <div class="dim">postgres 14217 S 8.2 3.1 postgres: writer</div>
+          </div>
+          <div class="tile">
+            <div class="th">%3 · sftp prod-web:/var/www</div>
+            <div class="dim">-rw-r--r-- 12.4M 09:02 build.tar.gz</div>
+            <div class="dim">drwxr-xr-x&nbsp;&nbsp;dir oct18 releases/</div>
+            <div class="dim">current -&gt; releases/7</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="palette" role="dialog" aria-label="command palette">
+        <input value="prod" placeholder="fuzzy: host / file / action…" aria-label="command palette input">
+        <div class="p-row sel"><span class="p-kind">host</span>prod-web — open terminal<span class="p-hint">↵</span></div>
+        <div class="p-row"><span class="p-kind">action</span>prod-web — open sftp<span class="p-hint">ctrl-s</span></div>
+        <div class="p-row"><span class="p-kind">file</span>prod-web:/etc/nginx/nginx.conf — edit<span class="p-hint">ctrl-e</span></div>
+        <div class="p-row"><span class="p-kind">tile</span>split right (vertical)<span class="p-hint">ctrl-\</span></div>
+        <div class="p-row"><span class="p-kind">tile</span>focus next pane<span class="p-hint">ctrl-n</span></div>
+      </div>
+
+      <div id="status-bar">
+        <span class="mono">-- NORMAL --</span>
+        <span class="mono">tile 2×1+1</span>
+        <span class="sb-right">
+          <span class="mono">ctrl+p palette · alt+hjkl resize · ctrl+w close</span>
+          <span class="mono">v0.8.1</span>
+        </span>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

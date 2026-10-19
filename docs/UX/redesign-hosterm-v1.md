@@ -291,6 +291,8 @@ panel 0 · xfer/status sticky auto · overlay/modal 50 · tab context menu 1000.
 | `mockups/editor.html` | Editor view: ed-bar + dirty unsaved, gutter+syntax ala CodeMirror, ed-status, status bar |
 | `mockups/styles.css` | tokens + komponen bersama (dark-first, semua §6) |
 | `mockups/dialog-password-host.html` | Dua varian dialog host: password kosong & password tersimpan (badge sidecar) + state key |
+| `mockups/b-konsol.html` | *(addendum, dibuat atas permintaan MEKL untuk perbandingan)* Arah B "Konsol": chrome mono, buffer list, tiling hairline, command palette — mockup pembanding, bukan arah rekomendasi |
+| `mockups/c-kokpit.html` | *(addendum, dibuat atas permintaan MEKL untuk perbandingan)* Arah C "Kokpit": host card bermetrik, dashboard sesi, SFTP kolom perm/mtime + preview — mockup pembanding, bukan arah rekomendasi |
 
 Affordance manual drag (STATE.md #4) dieksplisitkan di mockup SFTP: chip sumber/target, outline dashed drop-target, hint statik "drag manual mouse — HTML5 DnD tidak dipakai", tombol transfer di pane head, dan label shortcut Space/Ctrl+Enter. Tidak ada `draggable=` di mana pun.
 

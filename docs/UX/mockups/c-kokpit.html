@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hosterm — mockup C "Kokpit" (dashboard)</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+/* ===== Arah C — "Kokpit": dashboard-style =====
+   Sidebar = navigator workspace (host card kaya metrik),
+   panel ringkasan sesi, SFTP dapat kolom perm/mtime + preview. */
+#sidebar { width: 260px; }
+.host-card {
+  border: 1px solid var(--border-soft); border-radius: 6px;
+  background: var(--bg2); padding: 10px; margin: 6px 8px;
+}
+.host-card:hover { border-color: var(--border); }
+.host-card .hc-top { display: flex; gap: 8px; align-items: center; }
+.host-card .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: 0 0 auto; }
+.host-card .dot.idle { background: var(--muted); }
+.host-card .hc-name { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.host-card .hc-sub {
+  color: var(--muted); font-size: 11px; font-family: var(--font-mono);
+  padding: 3px 0 6px 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.host-card .hc-metrics {
+  display: flex; gap: 12px; font-size: 11px; color: var(--muted);
+  padding: 0 0 8px 16px; flex-wrap: wrap;
+}
+.host-card .hc-metrics b { color: var(--fg); font-weight: 500; }
+.host-card .hc-acts { display: flex; gap: 6px; padding-left: 16px; }
+.host-card .hc-acts button { padding: 4px 10px; font-size: 11px; border-radius: 4px; }
+/* dashboard ringkasan sesi */
+#dash { display: flex; gap: 8px; padding: 10px 12px 0; flex: 0 0 auto; }
+.dash-card {
+  flex: 1; min-width: 0; border: 1px solid var(--border-soft); border-radius: 6px;
+  background: var(--bg2); padding: 10px 12px; font-size: 12px;
+}
+.dash-card .dc-t { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .5px; }
+.dash-card .dc-v { font-size: 18px; font-weight: 600; margin: 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dash-card .dc-s { color: var(--muted); font-size: 11px; }
+.meter { height: 6px; border-radius: 3px; background: var(--hover); margin-top: 6px; overflow: hidden; }
+.meter i { display: block; height: 100%; background: var(--accent); }
+.meter i.warn { background: var(--warn); }
+/* SFTP: kolom perm/mtime + preview */
+.sftp-toolbar input { min-width: 0; } /* input flex butuh ini agar pane bisa shrink */
+.sftp-row .perm { font-family: var(--font-mono); font-size: 11px; color: var(--muted); width: 92px; flex: 0 0 auto; }
+.sftp-row .mt { font-family: var(--font-mono); font-size: 11px; color: var(--muted); width: 92px; text-align: right; flex: 0 0 auto; }
+.preview {
+  width: 250px; flex: 0 0 auto; border: 1px solid var(--border-soft); border-radius: 6px;
+  background: var(--well); font-family: var(--font-mono); font-size: 11px; line-height: 1.5;
+  color: var(--muted); padding: 10px; overflow: hidden; white-space: pre;
+}
+.preview .pv-t {
+  color: var(--fg); font-size: 12px; padding-bottom: 6px;
+  font-family: var(--font-sans); white-space: normal;
+}
+</style>
+</head>
+<body>
+<div class="mock-note"><b>Arah C — "Kokpit"</b> — sidebar jadi navigator workspace: host card multi-lini dengan metrik (uptime, last connect, quick actions), panel ringkasan sesi di atas konten, SFTP dapat kolom permission/mtime + preview file. <b>Trade-off:</b> kartu menghabiskan ruang tanpa menambah aksi (dekorasi kosong), terminal — pusat layar — tergerus, dan menarik fitur monitoring yang PRD taruh di luar scope v1. Bukan arah rekomendasi.</div>
+
+<!-- ============ FRAME 1: main view ============ -->
+<div class="frame">
+  <div id="app">
+    <div id="sidebar">
+      <div class="sidebar-head">
+        <span class="brand">hosterm</span>
+        <span class="head-acts"><button class="icon" title="add host">+</button></span>
+      </div>
+      <input id="host-search" placeholder="Search hosts…" aria-label="Search hosts">
+      <div id="host-list">
+        <div class="group-label">Produksi</div>
+        <div class="host-card">
+          <div class="hc-top"><span class="dot"></span><span class="hc-name">prod-web</span><span class="kbd">2 sesi</span></div>
+          <div class="hc-sub">mekl@10.0.0.11:22 · key</div>
+          <div class="hc-metrics"><span>up <b>42d</b></span><span>last <b>2m</b></span><span>cpu <b>41%</b></span></div>
+          <div class="hc-acts"><button>⌘ Terminal</button><button>⇅ SFTP</button><button>✎</button></div>
+        </div>
+        <div class="host-card">
+          <div class="hc-top"><span class="dot"></span><span class="hc-name">db-core</span><span class="kbd">1 sesi</span></div>
+          <div class="hc-sub">mekl@10.0.0.12:22 · key</div>
+          <div class="hc-metrics"><span>up <b>7d</b></span><span>last <b>12m</b></span><span>cpu <b>8%</b></span></div>
+          <div class="hc-acts"><button>⌘ Terminal</button><button>⇅ SFTP</button><button>✎</button></div>
+        </div>
+        <div class="group-label">Lab</div>
+        <div class="host-card">
+          <div class="hc-top"><span class="dot idle"></span><span class="hc-name">jumphost</span></div>
+          <div class="hc-sub">mekl@lab.my.id:22022 · key</div>
+          <div class="hc-metrics"><span>up <b>—</b></span><span>last <b>3h</b></span></div>
+          <div class="hc-acts"><button>⌘ Terminal</button><button>⇅ SFTP</button><button>✎</button></div>
+        </div>
+      </div>
+      <div class="sidebar-foot">
+        <button id="btn-raw">Raw config</button>
+        <button id="btn-reload" class="icon" title="Reload hosts">⟳</button>
+      </div>
+    </div>
+
+    <div id="main">
+      <div id="tabs">
+        <div class="tab active"><span class="t-ico">⌘</span><span class="t-label">prod-web</span><button class="x" aria-label="close">×</button></div>
+        <div class="tab"><span class="t-ico">⌘</span><span class="t-label">db-core</span><button class="x" aria-label="close">×</button></div>
+        <div class="tab kind-sftp"><span class="t-ico">⇅</span><span class="t-label">prod-web</span><button class="x" aria-label="close">×</button></div>
+      </div>
+
+      <div id="dash">
+        <div class="dash-card">
+          <div class="dc-t">sesi aktif</div>
+          <div class="dc-v">3</div>
+          <div class="dc-s">2 terminal · 1 sftp</div>
+        </div>
+        <div class="dash-card">
+          <div class="dc-t">prod-web</div>
+          <div class="dc-v">41% cpu</div>
+          <div class="dc-s">up 42d · mem 2.1G/15G</div>
+          <div class="meter"><i style="width:41%"></i></div>
+        </div>
+        <div class="dash-card">
+          <div class="dc-t">db-core</div>
+          <div class="dc-v">8% cpu</div>
+          <div class="dc-s">up 7d · mem 6.4G/15G</div>
+          <div class="meter"><i style="width:8%"></i></div>
+        </div>
+        <div class="dash-card">
+          <div class="dc-t">transfer</div>
+          <div class="dc-v">1 aktif</div>
+          <div class="dc-s">build.tar.gz → /var/www</div>
+          <div class="meter"><i class="warn" style="width:64%"></i></div>
+        </div>
+      </div>
+
+      <div id="panels">
+        <div class="panel">
+          <div class="term-split">
+            <div class="term-host">
+              <div><span class="prompt">mekl@prod-web</span>:<span style="color:#bb9af7">~</span>$ tail -f /var/log/nginx/access.log</div>
+              <div class="dim">10.2.1.9 - - [19/Oct/2026:09:12:44 +0700] "GET / HTTP/1.1" 200 4312</div>
+              <div class="dim">10.2.1.4 - - [19/Oct/2026:09:12:46 +0700] "POST /api/login HTTP/1.1" 200 118</div>
+              <div><span class="prompt">mekl@prod-web</span>:<span style="color:#bb9af7">~</span>$</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="status-bar">
+        <span class="mono">prod-web · 3 sesi</span>
+        <span class="sb-right"><span class="sb-live">⇅ 64%</span><span class="mono">v0.8.1</span></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ FRAME 2: SFTP + kolom & preview ============ -->
+<div class="frame">
+  <div id="app">
+    <div id="sidebar">
+      <div class="sidebar-head"><span class="brand">hosterm</span><span class="head-acts"><button class="icon">+</button></span></div>
+      <div id="host-list">
+        <div class="group-label">Produksi</div>
+        <div class="host-card">
+          <div class="hc-top"><span class="dot"></span><span class="hc-name">prod-web</span></div>
+          <div class="hc-sub">mekl@10.0.0.11:22 · key</div>
+          <div class="hc-metrics"><span>up <b>42d</b></span><span>last <b>2m</b></span></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="main">
+      <div id="tabs">
+        <div class="tab kind-sftp active"><span class="t-ico">⇅</span><span class="t-label">prod-web</span><button class="x" aria-label="close">×</button></div>
+        <div class="tab"><span class="t-ico">⌘</span><span class="t-label">prod-web</span><button class="x" aria-label="close">×</button></div>
+      </div>
+
+      <div id="panels">
+        <div class="panel">
+          <div class="sftp-wrap">
+            <div class="sftp-panes">
+              <div class="sftp-pane">
+                <div class="pane-head">This PC — local</div>
+                <div class="sftp-toolbar">
+                  <input value="…/deploy" aria-label="local path"><button class="icon" title="Go">↵</button>
+                </div>
+                <div class="sftp-list">
+                  <div class="sftp-row sel"><span class="f-ico">▸</span><span class="nm">build.tar.gz</span><span class="perm">-rw-r--r--</span><span class="sz">12.4 MB</span><span class="mt">09:02</span></div>
+                  <div class="sftp-row"><span class="f-ico">▸</span><span class="nm">notes.md</span><span class="perm">-rw-r--r--</span><span class="sz">2.1 KB</span><span class="mt">Okt 18</span></div>
+                  <div class="sftp-row"><span class="f-ico dir">▸</span><span class="nm">scripts/</span><span class="perm">drwxr-xr-x</span><span class="sz"></span><span class="mt">Okt 15</span></div>
+                </div>
+              </div>
+              <div class="sftp-pane drop-target">
+                <div class="pane-head">prod-web — remote <span class="chip dst">▼ target upload</span></div>
+                <div class="sftp-toolbar">
+                  <input value="/var/www" aria-label="remote path"><button class="icon" title="Go">↵</button>
+                </div>
+                <div class="sftp-list">
+                  <div class="sftp-row"><span class="f-ico dir">▸</span><span class="nm">releases/</span><span class="perm">drwxr-xr-x</span><span class="sz"></span><span class="mt">Okt 18</span></div>
+                  <div class="sftp-row"><span class="f-ico">▸</span><span class="nm">current</span><span class="perm">lrwxrwxrwx</span><span class="sz">11 B</span><span class="mt">Okt 18</span></div>
+                  <div class="sftp-row"><span class="f-ico">▸</span><span class="nm">index.html</span><span class="perm">-rw-r--r--</span><span class="sz">4.2 KB</span><span class="mt">Okt 12</span></div>
+                </div>
+              </div>
+              <div class="preview">
+                <div class="pv-t">Preview — build.tar.gz</div>12.4 MB · gzip tar
+512 file
+─ deploy/
+  ├ app/ (498)
+  ├ migrations/ (9)
+  └ Makefile
+
+mtime 19 Okt 09:02
+owner mekl · 0644</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="status-bar">
+        <span class="mono">prod-web:/var/www</span>
+        <span class="sb-right"><span class="sb-live">idle</span><span class="mono">v0.8.1</span></span>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
