@@ -196,13 +196,13 @@ jobs:
       - name: Attach to release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          # v0.9.0 repair: upload-artifact v4 nests paths under their LCA
-          # (msi/, nsis/), so after download-artifact the files are NOT at
-          # repo root. Match both layouts; fail loudly instead of shipping
-          # an asset-less release (what happened to v0.9.0 on first tag).
+          # v0.9.0 repair: upload-artifact v4 nests paths under their LCA,
+          # so after download-artifact the installers are NOT at repo root.
+          # **/ matches any depth; fail_on_unmatched_files is per-pattern,
+          # so mixed-depth pattern lists self-defeat (second tag run failed
+          # exactly that way). Fail loudly instead of shipping an asset-less
+          # release (first v0.9.0 tag shipped zero assets).
           fail_on_unmatched_files: true
           files: |
-            *.msi
-            *.exe
-            msi/*.msi
-            nsis/*.exe
+            **/*.msi
+            **/*.exe
