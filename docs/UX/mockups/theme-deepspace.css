@@ -1,0 +1,79 @@
+/* hosterm — tema "Deep Space Black" v2
+   Futuristic · Minimalist · Professional Terminal.
+   Override token saja; geometri/komponen = styles.css (arah A "Arus" tak berubah).
+
+   Sumber keputusan (skill-based, bukan ad-hoc):
+   - ui-ux-pro-max products.csv "Developer Tool / IDE" → Dark Mode (OLED) +
+     Minimalism & Swiss Style, fokus blue, dashboard Terminal/Real-Time Monitor.
+   - ui-ux-pro-max styles.csv dark-mode-oled → deep black, midnight-blue undertone,
+     MINIMAL glow, low white emission (teks off-white, bukan pure white).
+   - ui-ux-pro-max styles.csv minimalism-and-swiss-style → tanpa gradien, shadow
+     hanya bila perlu, hierarki tipografi jelas, grid.
+   - ui-ux-pro-max typography "Terminal CLI Monospace" → JetBrains Mono utk konten
+     mono, weight 400 (bold merusak karakter mono), line-height rapat utk density.
+   - popular-web-designs linear.app.md → tangga surface 4 tingkat blue-cool
+     (#08090a → #0f1011 → #191a1b → #28282c), border ladder solid, teks #f7f8f8.
+   - popular-web-designs voltagent.md → abyss canvas + carbon lift + SATU warna
+     sinyal ber-glow ("power-on indicator"), status pastel lembut (low emission).
+   - popular-web-designs x.ai.md → micro-label ber-letter-spacing, border tegas
+     tapi tipis, tanpa noise visual; mono untuk aksen chrome.
+   Kontras semua pasangan kunci diukur skrip WCAG rel-luminance (addendum §6.2). */
+
+:root {
+  color-scheme: dark; /* scrollbar + form control native ikut gelap */
+
+  /* surfaces — tangga Linear, undertone midnight-blue (deep space) */
+  --bg:    #08090e; /* canvas app */
+  --bg2:   #05060a; /* chrome recessed: sidebar, tab bar, status bar (abyss) */
+  --panel: #101219; /* carbon lift: tombol, menu, card */
+  --hover: #1a1d27; /* hover / elevated sekunder */
+  --well:  #010204; /* terminal + editor: OLED blacker-than-black */
+
+  /* text — low white emission (dark-mode-oled), cool off-white */
+  --fg:    #e8ebf4;
+  --muted: #8a93ab;
+
+  /* current — SATU sinyal: electric cyan (products.csv: blue focus).
+     Glow = "power-on indicator" ala VoltAgent, disiplin: hanya state aktif. */
+  --accent:  #22d3ee;
+  --accent2: #5eead4; /* teal: pembeda kind SFTP / prompt */
+
+  /* status — pastel lembut ala VoltAgent (low emission di atas hitam) */
+  --ok:     #7ee787;
+  --warn:   #ffd97a;
+  --danger: #ff9ea1;
+
+  /* lines — border ladder Linear, cool */
+  --border:      #262b3a;
+  --border-soft: #171b28;
+
+  /* selection — aturan lama tetap: --sel TIDAK pernah tanpa outline --accent */
+  --sel: #0d2438;
+
+  /* futuristic touch — minimal glow (dark-mode-oled) */
+  --glow: rgba(34, 211, 238, .22);
+
+  /* type — stack offline-first: font ideal dulu (mesin target: Windows/WebView2
+     punya Cascadia+Segoe; JetBrains/Geist/Inter bila terpasang), fallback lokal.
+     TIDAK ada CDN font runtime — hosterm app offline. */
+  --font-sans: Inter, "Geist Sans", system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, "DejaVu Sans", sans-serif;
+  --font-mono: "JetBrains Mono", "Geist Mono", "Cascadia Code", "SF Mono", ui-monospace, "DejaVu Sans Mono", monospace;
+}
+
+/* Swiss/x.ai finish: micro-label tegas via letter-spacing, bukan warna baru */
+.brand { letter-spacing: 1.5px; }
+.group-label { letter-spacing: .8px; font-weight: 500; }
+.pane-head { letter-spacing: .7px; }
+#status-bar { letter-spacing: .4px; }
+
+/* Glow disiplin — ENERGY 1: hanya penanda fokus/aktif/primary */
+.tab.active { box-shadow: 0 2px 14px -4px var(--glow); }
+.term-side.focused { box-shadow: inset 0 2px 14px -6px var(--glow); }
+button.primary { box-shadow: 0 0 16px -4px var(--glow); }
+
+/* Syntax editor — disetel ulang cool-space (semua ≥4.5:1 on --well, terukur) */
+.tok-kw  { color: #b197ff; }
+.tok-str { color: #7ee787; }
+.tok-num { color: #ffa657; }
+.tok-com { color: #727b9c; }
+.tok-prop { color: #7dd3fc; }

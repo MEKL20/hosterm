@@ -1,0 +1,54 @@
+/* hosterm — kandidat tema "Abyss Emerald" (idiom VoltAgent, voltagent.md)
+   Terminal-native: abyss black hangat + SATU sinyal emerald "power-on" + border
+   warm charcoal + teks snow off-white. Futuristic lewat glow sinyal, bukan dekorasi.
+   Kandidat pembanding utk MEKL; geometri tetap styles.css (arah A "Arus"). */
+
+:root {
+  color-scheme: dark;
+
+  /* surfaces — abyss + carbon lift (voltagent.md), undertone hangat */
+  --bg:    #08080a;
+  --bg2:   #050507; /* abyss canvas */
+  --panel: #101010; /* carbon surface */
+  --hover: #1a1a19;
+  --well:  #020203; /* terminal OLED */
+
+  /* text — snow white + warm parchment (voltagent.md) */
+  --fg:    #f2f2f2;
+  --muted: #b8b3b0;
+
+  /* current — emerald signal "power-on indicator" */
+  --accent:  #00d992;
+  --accent2: #818cf8; /* soft purple: pembeda kind SFTP (secondary VoltAgent) */
+
+  /* status — pastel lembut ala VoltAgent */
+  --ok:     #80d280;
+  --warn:   #ffdd80;
+  --danger: #fd9c9f;
+
+  /* lines — warm charcoal border (signature VoltAgent, anti-harsh) */
+  --border:      #3d3a39;
+  --border-soft: #262423;
+
+  --sel: #0e2a20; /* emerald-tinged; aturan outline --accent tetap */
+  --glow: rgba(0, 217, 146, .22);
+
+  --font-sans: Inter, "Geist Sans", system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, "DejaVu Sans", sans-serif;
+  --font-mono: "JetBrains Mono", "Geist Mono", "Cascadia Code", "SF Mono", ui-monospace, "DejaVu Sans Mono", monospace;
+}
+
+.brand { letter-spacing: 1.5px; }
+.group-label { letter-spacing: .8px; font-weight: 500; }
+.pane-head { letter-spacing: .7px; }
+#status-bar { letter-spacing: .4px; }
+
+.tab.active { box-shadow: 0 2px 14px -4px var(--glow); }
+.term-side.focused { box-shadow: inset 0 2px 14px -6px var(--glow); }
+button.primary { box-shadow: 0 0 16px -4px var(--glow); }
+
+/* syntax — hangat, selaras border charcoal */
+.tok-kw  { color: #818cf8; }
+.tok-str { color: #80d280; }
+.tok-num { color: #ffb86c; }
+.tok-com { color: #7d7873; }
+.tok-prop { color: #2fd6a1; }

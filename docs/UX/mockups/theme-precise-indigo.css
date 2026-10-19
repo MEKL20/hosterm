@@ -1,0 +1,55 @@
+/* hosterm — kandidat tema "Precise Indigo" (idiom Linear, linear.app.md)
+   Ultra-minimal presisi: surface ladder netral 4 tingkat, teks near-white,
+   aksen indigo/violet + glow ungu halus (premium keyboard-first ala Superhuman).
+   Kandidat pembanding utk MEKL; geometri tetap styles.css (arah A "Arus"). */
+
+:root {
+  color-scheme: dark;
+
+  /* surfaces — tangga Linear persis: canvas → panel → elevated → hover */
+  --bg:    #0f1011; /* panel dark */
+  --bg2:   #08090a; /* marketing black (chrome recessed) */
+  --panel: #191a1b; /* level 3 surface */
+  --hover: #28282c; /* secondary surface */
+  --well:  #040506; /* terminal: paling dalam */
+
+  /* text — near-white barely-warm (Linear primary #f7f8f8) */
+  --fg:    #f7f8f8;
+  --muted: #8a8f98;
+
+  /* current — indigo presisi */
+  --accent:  #7170ff; /* accent violet (interactive) */
+  --accent2: #7aa2f7; /* blue: pembeda kind SFTP (jembatan ke Tokyo Night lama) */
+
+  /* status — palet Linear-ish, restrained */
+  --ok:     #4cb782;
+  --warn:   #e8c268;
+  --danger: #eb5757;
+
+  /* lines — border ladder Linear */
+  --border:      #34343a;
+  --border-soft: #23252a;
+
+  --sel: #212647; /* indigo-tinged; aturan outline --accent tetap */
+  --glow: rgba(113, 112, 255, .25);
+
+  --font-sans: "Inter Variable", Inter, "SF Pro Display", system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, "DejaVu Sans", sans-serif;
+  --font-mono: "JetBrains Mono", "Berkeley Mono", "Geist Mono", "Cascadia Code", "SF Mono", ui-monospace, "DejaVu Sans Mono", monospace;
+}
+
+.brand { letter-spacing: 1px; }
+.group-label { letter-spacing: .8px; font-weight: 500; }
+.pane-head { letter-spacing: .7px; }
+#status-bar { letter-spacing: .3px; }
+
+/* glow violet premium — hanya state aktif (Superhuman purple-glow idiom) */
+.tab.active { box-shadow: 0 2px 16px -4px var(--glow); }
+.term-side.focused { box-shadow: inset 0 2px 16px -6px var(--glow); }
+button.primary { box-shadow: 0 0 18px -4px var(--glow); }
+
+/* syntax — cool presisi */
+.tok-kw  { color: #b4a8ff; }
+.tok-str { color: #6bd68f; }
+.tok-num { color: #ffa657; }
+.tok-com { color: #7c8091; }
+.tok-prop { color: #7aa2f7; }

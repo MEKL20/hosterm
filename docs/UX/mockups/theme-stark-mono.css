@@ -1,0 +1,52 @@
+/* hosterm — kandidat tema "Stark Mono" (idiom x.ai, x.ai.md)
+   Futurisme radikal lewat KETEGASAN, bukan neon: canvas warm near-black #1f2228,
+   satu suara teks putih, border rgba-white tipis, TANPA glow — satu-satunya warna
+   = blue ring fokus/arus. Monospace micro-label ala GeistMono x.ai.
+   Kandidat pembanding utk MEKL; geometri tetap styles.css (arah A "Arus"). */
+
+:root {
+  color-scheme: dark;
+
+  /* surfaces — x.ai canvas + surface elevated rgba(255,255,255,.05/.08) */
+  --bg:    #1f2228; /* dark background x.ai: warm near-black, blue undertone */
+  --bg2:   #1a1c22; /* chrome recessed */
+  --panel: #262a31; /* surface elevated */
+  --hover: #2d313a; /* surface hover */
+  --well:  #14161a; /* terminal: lebih dalam dari canvas (terminal-first) */
+
+  /* text — white is the voice (x.ai), dilunakkan setitik utk OLED comfort */
+  --fg:    #f7f8f9;
+  --muted: #b9bcc2; /* white 70% */
+
+  /* current — satu warna: blue ring (focus color x.ai) */
+  --accent:  #3b82f6;
+  --accent2: #93c5fd; /* light blue: pembeda kind SFTP */
+
+  /* status — pastel restrained (satu-satunya warna lain yang diizinkan) */
+  --ok:     #7ce38b;
+  --warn:   #ffd97a;
+  --danger: #ff9ea1;
+
+  /* lines — border default/strong x.ai (rgba white .1/.2 → aproksimasi solid) */
+  --border:      #454a54;
+  --border-soft: #343841;
+
+  --sel: #2c313c; /* aturan outline --accent tetap */
+
+  --font-sans: Inter, "Geist Sans", system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, "DejaVu Sans", sans-serif;
+  --font-mono: "Geist Mono", "JetBrains Mono", "Cascadia Code", "SF Mono", ui-monospace, "DejaVu Sans Mono", monospace;
+}
+
+/* futuristic = ketegasan mono: micro-label uppercase rapat, TANPA glow */
+.brand { letter-spacing: 2px; text-transform: uppercase; font-family: var(--font-mono); font-size: 12px; }
+.group-label { letter-spacing: 1px; font-weight: 500; }
+.pane-head { letter-spacing: .9px; }
+#status-bar { letter-spacing: .5px; font-family: var(--font-mono); }
+.tab.active { border-bottom-width: 2px; } /* underline tegas, no glow */
+
+/* syntax — cold pastel minimal (hue tetap ada utk scannability) */
+.tok-kw  { color: #93c5fd; }
+.tok-str { color: #a8d8a8; }
+.tok-num { color: #f0b572; }
+.tok-com { color: #85898f; }
+.tok-prop { color: #c5cdd8; }

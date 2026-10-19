@@ -284,6 +284,39 @@ panel 0 · xfer/status sticky auto · overlay/modal 50 · tab context menu 1000.
 3. Dot status 6px memakai token status apa adanya; tidak ada warna dot baru.
 4. Split divider: bg `--border-soft`, interaksi `--accent`. Bukan warna lain.
 
+### 6.5 Tema terpilih: "Abyss Emerald" (addendum — keputusan MEKL, 19 Okt 2026)
+
+Arah A disetujui MEKL dengan penggantian skin: palet Tokyo Night di DESIGN.md **disuperseksi** oleh tema "Abyss Emerald" (struktur, geometri, komponen, aturan §6.4 tidak berubah — hanya nilai token).
+
+**Metode (skill-driven, bukan ad-hoc).** Kandidat tema digenerate dari dua skill yang terpasang di profile `crew-coding-uiux`:
+- `ui-ux-pro-max` (vendored, offline): `products.csv` "Developer Tool / IDE" → Dark Mode (OLED) + Minimalism & Swiss Style, fokus blue, dashboard Terminal/Real-Time Monitor; `styles.csv` dark-mode-oled → deep black, minimal glow, low white emission; typography "Terminal CLI Monospace" → JetBrains Mono, weight 400, line-height rapat.
+- `popular-web-designs`: `voltagent.md` (idiom utama: abyss canvas + carbon lift + satu sinyal warna ber-glow + border warm charcoal + status pastel), `linear.app.md` (tangga surface 4 tingkat), `x.ai.md` (micro-label letter-spacing), `superhuman.md` (glow hanya state aktif).
+
+**Kandidat yang dibandingkan** (semua lolos 0 FAIL kontras; file tema disimpan di `mockups/`): Deep Space Black (`theme-deepspace.css`), **Abyss Emerald (`theme-abyss-emerald.css`) ← TERPILIH**, Precise Indigo (`theme-precise-indigo.css`), Stark Mono (`theme-stark-mono.css`). Mockup A (`main.html`, `editor.html`, `dialog-password-host.html`) me-link tema terpilih setelah `styles.css`.
+
+**Token Abyss Emerald** (nilai lengkap + komentar sumber: `mockups/theme-abyss-emerald.css`):
+
+| Token | Nilai | Peran |
+|---|---|---|
+| `--bg` | `#08080a` | canvas app |
+| `--bg2` | `#050507` | chrome recessed (abyss): sidebar, tab bar, status bar |
+| `--panel` | `#101010` | carbon lift: tombol, menu, card |
+| `--hover` | `#1a1a19` | hover/elevated sekunder |
+| `--well` | `#020203` | terminal + editor (OLED) |
+| `--fg` | `#f2f2f2` | snow off-white (low emission) |
+| `--muted` | `#b8b3b0` | warm parchment |
+| `--accent` | `#00d992` | emerald signal — satu-satunya warna sinyal, "power-on" |
+| `--accent2` | `#818cf8` | soft purple — pembeda kind SFTP/prompt |
+| `--ok` / `--warn` / `--danger` | `#80d280` / `#ffdd80` / `#fd9c9f` | pastel low-emission |
+| `--border` / `--border-soft` | `#3d3a39` / `#262423` | warm charcoal (anti-harsh) |
+| `--sel` | `#0e2a20` | selection; TIDAK pernah tanpa outline `--accent` (§6.4.2) |
+| `--glow` | `rgba(0,217,146,.22)` | hanya: tab aktif, split-side fokus, tombol primary |
+| syntax | kw `#818cf8` · str `#80d280` · num `#ffb86c` · com `#7d7873` · prop `#2fd6a1` | hangat, selaras border |
+
+**Kontras terukur** (skrip WCAG rel-luminance, sama seperti §6.2): fg/well 18.53 · fg/bg2 18.19 · muted/well 9.99 · muted/bg2 9.81 · accent/well 11.20 · accent/bg2 11.00 · accent2/bg2 6.83 · fg/sel 13.69 · ok/bg2 11.10 · warn/bg2 15.42 · danger/bg2 10.12 · warn/hover 13.19 · muted/panel 9.16 · syntax on well: kw 6.95, str 11.31, num 12.17, com 4.75, prop 11.11 — **semua PASS**. `sel` vs `bg2` 1.33:1 dan border hairline vs bg 1.30–1.77:1 = FAIL-by-design (outline wajib §6.4.2; hairline dekoratif, preseden §6.2 well-vs-bg).
+
+**Aturan tegas tema** (melanjutkan §6.4): glow HANYA untuk penanda aktif/primary (ENERGY 1); `color-scheme: dark` (scrollbar/form native gelap); **tanpa CDN font runtime** — app offline, stack mengutamakan font lokal terpasang (JetBrains Mono/Geist/Cascadia/Inter) dengan fallback sistem; micro-label (brand, group header, pane head, status bar) ditegaskan via letter-spacing, bukan warna baru.
+
 ## 7. Mockup map
 | File | Isi |
 |---|---|
