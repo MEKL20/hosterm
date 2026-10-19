@@ -7,9 +7,9 @@ Desktop SSH/SFTP client, Tauri v2 + TypeScript, Windows-first (WebView2) but dev
 
 ## Layout
 - `src/main.ts` — all frontend: tabs, terminals (sessions/splitSessions maps), SFTP browser (openSftp/renderSftp/renderLocalPane), remote editor (editorSessions/CodeMirror), dialogs.
-- `src/styles.css` — theme (Tokyo Night-ish); layout chains: `#panels .panel` (absolute) → `.sftp-wrap` height:100% → `.sftp-panes` flex → `.sftp-list` flex:1 overflow-y:auto.
+- `src/styles.css` — theme Abyss Emerald (redesign "Arus" §6.5; U1 landed 19 Okt); glow `var(--glow)` hanya di 3 selector aktif (`.tab.active`, `.term-side.focused`, `button.primary`); layout chains: `#panels .panel` (absolute) → `.sftp-wrap` height:100% → `.sftp-panes` flex → `.sftp-list` flex:1 overflow-y:auto.
 - `src-tauri/src/lib.rs` — every backend command; config parse/serialize is sacred (preserves comments/order/unknown lines); secrets sidecar `~/.ssh/hosterm.secrets` (0600).
-- `qa-reports/headless-smoke.mjs` — 70 checks, Playwright chromium, mock invoke map (hosts: prod-web, db-core).
+- `qa-reports/headless-smoke.mjs` — 75 checks, Playwright chromium, mock invoke map (hosts: prod-web, db-core).
 
 ## Hard invariants (never break)
 1. `~/.ssh/config` must stay parseable by REAL ssh at all times. No secrets in it — ever. Sidecar only.
@@ -22,7 +22,7 @@ Desktop SSH/SFTP client, Tauri v2 + TypeScript, Windows-first (WebView2) but dev
 ## Verify loop (every change)
 1. `cd src-tauri && cargo test --lib` → 52.
 2. `npm run build` → ~500ms, no TS errors.
-3. `npm install --no-save playwright@1.63.0 && node qa-reports/headless-smoke.mjs` → 70; then `rm -rf node_modules/playwright node_modules/playwright-core node_modules/.bin/playwright*`.
+3. `npm install --no-save playwright@1.63.0 && node qa-reports/headless-smoke.mjs` → 75 (sejak U1 Abyss Emerald, 19 Okt); then `rm -rf node_modules/playwright node_modules/playwright-core node_modules/.bin/playwright*`.
 4. Add/extend smoke checks for new behavior.
 
 ## Release (orchestrator does this, not children)

@@ -1,21 +1,38 @@
 :root {
-  --bg: #1a1b26;
-  --bg2: #16161e;
-  --panel: #1f2335;
-  --hover: #24283b;
-  --fg: #c8d3f5;
-  --muted: #8b98c9;
-  --accent: #7aa2f7;
-  --accent2: #89ddff;
-  --ok: #9ece6a;
-  --warn: #e0af68;
-  --danger: #f7768e;
-  --border: #6270a2;
-  --border-soft: #3b4261;
+  color-scheme: dark;
+
+  /* Abyss Emerald — docs/UX/mockups/theme-abyss-emerald.css (redesign §6.5) */
+  /* surfaces — abyss + carbon lift, undertone hangat */
+  --bg: #08080a;
+  --bg2: #050507;
+  --panel: #101010;
+  --hover: #1a1a19;
+  --well: #020203;
+  /* text */
+  --fg: #f2f2f2;
+  --muted: #b8b3b0;
+  /* current — emerald signal */
+  --accent: #00d992;
+  --accent2: #818cf8;
+  /* status — pastel */
+  --ok: #80d280;
+  --warn: #ffdd80;
+  --danger: #fd9c9f;
+  /* lines — warm charcoal */
+  --border: #3d3a39;
+  --border-soft: #262423;
+  --sel: #0e2a20; /* SFTP/source selection; selalu berpasangan outline --accent (§6.4.2) */
+  --glow: rgba(0, 217, 146, .22); /* hanya state aktif: tab, split-side, primary */
+  --bar-h: 24px;
   --shadow-modal: 0 8px 24px rgba(0, 0, 0, 0.5);
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-mono: ui-monospace, "Cascadia Code", Menlo, monospace;
+  --font-sans: Inter, "Geist Sans", system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, "DejaVu Sans", sans-serif;
+  --font-mono: "JetBrains Mono", "Geist Mono", "Cascadia Code", "SF Mono", ui-monospace, "DejaVu Sans Mono", monospace;
 }
+
+/* glow — HANYA penanda aktif/primary (§6.5, superhuman.md); dilarang di hover/idle */
+.tab.active { box-shadow: 0 2px 14px -4px var(--glow); }
+.term-side.focused { box-shadow: inset 0 2px 14px -6px var(--glow); }
+button.primary { box-shadow: 0 0 16px -4px var(--glow); }
 
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }

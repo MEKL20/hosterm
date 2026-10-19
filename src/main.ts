@@ -19,7 +19,7 @@ interface HostDto {
 }
 
 // xterm cannot read CSS custom properties; keep this identical to --font-mono in styles.css
-const FONT_MONO = 'ui-monospace, "Cascadia Code", Menlo, monospace';
+const FONT_MONO = '"JetBrains Mono", "Geist Mono", "Cascadia Code", "SF Mono", ui-monospace, "DejaVu Sans Mono", monospace';
 
 const svg = (p: string) =>
   `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
@@ -49,23 +49,23 @@ const cmTheme = EditorView.theme({
     color: "var(--muted)",
     borderRight: "1px solid var(--border-soft)",
   },
-  ".cm-activeLine": { backgroundColor: "#232430" },
-  ".cm-activeLineGutter": { backgroundColor: "#282A37", color: "var(--fg)" },
-  ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": { backgroundColor: "#374465" },
+  ".cm-activeLine": { backgroundColor: "var(--panel)" },
+  ".cm-activeLineGutter": { backgroundColor: "var(--panel)", color: "var(--fg)" },
+  ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": { backgroundColor: "var(--sel)" },
   ".cm-matchingBracket": { outline: "1px solid var(--accent2)", backgroundColor: "transparent" },
 }, { dark: true });
 
 const cmHighlight = HighlightStyle.define([
-  { tag: t.keyword, color: "#bb9af7" },
-  { tag: t.string, color: "#9ece6a" },
-  { tag: t.number, color: "#ff9e64" },
-  { tag: t.comment, color: "#737aa2" },
-  { tag: t.variableName, color: "#c8d3f5" },
-  { tag: [t.function(t.variableName)], color: "#7aa2f7" },
-  { tag: t.typeName, color: "#7dcfff" },
-  { tag: t.propertyName, color: "#89ddff" },
-  { tag: t.operator, color: "#89ddff" },
-  { tag: t.punctuation, color: "#a9b1d6" },
+  { tag: t.keyword, color: "#818cf8" },
+  { tag: t.string, color: "#80d280" },
+  { tag: t.number, color: "#ffb86c" },
+  { tag: t.comment, color: "#7d7873" },
+  { tag: t.variableName, color: "#f2f2f2" },
+  { tag: [t.function(t.variableName)], color: "#818cf8" },
+  { tag: t.typeName, color: "#2fd6a1" },
+  { tag: t.propertyName, color: "#2fd6a1" },
+  { tag: t.operator, color: "#b8b3b0" },
+  { tag: t.punctuation, color: "#b8b3b0" },
 ]);
 
 // ---------- state ----------
@@ -1210,32 +1210,33 @@ function openTabIds(): number[] {
 
 // ---------- terminals ----------
 // shared xterm theme (primary + split terminals)
+// Abyss Emerald ANSI remap (redesign §6.5); literals — xterm canvas can't read CSS vars
 const TERMINAL_THEME = {
-  background: "#1a1b26",
-  foreground: "#c8d3f5",
-  cursor: "#7aa2f7",
-  cursorAccent: "#1a1b26",
-  selectionBackground: "#374465",
-  selectionForeground: "#c8d3f5",
-  selectionInactiveBackground: "#293046",
-  // scrollbar sliders are not settable in xterm 5.5's ITheme; S-7 values
-  // (#3b4261 / #6270a2 / #7aa2f7) apply when the addon support lands
-  black: "#3b4261",
-  red: "#f7768e",
-  green: "#9ece6a",
-  yellow: "#e0af68",
-  blue: "#7aa2f7",
-  magenta: "#bb9af7",
-  cyan: "#7dcfff",
-  white: "#a9b1d6",
-  brightBlack: "#737aa2",
-  brightRed: "#f7768e",
-  brightGreen: "#9ece6a",
-  brightYellow: "#e0af68",
-  brightBlue: "#7aa2f7",
-  brightMagenta: "#bb9af7",
-  brightCyan: "#7dcfff",
-  brightWhite: "#c0caf5",
+  background: "#020203",
+  foreground: "#f2f2f2",
+  cursor: "#00d992",
+  cursorAccent: "#020203",
+  selectionBackground: "#0e2a20",
+  selectionForeground: "#f2f2f2",
+  selectionInactiveBackground: "#0e2a20",
+  // scrollbar sliders are not settable in xterm 5.5's ITheme; --border-soft /
+  // --border / --accent apply when the addon support lands
+  black: "#262423",
+  red: "#fd9c9f",
+  green: "#80d280",
+  yellow: "#ffdd80",
+  blue: "#818cf8",
+  magenta: "#2fd6a1",
+  cyan: "#00d992",
+  white: "#b8b3b0",
+  brightBlack: "#7d7873",
+  brightRed: "#fd9c9f",
+  brightGreen: "#80d280",
+  brightYellow: "#ffdd80",
+  brightBlue: "#818cf8",
+  brightMagenta: "#2fd6a1",
+  brightCyan: "#00d992",
+  brightWhite: "#f2f2f2",
 };
 
 

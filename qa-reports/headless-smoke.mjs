@@ -470,6 +470,45 @@ const g1 = await panes.nth(0).evaluate((el) => ({ x: el.getBoundingClientRect().
 const g2 = await panes.nth(1).evaluate((el) => ({ x: el.getBoundingClientRect().x, t: el.querySelector(".pane-title").textContent }));
 check("local pane is left of remote", g1.x < g2.x && g1.t.includes("This PC") && g2.t.includes("remote"), `L=${g1.t}@${Math.round(g1.x)} R=${g2.t}@${Math.round(g2.x)}`);
 
+// 9j. U1 theme: Abyss Emerald tokens (EPIC-TSD §U1)
+// (a) --bg token value
+const themeBg = await page.evaluate(() =>
+  getComputedStyle(document.documentElement).getPropertyValue("--bg").trim());
+check("theme --bg == #08080a (Abyss Emerald)", themeBg === "#08080a", themeBg);
+// (b) color-scheme dark in :root
+const colorScheme = await page.evaluate(() =>
+  getComputedStyle(document.documentElement).getPropertyValue("color-scheme").trim());
+check("theme color-scheme: dark", colorScheme === "dark", colorScheme);
+// (c) offline fonts: no @import / url(http in stylesheet + index.html (source files)
+const cssSrc = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+const htmlSrc = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+const netFont = [cssSrc, htmlSrc].join("\n").match(/@import|url\(http|<link[^>]+href="http/g) || [];
+check("no font CDN (@import / url(http) in styles.css + index.html", netFont.length === 0, netFont.slice(0, 2).join(" | "));
+// (d) glow: box-shadow rules exist ONLY on the 3 active-state selectors
+const glowSelectors = await page.evaluate(() => {
+  const hits = [];
+  for (const sheet of document.styleSheets) {
+    let rules;
+    try { rules = sheet.cssRules; } catch { continue; }
+    for (const r of rules) {
+      if (r.style && r.style.boxShadow && /rgba\(0,\s*217,\s*146|var\(--glow\)/.test(r.style.boxShadow)) {
+        hits.push(r.selectorText);
+      }
+    }
+  }
+  return hits.sort();
+});
+const wantGlow = ["button.primary", ".tab.active", ".term-side.focused"].sort();
+check("glow box-shadow only on 3 active selectors", JSON.stringify(glowSelectors) === JSON.stringify(wantGlow), glowSelectors.join(", "));
+// AC4 letter: inactive tab + plain button carry no box-shadow
+const noShadow = await page.evaluate(() => {
+  const tab = document.querySelector(".tab:not(.active)");
+  const btn = document.querySelector("button:not(.primary)");
+  const sh = (el) => (el ? getComputedStyle(el).boxShadow : "missing");
+  return { tab: sh(tab), btn: sh(btn) };
+});
+check("no glow on inactive tab / plain button", noShadow.tab === "none" && noShadow.btn === "none", `${noShadow.tab} / ${noShadow.btn}`);
+
 check("no console/page errors", errors.length === 0, errors.slice(0, 3).join(" | "));
 
 // SEC-4 / AC R1.4: zero CSP violations across the full suite
