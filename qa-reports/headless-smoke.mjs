@@ -47,6 +47,8 @@ Host prod-web
 Host *`;
 
 const calls = [];
+// U2 skeleton check: delay read_ssh_config once to observe the loading state
+let delayRead = 0;
 // Fail the first sftp_list for pw-host to prove the stale-session retry path.
 let sftpFailFirst = false;
 // W2-A startup ssh/sftp check state (AC-A1.5); read by the check_binaries case
@@ -54,7 +56,9 @@ let binCheckState = { ssh_missing: false, sftp_missing: false };
 const invoke = (cmd, args = {}) => {
   calls.push({ cmd, args });
   switch (cmd) {
-    case "read_ssh_config": return Promise.resolve(sampleHosts);
+    case "read_ssh_config": return delayRead > 0
+      ? new Promise((r) => setTimeout(() => r(sampleHosts), delayRead))
+      : Promise.resolve(sampleHosts);
     case "check_binaries": return Promise.resolve({ ...binCheckState });
     case "read_config_raw": return Promise.resolve(sampleConfig);
     case "write_config_raw": return Promise.resolve();
@@ -220,11 +224,19 @@ await page.waitForTimeout(400);
 const hosts = await page.locator(".host-item").count();
 check("host list renders", hosts === 3, `count=${hosts}`);
 
-// 2. sidebar action buttons are real buttons, visible (not opacity:0)
+// 2. sidebar actions: real buttons, hover-reveal but keyboard-reachable (R-32: focus-within reveals)
 const sftpBtn = page.locator(".host-item .h-sftp").first();
 check("sidebar sftp action is a button", (await sftpBtn.evaluate((el) => el.tagName)) === "BUTTON");
-const vis = await sftpBtn.evaluate((el) => getComputedStyle(el).opacity);
-check("action buttons not hover-hidden", vis === "1", `opacity=${vis}`);
+const restOp = await sftpBtn.evaluate((el) => getComputedStyle(el).opacity);
+check("row actions hover-only at rest", restOp === "0", `opacity=${restOp}`);
+await page.locator(".host-item").first().hover();
+await page.waitForTimeout(200); // 120ms opacity transition settles
+const hovOp = await sftpBtn.evaluate((el) => getComputedStyle(el).opacity);
+check("row actions revealed on hover", hovOp === "1", `opacity=${hovOp}`);
+await sftpBtn.focus();
+await page.waitForTimeout(200);
+const focOp = await sftpBtn.evaluate((el) => getComputedStyle(el).opacity);
+check("row actions revealed on focus-within (R-32)", focOp === "1", `opacity=${focOp}`);
 
 // 3. open SFTP tab via button (remote pane only; local pane adds its own rows)
 await sftpBtn.click();
@@ -296,19 +308,45 @@ check("collapse: persisted", stored === "1");
 await page.locator("#btn-expand").click();
 check("expand: class removed", await page.evaluate(() => !document.body.classList.contains("sb-collapsed")));
 
-// 9d. delete button present on host rows, opens confirm dialog, cancel keeps host
-const delBtn = page.locator(".host-item .h-del").first();
-check("delete button on host row", (await delBtn.count()) === 1);
-await delBtn.click();
+// 9d. Edit/Delete left the row (fix #4) -> context menu; Delete uses in-app dialog (not native confirm)
+check("edit/delete buttons gone from rows",
+  (await page.locator(".host-item .h-edit, .host-item .h-del").count()) === 0);
+await page.locator(".host-item").first().click({ button: "right" });
+await page.waitForTimeout(200);
+check("right-click row opens in-app host menu", (await page.locator("#host-menu").count()) === 1);
+const menuItems = await page.locator("#host-menu button").allTextContents();
+check("host menu = Open SFTP / Edit / Delete",
+  JSON.stringify(menuItems) === JSON.stringify(["Open SFTP", "Edit", "Delete"]), menuItems.join("|"));
+check("host menu Delete styled danger", (await page.locator("#host-menu button.danger").count()) === 1);
+let nativeDialog = null;
+page.once("dialog", (d) => { nativeDialog = d.type(); d.dismiss(); });
+await page.locator("#host-menu button", { hasText: "Delete" }).click();
 await page.waitForTimeout(250);
 const dlgText = await page.evaluate(() => document.querySelector(".dialog-box, [role=alertdialog], #dialog")?.textContent || "");
 check("delete dialog names the host", dlgText.includes("prod-web"), dlgText.slice(0, 60));
+check("delete uses in-app dialog (no native)", nativeDialog === null, `native=${nativeDialog}`);
 // focused button should be Cancel (destructive action guard)
 const focusedLabel = await page.evaluate(() => (document.activeElement?.textContent || "").trim());
 check("delete dialog focuses Cancel", focusedLabel === "Cancel", `focus=${focusedLabel}`);
 await page.keyboard.press("Enter"); // activates focused Cancel
 await page.waitForTimeout(250);
 check("cancel keeps host", (await page.locator(".host-item").count()) === 3);
+// ⋯ button opens the same menu; Escape closes it
+await page.locator(".host-item").first().hover();
+await page.locator(".host-item .h-more").first().click();
+await page.waitForTimeout(200);
+check("⋯ button opens host menu", (await page.locator("#host-menu").count()) === 1);
+await page.keyboard.press("Escape");
+await page.waitForTimeout(150);
+check("Escape closes host menu", (await page.locator("#host-menu").count()) === 0);
+// menu Edit opens the host modal (same editor as before, just new entry point)
+await page.locator(".host-item").first().click({ button: "right" });
+await page.waitForTimeout(200);
+await page.locator("#host-menu button", { hasText: "Edit" }).click();
+await page.waitForTimeout(250);
+check("host menu Edit opens modal", await page.locator("#modal").evaluate((el) => !el.classList.contains("hidden")));
+await page.keyboard.press("Escape");
+await page.waitForTimeout(200);
 
 // 9e. terminal right-click paste handler attached (no context menu, no errors)
 await page.locator(".host-item .h-name").first().click();
@@ -469,6 +507,73 @@ const panes = page.locator(".panel.active .sftp-pane");
 const g1 = await panes.nth(0).evaluate((el) => ({ x: el.getBoundingClientRect().x, t: el.querySelector(".pane-title").textContent }));
 const g2 = await panes.nth(1).evaluate((el) => ({ x: el.getBoundingClientRect().x, t: el.querySelector(".pane-title").textContent }));
 check("local pane is left of remote", g1.x < g2.x && g1.t.includes("This PC") && g2.t.includes("remote"), `L=${g1.t}@${Math.round(g1.x)} R=${g2.t}@${Math.round(g2.x)}`);
+
+// 9k. U2 sidebar Arus: single-line rows, grouping, dots, Ctrl+K, skeleton (EPIC-TSD §U2)
+// close leftover tabs so dot tests start idle
+for (let i = 0; i < 10 && (await page.locator(".tab").count()) > 0; i++) {
+  if (await page.locator("#dialog").isVisible().catch(() => false)) {
+    await page.locator("#dialog button").filter({ hasText: "Discard" }).first().click().catch(() => {});
+    await page.waitForTimeout(250);
+    continue;
+  }
+  await page.locator(".tab .x").first().click();
+  await page.waitForTimeout(300);
+}
+// (1) single-line 28px row; subtitle is a title tooltip, not a second element
+const rowH = await page.locator(".host-item").first().evaluate((el) => el.offsetHeight);
+check("host row is exactly 28px (single line)", rowH === 28, `h=${rowH}`);
+check("no second-line subtitle element", (await page.locator(".host-item .h-sub").count()) === 0);
+const rowTitle = await page.locator(".host-item").first().getAttribute("title");
+check("subtitle lives in title tooltip", !!rowTitle && rowTitle.includes("deploy@203.0.113.10"), rowTitle || "");
+// (2) group headers = alias prefix before "-"; wildcard Host * never rendered
+const groups = await page.locator(".h-group").allTextContents();
+check("group headers from '-' prefix", JSON.stringify(groups) === JSON.stringify(["PROD", "DB", "PW"]), groups.join("|"));
+const prodRow = page.locator(".host-item", { hasText: "prod-web" }).first();
+check("prod-web sits under PROD header",
+  (await prodRow.evaluate((el) => el.previousElementSibling?.textContent)) === "PROD");
+check("wildcard Host * not rendered", (await page.locator(".host-item").count()) === 3 &&
+  !(await page.locator("#host-list").textContent()).includes("*"));
+// (3) password marker: --warn lock only on has_password hosts
+const pwKey = prodRow.locator(".h-key");
+check("non-pw rows have no lock", (await pwKey.count()) === 0);
+const pwRowKey = page.locator(".host-item", { hasText: "pw-host" }).first().locator(".h-key");
+check("pw-host shows lock marker", (await pwRowKey.count()) === 1);
+check("lock uses --warn token", (await pwRowKey.evaluate((el) => getComputedStyle(el).color)) === "rgb(255, 221, 128)");
+// (4) Ctrl+K focuses search; ArrowDown + Enter opens terminal (§5)
+await page.keyboard.press("Control+k");
+check("Ctrl+K focuses #host-search", await page.evaluate(() => document.activeElement?.id === "host-search"));
+await page.keyboard.press("ArrowDown");
+check("ArrowDown moves focus to first row", await page.evaluate(() => document.activeElement?.classList.contains("host-item")));
+const spawnsU2 = calls.filter((c) => c.cmd === "pty_spawn").length;
+await page.keyboard.press("Enter");
+await page.waitForTimeout(400);
+check("Enter on row opens terminal", calls.filter((c) => c.cmd === "pty_spawn").length === spawnsU2 + 1);
+// (5) live-session dot: --ok while terminal tab open, --muted after close
+const dot = prodRow.locator(".h-dot");
+check("dot goes --ok with live terminal", (await dot.evaluate((el) => el.classList.contains("live"))) === true);
+check("dot ok uses --ok token", (await dot.evaluate((el) => getComputedStyle(el).backgroundColor)) === "rgb(128, 210, 128)");
+await page.locator('.tab:has-text("prod-web") .x').click();
+await page.waitForTimeout(300);
+check("dot back to muted after tab close", (await dot.evaluate((el) => el.classList.contains("live"))) === false);
+// (6) loading = 3 static skeleton rows, no spinner, container height stable
+delayRead = 400;
+await page.goto("http://localhost:4199/");
+await page.waitForTimeout(150);
+check("loading renders 3 static skeleton rows", (await page.locator("#host-list .skel").count()) === 3);
+check("no spinner replace during load", (await page.locator("#host-list .spinner").count()) === 0);
+const hDuring = await page.locator("#host-list").evaluate((el) => el.offsetHeight);
+const skelH = await page.locator("#host-list .skel").first().evaluate((el) => el.offsetHeight);
+check("skeleton rows are 28px (--hover fill)", skelH === 28, `h=${skelH}`);
+delayRead = 0;
+await page.waitForTimeout(600);
+const hAfter = await page.locator("#host-list").evaluate((el) => el.offsetHeight);
+check("no layout jump: #host-list height stable", hDuring === hAfter, `during=${hDuring} after=${hAfter}`);
+check("hosts render after skeleton", (await page.locator(".host-item").count()) === 3);
+// restore two tabs so U1's inactive-tab glow check (9j) has a subject
+await page.locator(".host-item", { hasText: "prod-web" }).first().locator(".h-name").click();
+await page.waitForTimeout(300);
+await page.locator(".host-item", { hasText: "db-core" }).first().locator(".h-name").click();
+await page.waitForTimeout(400);
 
 // 9j. U1 theme: Abyss Emerald tokens (EPIC-TSD §U1)
 // (a) --bg token value

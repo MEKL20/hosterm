@@ -26,7 +26,6 @@ const svg = (p: string) =>
 const ICONS = {
   add: svg('<line x1="8" y1="4" x2="12" y2="4"/><line x1="10" y1="2" x2="10" y2="6"/>'),
   reload: svg('<path d="M13 8a5 5 0 1 1-1.7-3.75"/><polyline points="13,1.5 13,4.5 10,4.5"/>'),
-  trash: svg('<path d="M2.5 4.5h11"/><path d="M6.5 2.5h3"/><path d="M4 4.5l.7 8.2a1 1 0 0 0 1 .8h4.6a1 1 0 0 0 1-.8l.7-8.2"/><line x1="6.7" y1="7" x2="6.7" y2="10.5"/><line x1="9.3" y1="7" x2="9.3" y2="10.5"/>'),
   terminal: svg('<rect x="1.5" y="2.5" width="13" height="11" rx="2"/><polyline points="4,6 6,8 4,10"/><line x1="8" y1="10" x2="11" y2="10"/>'),
   arrows: svg('<line x1="5" y1="3" x2="5" y2="13"/><polyline points="3,5 5,3 7,5"/><line x1="11" y1="13" x2="11" y2="3"/><polyline points="9,11 11,13 13,11"/>'),
   pencil: svg('<line x1="3" y1="13" x2="12" y2="4"/><line x1="10.5" y1="5.5" x2="12" y2="7"/>'),
@@ -37,6 +36,8 @@ const ICONS = {
   download: svg('<line x1="8" y1="2" x2="8" y2="10"/><polyline points="5,7.5 8,10.5 11,7.5"/><line x1="3" y1="13.5" x2="13" y2="13.5"/>'),
   upload: svg('<line x1="8" y1="13" x2="8" y2="5"/><polyline points="5,7.5 8,4.5 11,7.5"/><line x1="3" y1="13.5" x2="13" y2="13.5"/>'),
   up: svg('<line x1="8" y1="13" x2="8" y2="4"/><polyline points="4.5,7.5 8,4 11.5,7.5"/>'),
+  lock: svg('<rect x="3.5" y="7" width="9" height="6.5" rx="1"/><path d="M5.5 7V5.5a2.5 2.5 0 0 1 5 0V7"/>'),
+  dots: svg('<circle cx="3.5" cy="8" r="1"/><circle cx="8" cy="8" r="1"/><circle cx="12.5" cy="8" r="1"/>'),
 };
 
 const cmTheme = EditorView.theme({
@@ -290,7 +291,14 @@ function binaryBlocked(kind: "ssh" | "sftp"): boolean {
 // ---------- sidebar ----------
 async function loadHosts() {
   const list = $("#host-list");
-  list.innerHTML = `<div class="list-state"><span class="spinner"></span>Loading hosts…</div>`;
+  // loading = 3 static skeleton rows (--hover, pulse-free) instead of spinner-replace
+  // (redesign §4.1/G2, fix #5 sidebar) — container height stays stable, no jump
+  list.innerHTML = "";
+  for (let i = 0; i < 3; i++) {
+    const s = document.createElement("div");
+    s.className = "skel";
+    list.appendChild(s);
+  }
   try {
     hosts = await invoke<HostDto[]>("read_ssh_config");
   } catch (e) {
@@ -317,6 +325,10 @@ function renderHostList() {
     const empty = document.createElement("div");
     empty.className = "list-state";
     empty.textContent = "No hosts in ~/.ssh/config yet. Click + to add one.";
+    const add = document.createElement("button");
+    add.textContent = "Add host";
+    add.addEventListener("click", () => openEditor(null));
+    empty.appendChild(add);
     list.appendChild(empty);
     return;
   }
@@ -327,42 +339,115 @@ function renderHostList() {
     list.appendChild(none);
     return;
   }
+  // Single-line 28px rows (redesign §4.1): dot + name + (lock) + hover-only
+  // ⇅ / ⋯ buttons. Edit/Delete left the row -> context menu (fix #4).
+  let group = "";
   for (const h of visible) {
+    const g = h.name.includes("-") ? h.name.slice(0, h.name.indexOf("-")) : h.name;
+    if (g !== group) {
+      group = g;
+      const head = document.createElement("div");
+      head.className = "h-group";
+      head.textContent = g.toUpperCase();
+      list.appendChild(head);
+    }
     const el = document.createElement("div");
     el.className = "host-item";
+    el.dataset.host = h.name;
     el.setAttribute("role", "button");
     el.tabIndex = 0;
     el.setAttribute("aria-label", `Open terminal to ${h.name}`);
     const sub = [h.user && `${h.user}@`, h.host_name || "(no HostName)", h.port && `:${h.port}`]
       .filter(Boolean)
       .join("");
+    el.title = sub; // subtitle as tooltip, not a second line
     el.innerHTML =
-      `<div class="h-line"><span class="h-name">${esc(h.name)}</span>` +
+      `<span class="h-dot${hostHasLiveSession(h.name) ? " live" : ""}"></span>` +
+      `<span class="h-name">${esc(h.name)}</span>` +
+      (h.has_password ? `<span class="h-key" title="Password stored (sidecar, 0600)">${ICONS.lock}</span>` : "") +
       `<span class="h-acts">` +
-      `<button class="h-sftp icon" title="SFTP">${ICONS.arrows}</button>` +
-      `<button class="h-edit icon" title="Edit">${ICONS.pencil}</button>` +
-      `<button class="h-del icon" title="Delete">${ICONS.trash}</button>` +
-      `</span></div>` +
-      `<div class="h-sub">${esc(sub)}${h.has_password ? " · pw" : ""}</div>`;
-    (el.querySelector(".h-sftp") as HTMLElement).setAttribute("aria-label", `Open SFTP for ${h.name}`);
-    (el.querySelector(".h-edit") as HTMLElement).setAttribute("aria-label", `Edit ${h.name}`);
-    (el.querySelector(".h-del") as HTMLElement).setAttribute("aria-label", `Delete ${h.name}`);
+      `<button class="h-sftp icon" title="Open SFTP" aria-label="Open SFTP for ${escAttr(h.name)}">${ICONS.arrows}</button>` +
+      `<button class="h-more icon" title="More actions (or right-click)" aria-label="More actions for ${escAttr(h.name)}">${ICONS.dots}</button>` +
+      `</span>`;
+    (el.querySelector(".h-more") as HTMLElement).addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+      showHostMenu({ clientX: r.left, clientY: r.bottom + 4 }, h.name);
+    });
     el.addEventListener("click", (ev) => {
       const t = ev.target as HTMLElement;
-      if (t.closest(".h-edit")) openEditor(h);
-      else if (t.closest(".h-sftp")) openSftp(h.name);
-      else if (t.closest(".h-del")) deleteHostByName(h.name);
+      if (t.closest(".h-sftp")) openSftp(h.name);
+      else if (t.closest(".h-more")) { /* handled by the button's own listener */ }
       else openTerminal(h.name);
+    });
+    el.addEventListener("contextmenu", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      showHostMenu(ev as MouseEvent, h.name);
     });
     el.addEventListener("keydown", (ev) => {
       if ((ev.target as HTMLElement).closest("button")) return;
       if (ev.key === "Enter" || ev.key === " ") {
         ev.preventDefault();
         openTerminal(h.name);
+      } else if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+        ev.preventDefault();
+        moveRowFocus(el, ev.key === "ArrowDown" ? 1 : -1);
       }
     });
     list.appendChild(el);
   }
+}
+
+// live-session dot: --ok while the host has a terminal tab with a running PTY
+function hostHasLiveSession(name: string): boolean {
+  for (const s of sessions.values()) if (s.host === name && s.ptyId != null) return true;
+  for (const s of splitSessions.values()) if (s.host === name && s.ptyId != null) return true;
+  return false;
+}
+
+// toggle dot classes in place — no list rebuild, focus survives
+function refreshHostDots() {
+  document.querySelectorAll<HTMLElement>(".host-item[data-host]").forEach((el) => {
+    el.querySelector(".h-dot")?.classList.toggle("live", hostHasLiveSession(el.dataset.host as string));
+  });
+}
+
+function moveRowFocus(row: HTMLElement, dir: 1 | -1) {
+  const rows = [...document.querySelectorAll<HTMLElement>(".host-item")];
+  rows[rows.indexOf(row) + dir]?.focus();
+}
+
+// Host row context menu (redesign §4.1, fix #4): Open SFTP · Edit · Delete.
+// Delete reuses the in-app confirm dialog, never native confirm.
+function showHostMenu(at: { clientX: number; clientY: number }, name: string) {
+  document.getElementById("host-menu")?.remove();
+  const menu = document.createElement("div");
+  menu.id = "host-menu";
+  menu.setAttribute("role", "menu");
+  const h = hosts.find((x) => x.name === name);
+  const items: Array<[string, boolean, () => void]> = [
+    ["Open SFTP", false, () => void openSftp(name)],
+    ["Edit", false, () => { if (h) openEditor(h); }],
+    ["Delete", true, () => void deleteHostByName(name)],
+  ];
+  for (const [label, danger, fn] of items) {
+    const b = document.createElement("button");
+    b.setAttribute("role", "menuitem");
+    if (danger) b.className = "danger";
+    b.textContent = label;
+    b.addEventListener("click", () => { menu.remove(); fn(); });
+    menu.appendChild(b);
+  }
+  document.body.appendChild(menu);
+  const mw = menu.offsetWidth, mh = menu.offsetHeight;
+  menu.style.left = Math.min(at.clientX, window.innerWidth - mw - 8) + "px";
+  menu.style.top = Math.min(at.clientY, window.innerHeight - mh - 8) + "px";
+  (menu.querySelector("button") as HTMLElement | null)?.focus();
+  const close = () => { menu.remove(); document.removeEventListener("mousedown", onDown, true); };
+  const onDown = (e: MouseEvent) => { if (!menu.contains(e.target as Node)) close(); };
+  setTimeout(() => document.addEventListener("mousedown", onDown, true), 0);
+  menu.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
 }
 
 // ---------- host editor modal ----------
@@ -1366,6 +1451,7 @@ async function startPty(session: Session) {
     const rows = session.term.rows;
     const ptyId = await invoke<number>("pty_spawn", { host: session.host, cols, rows });
     session.ptyId = ptyId;
+    refreshHostDots();
 
     const u1 = await listen<string>(`pty://output/${ptyId}`, (ev) => {
       session.banner?.remove();
@@ -1374,6 +1460,7 @@ async function startPty(session: Session) {
     const u2 = await listen(`pty://exit/${ptyId}`, () => {
       session.term.write("\\r\\n\\x1b[90m[session ended]\\x1b[0m\\r\\n");
       session.ptyId = null;
+      refreshHostDots();
     });
     session.unlisten.push(u1, u2);
   } catch (e) {
@@ -1451,6 +1538,7 @@ async function closeTab(tabId: number) {
   }
   document.querySelector(`.tab[data-tab="${tabId}"]`)?.remove();
   document.querySelector(`.panel[data-tab="${tabId}"]`)?.remove();
+  refreshHostDots();
   if (activeTab === tabId) {
     const remaining = [...sessions.keys(), ...editorSessions.keys(), ...sftpSessions.keys()];
     if (remaining.length) activateTab(remaining[remaining.length - 1]);
@@ -1512,6 +1600,22 @@ window.addEventListener("DOMContentLoaded", () => {
   $("#btn-reload").addEventListener("click", loadHosts);
   $("#btn-raw").addEventListener("click", openRaw);
   ($("#host-search") as HTMLInputElement).addEventListener("input", renderHostList);
+  // Ctrl+K focuses host search (redesign §5); overlays keep their focus trap
+  window.addEventListener("keydown", (ev) => {
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "k" && overlayStack.length === 0) {
+      ev.preventDefault();
+      const s = $("#host-search") as HTMLInputElement;
+      s.focus();
+      s.select();
+    }
+  });
+  // ↑/↓ host navigation (§5): ArrowDown from search enters the list
+  ($("#host-search") as HTMLInputElement).addEventListener("keydown", (ev) => {
+    if (ev.key === "ArrowDown") {
+      ev.preventDefault();
+      document.querySelector<HTMLElement>(".host-item")?.focus();
+    }
+  });
   // sidebar collapse: remembered across restarts
   const setCollapsed = (c: boolean) => {
     document.body.classList.toggle("sb-collapsed", c);
