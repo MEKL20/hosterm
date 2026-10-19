@@ -1,0 +1,18 @@
+# R3 waiver config for the cargo-audit gate in
+# .github/workflows/build-windows.yml (PRD Q4).
+#
+# The audit gate subtracts IDs in [advisories] ignore from the high/critical
+# failure threshold, but every finding — waived or not — is still printed to
+# the job log. Each waived ID needs a comment directly above it: reason +
+# `review-by: YYYY-MM-DD` (review-by <= 90 days out; expired waivers must be
+# re-triaged or removed).
+#
+# Example:
+#   ignore = [
+#     # reason: no patched release; unmaintained crate, unused code path
+#     # review-by: 2027-01-16
+#     "RUSTSEC-2026-0001",
+#   ]
+
+[advisories]
+ignore = []

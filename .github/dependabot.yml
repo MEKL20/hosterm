@@ -1,0 +1,10 @@
+# R2 refresh path (TSD Q5): Dependabot proposes weekly bumps for the pinned
+# action SHAs; every PR is reviewed and merged by MEKL only.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    reviewers:
+      - MEKL20

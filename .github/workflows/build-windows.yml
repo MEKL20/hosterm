@@ -3,32 +3,163 @@ name: Build Windows
 # Reliable path to a Windows .exe/.msi installer: Tauri's bundler (NSIS/WiX)
 # only runs natively on Windows, so we build on a Windows runner.
 # Push a tag like v0.1.0, or run manually from the Actions tab.
+#
+# R3: the audit job runs on every PR, push to main, and tag build.
+# PRs run audit only (cheap gate); full Windows build stays on
+# dispatch/main/tags. The release job needs audit, so a red audit
+# blocks release attachment on tag builds.
 
 on:
   push:
+    branches: [main]
     tags:
       - "v*"
+  pull_request:
   workflow_dispatch:
 
+# R4: read-only token by default. contents: write lives only in the `release`
+# job below, which is skipped entirely on manual dispatch — so non-tag builds
+# run end-to-end with a read-only token (AC R4.2).
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build:
-    runs-on: windows-latest
+  # R3: dependency vulnerability audits (cargo-audit + npm audit).
+  # Ubuntu lane, parallel to the Windows build; adds ~1 min to the tag
+  # critical path (well inside the +5 min release-latency budget).
+  audit:
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+
+      - name: Install cargo-audit (prebuilt binary)
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
+        with:
+          tool: cargo-audit
+
+      # Gate: any high/critical in src-tauri/Cargo.lock fails the build
+      # (cargo-audit has no prod/dev split — all lockfile deps gate, Q3).
+      # Waivers: IDs listed in .github/cargo-audit.toml ([advisories] ignore,
+      # each with reason + review-by comment) are subtracted from the gate but
+      # stay visible in this log. Lower severities and unmaintained/yanked
+      # warnings log as advisory only.
+      - name: "Rust dependency audit (gate: high/critical fails)"
+        run: |
+          cargo audit --file src-tauri/Cargo.lock --json > cargo-audit.json || true
+          python3 - <<'PY'
+          import json, sys
+          try:
+              d = json.load(open('cargo-audit.json'))
+          except Exception as e:
+              sys.exit(f'GATE: FAIL - cannot parse cargo-audit output ({e}); failing closed')
+          waived = set()
+          try:
+              import tomllib
+              cfg = tomllib.load(open('.github/cargo-audit.toml', 'rb'))
+              waived = set(cfg.get('advisories', {}).get('ignore', []))
+          except FileNotFoundError:
+              pass
+          except Exception as e:
+              sys.exit(f'GATE: FAIL - malformed .github/cargo-audit.toml ({e})')
+          print('Rust dependency audit — src-tauri/Cargo.lock')
+          print('waived advisory IDs:', ', '.join(sorted(waived)) or 'none')
+          vulns = (d.get('vulnerabilities') or {}).get('list') or []
+          gate = []
+          if vulns:
+              print(f'{"ID":26} {"SEVERITY":9} {"PACKAGE":26} {"VERSION":10} TITLE')
+              for v in vulns:
+                  a, p = v.get('advisory') or {}, v.get('package') or {}
+                  sev = (a.get('severity') or 'unknown').lower()
+                  note = ' -> waived (reason + review-by in .github/cargo-audit.toml)' if a.get('id') in waived else ''
+                  print(f'{a.get("id", "?"):26} {sev:9} {p.get("name", "?"):26} {p.get("version", ""):10} {a.get("title", "")}{note}')
+                  if sev in ('high', 'critical') and a.get('id') not in waived:
+                      gate.append(a.get('id'))
+          else:
+              print('no vulnerability entries')
+          for kind, items in sorted((d.get('warnings') or {}).items()):
+              for w in items or []:
+                  a, p = w.get('advisory') or {}, w.get('package') or {}
+                  print(f'[advisory-only:{kind}] {a.get("id", p.get("name", "?"))} — {a.get("title", "")}')
+          if gate:
+              print(f'GATE: FAIL — {len(gate)} high/critical in Cargo.lock: {" ".join(gate)}')
+              sys.exit(1)
+          print('GATE: PASS — 0 high/critical vulnerabilities in src-tauri/Cargo.lock')
+          PY
+
+      - name: Install frontend deps (lockfile-faithful)
+        run: npm ci
+
+      # Gate: high/critical in PRODUCTION dependencies fails (Q3). Waivable
+      # via .github/npm-audit-waivers.txt (one advisory ID per line, with
+      # reason + review-by). Dev-only findings do not gate.
+      - name: "npm audit — production gate (high/critical fails)"
+        run: |
+          npm audit --omit=dev --json > npm-audit-prod.json || true
+          python3 - <<'PY'
+          import json, re, sys
+          try:
+              d = json.load(open('npm-audit-prod.json'))
+          except Exception as e:
+              sys.exit(f'GATE: FAIL - cannot parse npm audit output ({e}); failing closed')
+          waived = set()
+          try:
+              waiver_lines = open('.github/npm-audit-waivers.txt').readlines()
+          except FileNotFoundError:
+              waiver_lines = []
+          for line in waiver_lines:
+              tok = line.split('#')[0].strip()
+              if tok:
+                  waived.add(tok.split()[0])
+          print('npm audit — production dependencies (--omit=dev)')
+          print('waived advisory IDs:', ', '.join(sorted(waived)) or 'none')
+          gate = []
+          for name, v in sorted((d.get('vulnerabilities') or {}).items()):
+              sev = v.get('severity', '?')
+              ids = set()
+              for via in v.get('via', []):
+                  if isinstance(via, dict):
+                      for s in re.findall(r'GHSA-[a-zA-Z0-9]{4}-[a-zA-Z0-9]{4}-[a-zA-Z0-9]{4}|CVE-\d{4}-\d{4,}', json.dumps(via), re.I):
+                          ids.add(s)
+              fix = v.get('fixAvailable')
+              print(f'  {name} — {sev} — {", ".join(sorted(ids)) or "?"} — ' +
+                    ('fix available' if fix else 'no fix available'))
+              if sev in ('high', 'critical'):
+                  if ids and ids <= waived:
+                      print('    -> waived (reason + review-by in .github/npm-audit-waivers.txt)')
+                  else:
+                      gate.append(f'{name}({sev})')
+          if gate:
+              print(f'GATE: FAIL — {len(gate)} high/critical in production deps: {", ".join(gate)}')
+              sys.exit(1)
+          print('GATE: PASS — 0 unwaived high/critical vulnerabilities in production dependencies')
+          PY
+
+      # Advisory lane (Q3/TSD 3.3): full audit incl. dev chain — logged, never blocks.
+      - name: npm audit — full report (advisory only)
+        continue-on-error: true
+        run: npm audit
+
+  build:
+    if: github.event_name != 'pull_request'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
 
       - name: Cache cargo
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri
 
@@ -39,17 +170,31 @@ jobs:
         run: npm run tauri build
 
       - name: Upload installers
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: hosterm-windows
           path: |
             src-tauri/target/release/bundle/msi/*.msi
             src-tauri/target/release/bundle/nsis/*.exe
 
+  # R4: the only job holding contents: write. Tag-gated, so manual dispatch
+  # never grants write to any step. R3: also needs the audit job, so a red
+  # audit gate blocks release attachment.
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build, audit]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download installers
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: hosterm-windows
+
       - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |
-            src-tauri/target/release/bundle/msi/*.msi
-            src-tauri/target/release/bundle/nsis/*.exe
+            *.msi
+            *.exe

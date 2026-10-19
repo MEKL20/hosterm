@@ -1,0 +1,14 @@
+# R3 npm audit waiver list (PRD Q4) — consumed by the production gate in
+# .github/workflows/build-windows.yml.
+#
+# One advisory ID (GHSA-… or CVE-…) per line. A production high/critical
+# finding is waived only when EVERY advisory in its via-chain is listed here.
+# Each entry needs a comment line directly above it: reason + review-by date
+# (review-by <= 90 days out; expired waivers must be re-triaged or removed).
+#
+# Example:
+#   # reason: dev-chain only impact, no patched release yet
+#   # review-by: 2027-01-16
+#   GHSA-xxxx-xxxx-xxxx
+#
+# Empty today — production dependencies have zero high/critical findings.
