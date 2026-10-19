@@ -58,7 +58,7 @@ Founding technical principle (product-visible): hosterm spawns the OS's **real `
 |---|---|
 | **SSH operator (end user)** | Manages a handful-to-dozens of servers from a Windows desktop. Already lives in `~/.ssh/config`; rejects tools that hide or rewrite it. Wants terminal + file transfer + remote edits in one window. |
 | **Multi-device operator** | Works from desktop and laptop; needs identical host setup everywhere without re-entering secrets into a vendor cloud. |
-| **MEKL (solo maintainer)** | Ships with a verify loop (52 cargo tests, 75 smoke checks measured 19 Okt post-U1) and minimal Windows test time. Every release is publicly diffable. |
+| **MEKL (solo maintainer)** | Ships with a verify loop (cargo + smoke baselines per docs/STATE.md §Verify loop — the single source of truth, re-measured each dispatch) and minimal Windows test time. Every release is publicly diffable. |
 | **Adversary (hostile server / supply chain)** | Handles user key material and the release pipeline; must not get an XSS path to the IPC bridge (CSP wave 1) nor a silent-code-distribution channel (signing wave 2). |
 
 ---
@@ -175,8 +175,8 @@ As an operator I want key or password auth expressed as plain OpenSSH directives
 | NFR-1 | Secrets: 0 secret bytes in `~/.ssh/config` (grep gate in verify loop); sidecar perms 0600; pasted keys 0600. Verified every PR. |
 | NFR-2 | CSP: `script-src 'self'` enforced in shipped builds; 0 CSP violations across the full smoke suite (count == 0 asserted) and recorded once on real Windows (SEC-5 waiver active — see §8). |
 | NFR-3 | Privacy/zero background: 0 network requests at idle and during normal use except user-initiated SSH/SFTP; amendment pending MEKL (OQ-1): + exactly 1 user-initiated HTTPS GET + 1 download to the Releases endpoint from wave 2 M3. Measured by smoke network log (SDD §E.8.6). |
-| NFR-4 | Config integrity: `~/.ssh/config` parseable by REAL ssh at all times; round-trip fidelity asserted; failed writes never destroy the file. 52 cargo tests green every PR. |
-| NFR-5 | Regression gate (baselines measured 19 Okt 2026, post-U1; re-measure at each dispatch): `cargo test --lib` → 52 pass; `npm run build` → 0 TS errors; smoke suite → 75 pass (≥ baseline + N per epic unit); playwright cleanup after runs. |
+| NFR-4 | Config integrity: `~/.ssh/config` parseable by REAL ssh at all times; round-trip fidelity asserted; failed writes never destroy the file. Full cargo suite green every PR (baseline per docs/STATE.md §Verify loop). |
+| NFR-5 | Regression gate (baselines = the numbers in docs/STATE.md §Verify loop, the single source of truth; re-read and re-measured at each dispatch — this PRD never hardcodes counts): `cargo test --lib` → all green at the STATE.md cargo baseline; `npm run build` → 0 TS errors; smoke suite → all green at the STATE.md smoke baseline (≥ baseline + N per epic unit); playwright cleanup after runs. |
 | NFR-6 | Performance targets: UI feedback (tab open, listing render, editor open) ≤ 200 ms; config parse of 1,000 `Host` blocks ≤ 100 ms; connect latency dominated by ssh/network, not app. Binding when first measured (resolution Q5: measure on first complaint; wave-2 NFR-W2-9 check ≤ 5 s measured once at M3). |
 | NFR-7 | Usability: single-window workflow (sidebar + tabs cover terminal/files/editing); all drag via manual mouse; skeleton loading without layout jump (list height delta = 0 px); glow restricted to 3 active-state selectors; `prefers-reduced-motion` respected (no new keyframes). |
 | NFR-8 | Portability: full setup movable by copying `~/.ssh/config` (+ keys + optional sidecar); 0 registry/proprietary-store writes. Fresh-machine checklist passes with 1 file + keys. |
@@ -189,7 +189,7 @@ As an operator I want key or password auth expressed as plain OpenSSH directives
 
 | Metric | Target | How measured |
 |---|---|---|
-| Verify-loop green rate | 100% of merged changes: cargo 52+, build 0 errors, smoke 75+ | CI/task logs per task; STATE.md baseline re-measured each dispatch |
+| Verify-loop green rate | 100% of merged changes: cargo ≥ STATE.md baseline, build 0 errors, smoke ≥ STATE.md baseline | CI/task logs per task; STATE.md §Verify loop baseline re-measured each dispatch |
 | CSP violations | 0 across every smoke run | Smoke console listener counter == 0 |
 | Secret leakage | 0 hits: secrets in `~/.ssh/config`; private-key markers in repo | grep gates in verify loop + pre-stage check |
 | CI supply chain | 100% pinned action refs; 0 mutable | `grep -nE "uses:\s*\S+@(v[0-9]+…)"` = 0 matches |
@@ -213,6 +213,7 @@ Living-doc rule: FEATURE-SPEC-*/EPIC-TSD-* implement this PRD; this section trac
 | Redesign Arus U2–U9 | Sidebar (U2, dispatch in progress), tab bar (U3), terminal well/divider/status bar (U4), SFTP strip/selection (U5), skeletons (U6), editor dirty/Ctrl+S (U7), password dialog chips (U8), smoke canonization (U9) | **In flight** (U2 running on working tree; U1 done; units dispatched serially — hotspot `src/styles.css`/`src/main.ts`) | docs/EPIC-TSD-redesign-arus-v1.md §2 · docs/UX/redesign-hosterm-v1.md §2/§6.5 |
 | Wave 2 B — signing (M2) then updater (M3) | Authenticode via Trusted Signing + minisign artifacts, fail-closed gates, `latest.json` feed; then user-initiated verified updater | **Speced — awaiting MEKL approval** (draft uncommitted, commit deferred §10) | docs/FEATURE-SPEC-wave-2-draft.md §4 · docs/SDD-hosterm-v1-extension-signing-updater.md |
 | Wave 2 C — config auto-reload on focus | mtime+size stat on window focus, no watcher daemon | **Speced** (same draft; HR-W2-2) | docs/FEATURE-SPEC-wave-2-draft.md §5 |
+| Fleet Run v1 — multi-host command/script runner | native parallel `ssh`-argv runner over the existing `~/.ssh/config` host list; command or stdin-script to selected hosts; concurrency cap + per-host timeout; per-host status/exit/live output + run summary; confirm-gated blast radius | **Approved (MEKL 19 Okt — OQ closed, spec §5)** — backend Unit 1–2 paralel Arus; frontend Unit 3–5 antre setelah U9 | docs/FEATURE-SPEC-fleet-run-v1.md |
 | Parking lot | SBOM per release; 21-site `innerHTML` refactor (CSP is the compensating control until then); first-class Linux/macOS installers; terminal font size, go-to-line (v1.1 options) | **Backlog — no spec yet** | PRD v1 §5 · redesign §6 out-of-scope |
 
 Milestone order (binding): next release carries W2-A + U1 + U2–U9 as they land; M2 (signing) precedes M3 (updater) — HR-W2-1, not reopenable.
@@ -243,7 +244,7 @@ Milestone order (binding): next release carries W2-A + U1 + U2–U9 as they land
 3. **SEC-5 waiver retirement:** when do we add a self-hosted Windows runner + tauri-driver CSP matrix? — rekomendasi: **after wave 2 M2** — the signing pipeline makes Windows CI value higher (signed-release verification can reuse the runner), so one infra investment serves both; before that the manual pre-tag pass suffices.
 4. **Manual Windows pass batching (U4/U5 mouse + signed-release checklist + CSP matrix):** separate sessions or one? — rekomendasi: **one batched manual session immediately before the next release tag**; solo-maintainer time is the scarcest resource and all three gates block the same tag.
 5. **Wave-2 draft approval timing:** review the merged draft (t_803099fc) now or after U2–U9 land? — rekomendasi: **after U9** — one moving tree at a time; the draft is text-only and its §10 commit deferral already prevents tree interference, but MEKL review attention is also serial.
-6. **Perf NFR-6 measurement:** bind the ≤ 200 ms / ≤ 100 ms targets now that smoke is 75 checks? — rekomendasi: **keep the Q5 resolution (bind on first complaint)**; functional regression coverage exists, and premature timing gates rot CI for a solo maintainer. Wave-2 NFR-W2-9's one-off ≤ 5 s check stays the only scheduled timing measurement.
+6. **Perf NFR-6 measurement:** bind the ≤ 200 ms / ≤ 100 ms targets now that the smoke suite keeps growing (baseline per docs/STATE.md §Verify loop)? — rekomendasi: **keep the Q5 resolution (bind on first complaint)**; functional regression coverage exists, and premature timing gates rot CI for a solo maintainer. Wave-2 NFR-W2-9's one-off ≤ 5 s check stays the only scheduled timing measurement.
 
 ---
 

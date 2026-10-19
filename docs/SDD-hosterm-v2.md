@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Author | crew-coding-architect |
-| Inputs | `docs/PRD-hosterm-v2.md` (requirements authoritative), `docs/SDD-hosterm-v1.md` (basis), `docs/SDD-hosterm-v1-extension-signing-updater.md` (folded into §2.2/§7 ADR-9..12), `docs/EPIC-TSD-redesign-arus-v1.md`, `docs/FEATURE-SPEC-wave-2-draft.md` §4/§5, `docs/STATE.md`, `docs/SPIKE-csp-findings.md`, `src-tauri/src/lib.rs`, `src/main.ts`, `src-tauri/tauri.conf.json` |
+| Inputs | `docs/PRD-hosterm-v2.md` (requirements authoritative), `docs/SDD-hosterm-v1.md` (basis), `docs/SDD-hosterm-v1-extension-signing-updater.md` (folded into §2.2/§7 ADR-9..12), `docs/EPIC-TSD-redesign-arus-v1.md`, `docs/FEATURE-SPEC-wave-2-draft.md` §4/§5, `docs/FEATURE-SPEC-fleet-run-v1.md` (drives the §12 Fleet Run v1 addendum + ADR-13..16 + INV-14..19), `docs/STATE.md`, `docs/SPIKE-csp-findings.md`, `src-tauri/src/lib.rs`, `src/main.ts`, `src-tauri/tauri.conf.json` |
 | Status | Draft — for MEKL review; downstream input to lead's TSD. Supersedes SDD v1 (kept as history, never edited). |
 | Scope | Whole product as shipped today (v0.10.0 + W2-A + U1) plus committed in-flight work: wave-2 signing/updater (M2/M3, designed, not implemented) and UI redesign "Arus" (U1 landed, U2–U9 pending). ADRs are harvested, not invented. |
 | Version constraint | No commits by architect; this document only |
@@ -86,6 +86,7 @@ Key custody: Authenticode key lives and dies inside Azure HSM (non-exportable); 
 | Remote editor (`src/main.ts`) | CodeMirror 6, line numbers, Ctrl/Cmd+S write-back (Arus U7: Ctrl+S panel-level + dirty marker); 2 MB text cap, binary refusal | `sftp_read_file`, `sftp_write_file` |
 | Host management UI (`src/main.ts`) | Host form (key vs password auth), key-paste modal, raw config editor, dirty-state guards; Arus U8: stored-password chip + delete-with-confirm | `read_ssh_config`, `save_host`, `delete_host`, `read/write_config_raw`, `list_identity_files`, `create_identity_file` |
 | Startup binary check (W2-A, shipped) | Read-only presence check of ssh/sftp; blocking "install OpenSSH" guide screen in frontend, no spawn/side effects | `check_binaries` → `BinCheck {ssh_missing, sftp_missing}` |
+| Fleet runner (`src-tauri/src/fleet.rs`, planned v1 — §12) | Run one command/script across selected hosts: thread-per-host behind an N-permit token channel, per-host deadline kill, Stop = kill-all + skipped, 64 KiB/host retention counters; zero new deps, zero writes, zero secret reads | `fleet_start`, `fleet_stop`; events `fleet://output/{run_id}`, `fleet://host/{run_id}`, `fleet://summary/{run_id}` |
 | Config model (`src-tauri/src/lib.rs`) | Round-trip parse/serialize of `~/.ssh/config` (preserves comments, order, unknown directives); atomic write (sibling temp → chmod 0600 → rename); `HOSTERM_CONFIG` override | Filesystem `~/.ssh/config` |
 | Secrets sidecar (`lib.rs`) | `~/.ssh/hosterm.secrets` (`alias=password` lines, 0600, deleted when empty); opt-in per host, purged on delete/uncheck; lookup result **never crosses IPC** | Filesystem sidecar |
 | Identity-file store (`lib.rs`) | Paste-private-key → `~/.ssh/<name>` at 0600; dropdown listing | Filesystem `~/.ssh/` |
@@ -148,6 +149,7 @@ SshConfig
 | `~/.ssh/<name>` | Pasted private keys | 0600 (Unix); key dropdown |
 | `HOSTERM_CONFIG` | env | Config path override (tests) |
 | `HOSTERM_SFTP_BIN` | env | sftp binary override (tests; replaces sftp lookup entirely, incl. `check_binaries`) |
+| `HOSTERM_SSH_BIN` | env | ssh binary override for the **fleet path only** (tests; replaces argv[0] of fleet spawns; terminal PTY, sftp and `check_binaries` do not read it — §12.5, ADR-16) |
 | `latest.json` (M2+, planned) | Static JSON feed: `version`, `notes`, `pub_date` (RFC 3339 UTC), `platforms["windows-x86_64"]{signature, url}` | `signature` = verbatim `.sig` content; `version` written verbatim from tag (no normalization); only `windows-x86_64` key emitted |
 
 Evolution strategy: no schema migration exists (flat files, re-read whole). Wave-2 §C (FR-H3, speced) adds config auto-reload: mtime+size stat on window focus, refresh without restart, unreadable → last-good state + named-path error — additive, no model change. `latest.json` assembler gains keys only if a second platform ships.
@@ -244,6 +246,30 @@ Failure modes and the system's observable response:
 - Consequences: secret surface in GitHub = three secrets, none Authenticode material; rotation rehearsed once (tabletop); pubkey change always signed by the previous trusted key — never both in one flip.
 - Rejected alternatives: generating the minisign key in CI — private key transits runner memory/disk caches for a one-time 5-minute offline step; hardware token for minisign — reintroduces hosted-runner incompatibility for a key already bounded by rotation; storing the pubkey nowhere until M3 — loses the ceremony record the M3 flip is verified against.
 
+### ADR-13: Fleet transport = real `ssh`, two argv shapes, no PTY, zero new deps (Fleet Run v1, §12)
+- Context: boss intent is "run a command on many hosts" (ansible-lite) under the founding principle (ADR-1) and FR-FL12/NFR-FL1 (no local shell, no new dependency). `run_sftp_batch` (lib.rs:717) already proves the exact spawn shape fleet needs.
+- Decision: every fleet child is `std::process::Command::new(HOSTERM_SSH_BIN ∨ "ssh")` with fixed argv: `-o BatchMode=yes <alias>` plus exactly one of two transports — command mode: the single-line text as one further argv element (remote login shell interprets it there, never locally); script mode: `bash -s` argv with the normalized script bytes piped to stdin. Stdin = `Stdio::null()` for command mode, piped for script mode. stdout/stderr piped, real exit code captured. Windows parity: `CREATE_NO_WINDOW (0x0800_0000)` creation flag, identical to the sftp path.
+- Consequences: FR-FL12/NFR-FL4 hold structurally (no shell exists in the path at all); quoting/escaping is a non-issue because the text is one argv element or raw stdin bytes; BatchMode makes auth/host-key prompts fail fast and cleanly (exit 255, `fail` not `timeout`); kill-on-timeout ends the local ssh only — the remote keeps running, exactly like Ctrl-C on the CLI (documented, spec edge case); per-chunk `String::from_utf8_lossy` may show U+FFFD when a multi-byte sequence straddles an 8 KiB read boundary — accepted, the fleet pane is a plain text view with no terminal emulation.
+- Rejected alternatives: `sh -c "ssh …"` wrappers — the exact surface FR-FL12 removes; ssh library (russh/ssh2) — ADR-1; PTY per fleet host — stdin would be a terminal, breaking script-via-stdin (`bash -s`) and adding portable-pty cost for zero v1 need (password hosts are `skipped`, §12.8); scp-then-execute — non-goal (staged upload excluded in spec §1).
+
+### ADR-14: Runner = thread-per-host + N-token std channel as semaphore + deadline poll (Fleet Run v1, §12)
+- Context: ≤ N (1–20, default 5) live children, per-host timeout (5–600 s, default 60) covering connect+exec (FR-FL23), Stop kills everything (FR-FL30), first spawn ≤ 200 ms after confirmation (NFR-FL5), UI never blocks (FR-FL24) — without adding a dependency.
+- Decision: `fleet_start` validates + plans synchronously and returns immediately after launching a coordinator thread. The coordinator walks the eligible queue, acquires a permit from a bounded `mpsc` channel seeded with N tokens (acquire = `recv_timeout(50 ms)` loop so Stop is honored while queued), releases on send-back, and spawns one host-task thread per started host. Host task owns its `Child` exclusively and polls every 50 ms: `try_wait` (natural exit wins) → stop flag (kill, `skipped`/"stopped by user") → deadline (kill, `timeout`). Helpers per started host: two reader threads (stdout, stderr → chunk events) plus, in script mode only, one stdin-writer thread (a backpressured 2 MiB write can never stall the deadline poll). ≤ ~4 threads and ~3×8 KiB buffers per live host; ≤ 20 live hosts worst case.
+- Consequences: std-only, matches the proven pump_pty reader-thread posture; stop/timeout latency is bounded by the 50 ms poll; exit-vs-kill races have one deterministic resolver (the poll order above), so a fast auth failure is never swallowed as a timeout; app exit reaps children (same posture as ADR-7).
+- Rejected alternatives: tokio/async-std task pool — fleet code would sit on tauri's internal runtime and `wait_with_timeout` on `std::process` still needs threads anyway; a `Semaphore` dep — the token channel is ~15 std lines and already Stop-aware; dedicated watchdog thread per host — same thread count with kill/deadline/exit logic split across two places instead of one poll loop; `child.wait()` + separate timer thread — reintroduces that split.
+
+### ADR-15: IPC surface = 2 commands + 3 run-scoped event families, plan-in-response, error-code prefixes (Fleet Run v1, §12.3)
+- Context: Unit 3–4 (frontend) must be buildable and smoke-mockable before the backend exists (OQ-9 closed: contract frozen early); Tauri events are fire-and-forget with no replay, so anything emitted before the frontend attaches a listener is lost.
+- Decision: exactly two commands, inventory 21 → 23: `fleet_start(req) -> FleetStartResp` and `fleet_stop(run_id) -> ()`; three event families keyed by run: `fleet://output/{run_id}` (chunk: alias, seq, stream, bytes, total_bytes, truncated), `fleet://host/{run_id}` (terminal: status ok|fail|timeout|skipped, exit_code, reason, stdout_bytes, stderr_bytes, truncated), `fleet://summary/{run_id}` (counts, elapsed_ms, min/max non-zero exit). `run_id` is a **client-generated opaque string** supplied in the request: the frontend subscribes to the exact event names *before* invoking `fleet_start`, which closes the fire-and-forget race structurally; the backend echoes it and never invents one. The response additionally carries the authoritative per-host plan (queued|skipped+reason) and, on the all-skipped fast path, the complete summary with no events at all. Rejection errors are stable machine-readable strings (`fleet:already-running`, `fleet:text-too-large`, …) that frontend maps to copy. Payload fields are snake_case, matching every existing DTO as consumed by `src/main.ts`.
+- Consequences: the full contract lives in §12.3 with JSON fixtures the smoke harness can replay via `__emitTauri` without a backend; initial skipped states are response-derived while every post-start transition is event-carried, and pre-subscription (client-run-id) means no transition can be emitted into a window with no listener; contract change = addendum revision, reviewable; 23 commands keeps the §3/§11 inventory self-check meaningful.
+- Rejected alternatives: `tauri::ipc::Channel` streams — breaks the `pty://`-style event convention the smoke mock plugin already replays; per-host event names `fleet://output/{run_id}/{alias}` — puts still-hostile alias bytes into listener strings for no gain; a `fleet_status` poll command — latency cost and a second state source; backend-assigned run_id — frontend cannot subscribe before invoke, so fast finishes on CI (fake ssh in milliseconds) could emit into a listener-less window.
+
+### ADR-16: `HOSTERM_SSH_BIN` — fleet-only ssh binary override (Fleet Run v1, §12.5)
+- Context: feature-spec requires the fleet runner to be testable against a fake ssh on Linux CI with no server; precedent is `HOSTERM_SFTP_BIN` (lib.rs:721), which replaces the sftp lookup entirely.
+- Decision: env var `HOSTERM_SSH_BIN`, read per fleet spawn: if set, its value is argv[0] verbatim (literal path, no PATH magic, no shell); if unset, `ssh`. Scope is the fleet spawn path only — `pty_spawn` (portable-pty `CommandBuilder::new("ssh")`), the sftp layer, and `check_binaries`/`binaries_missing` never read it.
+- Consequences: Unit 1 cargo tests drive the real runner (concurrency ceiling, timeout kill, exit classification, byte-ordering) against shell-script fakes; `check_binaries` stays honest on test machines; override on a production machine is an accepted, documented foot-gun identical in risk profile to the sftp hook.
+- Rejected alternatives: global ssh override across all paths — drags portable-pty spawn changes and terminal smoke churn into a fleet testability need; `#[cfg(test)]`-only injection — tests must exercise the shipping spawn code path, not a parallel one; a config-file directive — fleet must touch no persisted config (NFR-FL2).
+
 ---
 
 ## 8. Invariants (properties — mengalir ke STATE.md + check qa)
@@ -263,6 +289,12 @@ Failure modes and the system's observable response:
 | INV-11 | Untuk setiap konten remote yang valid dirender ke DOM, THE SYSTEM SHALL melewatkan escape helper (`esc()`/`escAttr()`) pada titik render baru — remote bytes adalah input hostile | Proposed: smoke/audit grep situs `innerHTML` baru tanpa esc (wave-2 DOM hardening) |
 | INV-12 | Untuk setiap rilis bertanda (M2+, planned), THE SYSTEM SHALL menolak publish artifact tanpa signature valid — gate verify sebelum upload, `fail_on_unmatched_files: true` | AC-B3.1/.2: dry-run tanpa secret gagal pre-publish + workflow audit (extension §E.8) |
 | INV-13 | Untuk setiap update yang valid diunduh (M3+, planned), THE SYSTEM SHALL memverifikasi minisign terhadap pubkey baked dan menolak downlevel/tampered artifact tanpa efek samping filesystem | AC-B5.x/B6.x tamper fixtures (extension §E.8.5) |
+| INV-14 | Untuk setiap input command/script fleet yang valid, THE SYSTEM SHALL tidak pernah meneruskannya ke shell lokal — byte mencapai proses hanya sebagai elemen argv `ssh` atau byte stdin child; tidak ada `sh -c`/`bash -c`/`cmd /C` di jalur fleet | grep gate verify loop (NFR-FL4) + cargo fixture marker-file (Unit 1) |
+| INV-15 | Untuk setiap pesan IPC fleet yang valid (request, response, event), THE SYSTEM SHALL menjaga 0 secret byte — tipe payload tidak punya field secret; jalur fleet tidak pernah memanggil `lookup_stored_password`/`read_secrets` | code audit + smoke DOM assert sidecar password tak pernah muncul (NFR-FL7) |
+| INV-16 | Untuk setiap run fleet yang valid, THE SYSTEM SHALL tidak pernah menulis `~/.ssh/config`, sidecar, atau file persisten baru — fleet memakai read-only config snapshot tanpa self-heal write | cargo test hash+mtime config/sidecar identik sebelum/sesudah run (NFR-FL2/FL8); FS diff |
+| INV-17 | Untuk setiap byte output remote fleet yang valid dirender ke DOM, THE SYSTEM SHALL melewatkan `esc()`/`escAttr()` — output fleet adalah input hostile (kelas INV-11); pane fleet bukan terminal emulator | smoke fixture `<script>` di stdout chunk → 0 CSP violation, 0 script element di DOM (Unit 4) |
+| INV-18 | Untuk setiap spawn fleet yang valid, argv SHALL memuat `-o BatchMode=yes` dan tidak pernah memuat flag auto-accept host key (`StrictHostKeyChecking=no`, `-o UserKnownHostsFile=/dev/null`), forwarding tambahan (`-A`/`-X`), PTY (`-t`), atau eskalasi (`sudo`, `-A` ssh-agent forwarding ke perintah) | cargo test pure argv-builder + grep gate (FR-FL18/FL23/FL35, OQ-2/OQ-3 closed) |
+| INV-19 | Untuk setiap alias terpilih yang valid menuju spawn fleet, THE SYSTEM SHALL menerapkan guard yang sama dengan `sftp_safe` (leading `-`, CR atau LF → `skipped` reason `unsafe alias`, 0 spawn) | cargo test guard alias; reuse fungsi yang sama dengan INV-10 (FR-FL20) |
 
 ---
 
@@ -314,9 +346,258 @@ Pyramid mapped to the real, measured baseline (STATE.md, 19 Okt 2026, post-W2-A/
 2. `npm run build` → 0 TS errors.
 3. `npm install --no-save playwright@1.63.0 && node qa-reports/headless-smoke.mjs` → 75 pass (baseline + new checks per landed unit), CSP-violation counter == 0; then remove playwright per repo hygiene.
 4. SDD self-checks (executed at authoring): `grep -c 'INV-' docs/SDD-hosterm-v2.md` → ≥ 8; `grep -c 'IF .* THEN THE SYSTEM SHALL' docs/SDD-hosterm-v2.md` → ≥ 6; section headers byte-identical to `templates/sdd.md`; every ADR carries Context/Decision/Consequences/Rejected alternatives; testing commands above are the live verify loop.
-5. Code-claim traceability: command list §3 matches `#[tauri::command]` inventory (21); CSP string §7 ADR-6 matches `tauri.conf.json`; `plugins.updater` absent from `tauri.conf.json` until M3 (AC-B3.3).
-6. Invariant flow: INV-1..13 carry named existing-or-proposed checks; wave-2 rows (INV-12/13) activate with M2/M3 code per extension §E.8.
+5. Code-claim traceability: command list §3 matches `#[tauri::command]` inventory (21 today; Fleet Run v1 adds `fleet_start` + `fleet_stop` → 23 when Unit 2 lands, §12.3); CSP string §7 ADR-6 matches `tauri.conf.json`; `plugins.updater` absent from `tauri.conf.json` until M3 (AC-B3.3).
+6. Invariant flow: INV-1..19 carry named existing-or-proposed checks; wave-2 rows (INV-12/13) activate with M2/M3 code per extension §E.8; fleet rows (INV-14..19) activate with Fleet Run v1 code per §12.
 
 ---
 
-*Sources: docs/PRD-hosterm-v2.md, docs/SDD-hosterm-v1.md, docs/SDD-hosterm-v1-extension-signing-updater.md, docs/EPIC-TSD-redesign-arus-v1.md, docs/FEATURE-SPEC-wave-2-draft.md, docs/STATE.md, docs/SPIKE-csp-findings.md, src-tauri/src/lib.rs, src/main.ts, src-tauri/tauri.conf.json (all read 2026-10-19). Note: PRD-hosterm-v2.md landed mid-authoring from pm; header/flows reconciled against it.*
+## 12. Fleet Run v1 (addendum Unit 0 — runner architecture + frozen IPC contract)
+
+> Architect addendum (card t_a367888f, 19 Okt 2026), derived FROM `docs/FEATURE-SPEC-fleet-run-v1.md`. Design-first lane: the spec's OQ decisions 1–9 are CLOSED constraints, not inputs to re-debate here; this section supplies exactly what Unit 0 owed them — the password-host PTY-vs-pipe verdict (§12.8), command/event names, env-override name, kill/timeout form. Units 1–2 (backend) and 3–4 (frontend) code against §12.3 verbatim; **the frontend mocks this contract without any backend**. A payload or name change requires an edit to this section (new ADR), never an implementation-side drift.
+
+### 12.1 Constraints honored (trace)
+
+| Constraint | Mechanism (this section) |
+|---|---|
+| FR-FL12 / NFR-FL4 — no local shell ever | ADR-13: text reaches a process only as one `ssh` argv element or stdin bytes; INV-14 |
+| FR-FL18 / FL23 — `BatchMode=yes`, N parallel, timeout covers connect+exec | ADR-13 argv + ADR-14 deadline measured from spawn; INV-18 |
+| FR-FL20 / FL21 — skip unsafe alias / password host, 0 spawn for them | pure `host_eligibility` (§12.4) + `sftp_safe` reuse; INV-19 |
+| FR-FL26 / INV-11 — hostile output bytes | INV-17: `esc()`/`escAttr()` at every fleet render; no terminal emulation |
+| FR-FL34 / NFR-FL2 / NFR-FL8 — fleet writes nothing | read-only config snapshot (§12.2), no self-heal write on this path; INV-16 |
+| FR-FL35 — no sudo/escalation/forwarding flags inserted | fixed argv builder only (§12.4 #6); INV-18 |
+| FR-FL36 / NFR-FL7 — 0 secret bytes over IPC | request/event types have no secret field; fleet never calls `lookup_stored_password`/`read_secrets`; INV-15 |
+| NFR-FL1 — 0 new dependencies | std threads + mpsc token channel + `std::process` (ADR-13/14) |
+| NFR-FL3 — output ≤ 2 MiB + 64 KiB × hosts | backend streams pass-through (8 KiB read buffer), counts only; retention ring lives in frontend (§12.6) |
+| NFR-FL5 — first spawn ≤ 200 ms after confirm | `fleet_start` = validate + snapshot + spawn coordinator, returns immediately; coordinator's first action is token-acquire + spawn of host 1 |
+| NFR-FL9 — never touch `authorized_keys`, no elevation | spawn is `ssh` with config-derived identity only; nothing writes under `~/.ssh` beyond the ssh binary's own known_hosts behavior (unchanged from CLI) |
+
+### 12.2 Runner architecture
+
+Module placement (keeps the `lib.rs` diff ~3 lines — `mod fleet;` + `.manage(FleetState::default())` + 2 `generate_handler!` entries; also shrinks the Unit 1–2 hotspot collision surface):
+
+```
+src-tauri/src/fleet.rs   ← ALL fleet code: pure fns (§12.4), DTO structs (Serialize/Deserialize),
+                           FleetState, coordinator + host-task threads, #[tauri::command] wrappers
+                           fleet_start / fleet_stop, and #[cfg(test)] mod tests (fake-ssh fixtures)
+src-tauri/src/lib.rs     ← sftp_safe stays there (pub(crate)); fleet reuses it. No other fleet logic.
+src/main.ts              ← panel + dialog + per-host output ring buffer (Units 3–4, after Arus U9)
+```
+
+Process topology per run (ADR-13/14):
+
+```
+frontend invoke fleet_start(req{run_id,…})                 ← run_id = client-generated string (UUIDv4)
+  │ validate (pure): ranges, text cap, aliases non-empty   → on failure: Err("fleet:<code>"), 0 spawn
+  │ ssh presence probe (binaries_missing core, no spawn)   → missing: Err("fleet:ssh-missing")
+  │ config_snapshot(): read+parse ONLY (no migrate/self-heal write — INV-16)
+  │ plan: host_eligibility per alias → queued / skipped+reason
+  │ spawn coordinator thread; return FleetStartResp{run_id, hosts, finished, summary} immediately
+  ▼
+coordinator thread ── token channel (N permits) ──┬─ host-task thread × ≤N
+  │  for each queued alias: acquire (recv_timeout, stop-aware) → spawn host task
+  │  on stop observed with unstarted hosts left: emit fleet://host(skipped,"stopped by user") for each
+  │  after all host tasks done: aggregate counts + emit fleet://summary → Drop guard clears FleetState.active
+  ▼
+host-task thread (owns its Child exclusively)
+  │  build argv (pure §12.4 #6) → std Command spawn (CREATE_NO_WINDOW on Windows, sftp-path parity)
+  │  script mode: stdin-writer helper thread (write_all normalized bytes → drop = EOF)
+  │  reader helper threads ×2: stdout, stderr → 8 KiB reads → String::from_utf8_lossy → emit chunk event
+  │  poll loop, 50 ms: child.try_wait()? → finished(exit)  else stop flag? → kill+finished(stop)
+  │                    else deadline? → kill+finished(timeout)   (precedence: natural exit > stop > timeout)
+  │  join readers (kill/exit closes pipes) → classify (§12.4 #4) → emit fleet://host → return token
+```
+
+Per-host state machine (frozen; FR-FL27 exactly one terminal state per host):
+
+```
+plan:  queued ──────────────► running ──► ok | fail | timeout | skipped("stopped by user")
+       skipped(reason) [terminal at start — carried in the response, NEVER re-emitted as event]
+queued hosts killed by Stop before spawn: coordinator emits skipped("stopped by user") — that is their only event.
+```
+
+Panic-safety: the coordinator clears `FleetState.active` through a guard struct's `Drop`, so a panicking run can never wedge the single-run lock (FR-FL31).
+
+### 12.3 Frozen IPC contract (Unit 2 implements verbatim; Unit 3–4 mock verbatim)
+
+Conventions: command args are camelCase at the Tauri boundary (v2 auto-maps to snake_case Rust fields, same as every existing command); **event payload fields are snake_case JSON**, matching how `src/main.ts` already consumes `HostDto` (`h.host_name`, `h.auth_method`). `run_id` is an opaque client-generated string, max 64 chars, treated only as an event-name suffix + echo — backend never parses it.
+
+Commands (inventory 21 → 23):
+
+```ts
+invoke("fleet_start", { req: FleetStartReq }): Promise<FleetStartResp>
+interface FleetStartReq {
+  run_id: string;            // UUIDv4 generated by frontend BEFORE the call (pre-subscribed events, ADR-15)
+  mode: "command" | "script";
+  text: string;              // command (1 line) or script body as UTF-8 text; ≤ 2 MiB (UTF-8 bytes)
+  aliases: string[];         // picker selection, dedup'd by picker; backend replans authoritatively
+  timeout_secs: number;      // 5..600; frontend default 60 — backend REJECTS out of range, never clamps
+  concurrency: number;       // 1..20; frontend default 5 — same reject rule
+}
+interface FleetStartResp {
+  run_id: string;            // echo
+  hosts: FleetHostPlan[];    // picker order; authoritative initial state
+  finished: boolean;         // true ⇒ zero hosts eligible to run: no event will EVER come for this run
+  summary: FleetSummary | null; // non-null only when finished == true (computed from the plan)
+}
+interface FleetHostPlan {
+  alias: string;
+  eligible: boolean;
+  status: "queued" | "skipped"; // skipped = TERMINAL, carried here, never as an event
+  reason: string | null;        // frozen reason codes below; null when eligible
+}
+
+invoke("fleet_stop", { runId: string }): Promise<null>
+// Idempotent: unknown/finished run_id → Ok no-op (panel-close Stop can always fire, FR-FL37).
+```
+
+Frozen reason codes (exact strings; `skipped` carries only the first five; `fail` carries only `spawn failed` / `killed by signal`; `ok` and `timeout` always carry null):
+
+| reason | rule |
+|---|---|
+| `unsafe alias` | `sftp_safe`-guard fails: leading `-` or contains CR/LF (FR-FL20, INV-19) |
+| `unknown alias` | alias absent from the config snapshot (picker race / stale selection; trust boundary) |
+| `wildcard pattern` | alias contains `*`/`?` — never spawnable (spec §: pickers exclude, backend re-guards) |
+| `password host (not supported in v1)` | `auth_method == "password"` OR sidecar entry exists (FR-FL21; §12.8) |
+| `stopped by user` | queued host never started after Stop, or running host killed by Stop (FR-FL30) |
+| `spawn failed` | `Command::spawn` error → status `fail`; message never contains raw spawn strings (FR-E3 posture) |
+
+Eligibility precedence is fixed in that row order (unsafe alias first — spawn-safety dominates product-skip reasons).
+
+Events (backend `app.emit`; frontend `listen("fleet://output/" + run_id, …)` **before** invoking `fleet_start`):
+
+```ts
+// fleet://output/{run_id} — one per read chunk, per host, ordered per host by seq
+interface FleetOutputChunk {
+  alias: string;
+  seq: number;               // u32, starts 1, monotonic per host ACROSS both streams (shared counter)
+  stream: "stdout" | "stderr";
+  bytes: string;             // from_utf8_lossy of ≤ 8192 raw bytes (ADR-13 boundary note)
+  total_bytes: number;       // u64, running stdout+stderr observed AFTER this chunk (pre-cap truth)
+  truncated: boolean;        // total_bytes > 65536 at this chunk (row marker; FR-FL25)
+}
+// fleet://host/{run_id} — terminal, exactly once per STARTED host (never for plan-skipped hosts)
+interface FleetHostDone {
+  alias: string;
+  status: "ok" | "fail" | "timeout" | "skipped";
+  exit_code: number | null;  // null when killed by our timeout/Stop (post-kill code meaningless)
+                             // or signal-death; frontend shows code only when non-null
+  reason: string | null;     // frozen codes above; null for ok + timeout
+  stdout_bytes: number; stderr_bytes: number;  // u64 totals observed (uncapped)
+  truncated: boolean;        // final truth for the row (stdout+stderr > 65536)
+}
+// fleet://summary/{run_id} — exactly once, ALWAYS last (after every host event of started hosts)
+interface FleetSummary {
+  run_id: string;
+  ok: number; fail: number; timeout: number; skipped: number; // skipped INCLUDES plan-skips; ok+fail+timeout+skipped == plan hosts
+  elapsed_ms: number;        // coordinator: after validation → last terminal state
+  min_exit: number | null;   // min non-zero exit code observed among fail hosts (FR-FL29); null if none
+  max_exit: number | null;
+}
+```
+
+Frozen ordering rules:
+1. Plan (queued/skipped initial states) = response only. Events = post-start transitions only.
+2. Pre-subscription makes event loss structurally impossible; if an `emit` still fails (webview gone), the backend keeps counting and proceeds — delivery failure never kills a child or wedges state (FR-FL24 non-blocking).
+3. `fleet://summary` is the last event of every non-finished run; frontend uses it to unlisten and re-enable Run (FR-FL31).
+4. App quit / panel close during run → Stop path first (FR-FL37), then unlisten.
+
+Rejection errors (exact strings — frontend maps prefix → copy; 0 spawn, 0 events):
+
+| `Err(...)` | condition |
+|---|---|
+| `fleet:already-running` | a run is active (FR-FL31) or req.run_id == active run's id |
+| `fleet:empty-selection` | `aliases` empty |
+| `fleet:empty-input` | `text` empty/whitespace-only (backend re-gates FR-FL11) |
+| `fleet:text-too-large` | `text` > 2 MiB UTF-8 bytes (FR-FL10 backend half of the gate) |
+| `fleet:bad-timeout` | outside 5..600 |
+| `fleet:bad-concurrency` | outside 1..20 |
+| `fleet:ssh-missing` | presence probe says no ssh binary (FR-FL32; recovery-path copy is frontend) |
+| `fleet:config-unreadable` | snapshot read failed (same posture as config editor refusing) |
+
+Constants (single source of truth; frontend mirrors them with a comment naming this section):
+
+| Name | Value | Meaning |
+|---|---|---|
+| `RETENTION_BYTES` | 65536 (64 KiB) | per-host display ring + `truncated` threshold |
+| chunk read size | 8192 | max raw bytes per chunk event |
+| poll interval | 50 ms | deadline/stop/exit granularity |
+| `TEXT_MAX_BYTES` | 2097152 | request text cap (FR-FL10) |
+| concurrency | default 5, range 1–20 | FR-FL18 / OQ-6 closed |
+| per-host timeout | default 60 s, range 5–600 s | Clarifying Q5 closed |
+
+Mock fixture (copy-paste for Unit 3–4; `run_id = "r-7"`): `fleet_start` resolves
+
+```json
+{ "run_id": "r-7", "finished": false, "summary": null,
+  "hosts": [
+    { "alias": "prod-web", "eligible": true,  "status": "queued",  "reason": null },
+    { "alias": "db-core",  "eligible": true,  "status": "queued",  "reason": null },
+    { "alias": "web-03",   "eligible": true,  "status": "queued",  "reason": null },
+    { "alias": "pw-host",  "eligible": false, "status": "skipped", "reason": "password host (not supported in v1)" } ] }
+```
+
+then replay, in this order, via `window.__emitTauri`:
+
+```json
+{ "name": "fleet://output/r-7", "payload": { "alias": "prod-web", "seq": 1, "stream": "stdout", "bytes": "up 3d\n", "total_bytes": 7, "truncated": false } }
+{ "name": "fleet://output/r-7", "payload": { "alias": "db-core", "seq": 1, "stream": "stderr", "bytes": "Host key verification failed.\r\n", "total_bytes": 31, "truncated": false } }
+{ "name": "fleet://host/r-7",   "payload": { "alias": "prod-web", "status": "ok", "exit_code": 0, "reason": null, "stdout_bytes": 7, "stderr_bytes": 0, "truncated": false } }
+{ "name": "fleet://host/r-7",   "payload": { "alias": "db-core", "status": "fail", "exit_code": 255, "reason": null, "stdout_bytes": 0, "stderr_bytes": 31, "truncated": false } }
+{ "name": "fleet://host/r-7",   "payload": { "alias": "web-03", "status": "timeout", "exit_code": null, "reason": null, "stdout_bytes": 12, "stderr_bytes": 0, "truncated": false } }
+{ "name": "fleet://summary/r-7", "payload": { "run_id": "r-7", "ok": 1, "fail": 1, "timeout": 1, "skipped": 1, "elapsed_ms": 60042, "min_exit": 255, "max_exit": 255 } }
+```
+
+All-skipped fast path (FR edge case "0 host layak"): `finished: true`, `summary` non-null (`ok/fail/timeout` = 0, `skipped` = |plan|, `elapsed_ms` small, min/max null), NO events, unlisten immediately. `fleet_stop` on it is a no-op.
+
+Hostile-render fixture for Unit 4 CSP check: one chunk with `bytes: "<script>alert(1)</script>"` → DOM must contain the escaped text only, CSP violation counter == 0 (INV-17).
+
+Frontend-owned behavior (not backend, fixed here so nobody re-decides): dialog copy derives counts from `read_ssh_config` DTOs before calling (FR-FL13/14/15 — `sudo` regex and `ForwardAgent yes` scan over `HostDto.options` happen in main.ts); `bash`-absent targets (exit 127) and `Host key verification failed` (exit 255 + stderr substring) get their recovery-hint extra line rendered frontend-side from event payloads — backend classification stays exit-code-honest (§12.7).
+
+### 12.4 The five pure functions (+ argv builder) — §12.4 in `fleet.rs`, all `#[cfg(test)]`-covered, no network, no real ssh
+
+| # | Function | Rule (frozen) | Unit-1 test |
+|---|---|---|---|
+| 1 | `fn host_eligibility(alias: &str, snap: Option<&HostSnapshot>) -> Eligibility` | precedence: `crate::sftp_safe(alias,"Alias").is_err()` → Skip(`unsafe alias`); `snap.is_none()` → Skip(`unknown alias`); wildcard chars → Skip(`wildcard pattern`); `auth_method=="password" \|\| has_password` → Skip(`password host (not supported in v1)`); else Run | skip-reason matrix incl. precedence |
+| 2 | `fn pick_transport(mode: Mode, text: &str) -> Transport` | `Script` unless mode==Command AND text has no `\n` (multi-line input is always a script — FR-FL7) | 1-line/2-line/`\r\n`-only inputs |
+| 3 | `fn normalize_script(text: &str) -> String` | `\r\n`→`\n`, then lone `\r`→`\n`, then ensure final byte is `\n` (append if missing; never strips existing newlines/blank lines — they are content) | CRLF file, lone CR, no-final-newline, ends-with-newline |
+| 4 | `fn classify_status(ev: &FinishEvidence) -> (Status, Option<&'static str>)` | precedence: `killed_by_timeout` → `timeout`; `killed_by_stop` → (`skipped`, `stopped by user`); `exit==Some(0)` → `ok`; `exit==Some(n)` → `fail`; `exit==None` → (`fail`, `killed by signal`) | matrix incl. 255 and None |
+| 5 | alias guard = **reuse `crate::sftp_safe`** (no new fn; leading `-`/CR/LF) | INV-19 == INV-10 family; one implementation, two call sites | existing tests carry it; fleet call-site test |
+| 6 | `fn ssh_argv(bin: &str, alias: &str, t: &Transport) -> Vec<String>` (bonus pure, is the spawn's only argv source) | `[bin, "-o", "BatchMode=yes", alias]` + Command: `[text]` / Script: `["bash","-s"]`; NOTHING else is ever appended | INV-18 assert: contains BatchMode, never `StrictHostKeyChecking`/`-A`/`-X`/`-t`/`sudo` |
+
+`HostSnapshot` is `{ alias, auth_method, has_password, is_wildcard }` built by `fn snapshot_hosts(text: &str) -> Vec<HostSnapshot>` — pure wrapper over the existing `parse_config` with the migration/self-heal write branch REMOVED from the fleet call path (INV-16; the normal `read_ssh_config` command keeps its self-heal).
+
+### 12.5 `HOSTERM_SSH_BIN` (ADR-16) — semantics
+
+- Read fresh per spawn (no caching): set → argv[0] = value verbatim (absolute path recommended); unset → `"ssh"`.
+- Fleet spawn path ONLY: `pty_spawn` (terminal), sftp layer, `check_binaries`/`binaries_missing` never consult it.
+- Fake-ssh test pattern (Unit 1): a shell script honoring the real interface — reads stdin when given `bash -s`, prints to stdout/stderr, exits with a scripted code. The concurrency ceiling is asserted by child-lifetime overlap: the fake logs its start and exit timestamps as output lines, and the test asserts no more than N overlapping intervals among the recorded pairs. Same fixtures drive timeout kill (fake sleeps 30 s vs test timeout 5 s), exit classification (codes 0/2/255/None), and the config-bytes invariant (snapshot hash + mtime before/after a multi-host run).
+
+### 12.6 Output retention (NFR-FL3 mechanism)
+
+Backend never buffers host output: reader threads copy one 8 KiB read into one event and drop it — per-host backend memory is O(8 KiB) regardless of run size. Two counters per host (stdout, stderr) ride in the events. The 64 KiB RETENTION ring lives in the frontend per host: append `bytes` to a string buffer; when length > 65536, cut from the FRONT (oldest bytes die), set the `truncated` row marker (also carried authoritatively on chunk + terminal events from the backend counters, so the marker survives even if display trimming is reworked). NFR-FL3 bound follows: ≤ 64 KiB × hosts (frontend) + 8 KiB × live hosts (backend) + ≤ 2 MiB input copy, plus one `fleet://summary` event.
+
+### 12.7 Error-handling approach (fleet delta, EARS)
+
+- IF `fleet_start` validation fails (any §12.3 error prefix) THEN THE SYSTEM SHALL reject the invoke with that exact prefix, spawn 0 processes, and emit 0 events for the run.
+- IF a child fails to spawn (ssh vanished after probe, EACCES) THEN THE SYSTEM SHALL mark that host `fail` with reason `spawn failed`, a friendly message with no raw spawn strings, and release its permit to the queue.
+- IF a host's ssh exits non-zero (including 255 for connect/auth/host-key failures) THEN THE SYSTEM SHALL classify `fail` with the raw exit code and stream the stderr tail, and never phrase it as "remote command failed" for 255 (ambiguity per spec edge case).
+- IF a host reaches its deadline (counted from spawn, covering connect+exec — FR-FL23) THEN THE SYSTEM SHALL kill the local child, classify `timeout` with `exit_code: null`, and keep other hosts running.
+- IF Stop fires (`fleet_stop` or panel-close) THEN THE SYSTEM SHALL set the run stop flag, let each host task kill its own child (≤ 50 ms), mark started-but-unfinished hosts `skipped`/`stopped by user`, mark unstarted queued hosts the same via the coordinator, and still emit exactly one summary.
+- IF natural exit and kill race inside one poll tick THEN THE SYSTEM SHALL take the `try_wait` result (exit wins) — the fixed precedence that keeps fast auth failures `fail`, never `timeout`.
+- IF an event emit fails THEN THE SYSTEM SHALL log nothing to disk, keep counters correct, and complete the run (delivery ≠ execution).
+- IF the app quits mid-run THEN THE SYSTEM SHALL let OS process teardown reap children (ADR-7 posture); fleet writes no files, so there is nothing to clean (NFR-FL2).
+
+### 12.8 Password hosts in fleet — v2 note (NOT v1 design)
+
+Structural verdict for the spec's Clarifying Q3 / R-FL-1: a spawn has exactly one stdin — either the pipe carrying the script (`bash -s`, FR-FL7/8) or the PTY slave carrying a fed password. The two cannot coexist in one child, and feeding a password to `ssh <alias> <cmd>` through a PTY has never been proven in this codebase (what is proven: interactive persistent sessions — terminal PTY and persistent `sftp` — where a prompt-watching pump types the secret once). v1 therefore skips password hosts with the frozen reason (`FR-FL21`), per CLOSED OQ-1. v2 (fleet passwords) requires, BEFORE any spec: a spike proving prompt-injection into `ssh` under a piped-stdin alternative (expect-style prompt watch on a PTY with script delivered via `ssh -o … 'bash -s' < heredoc` re-think, or `SSH_ASKPASS` with a helper that never holds the secret across IPC — neither is designed here). This note is the owed input to the v2 spec author; it is explicitly out of v1 scope and blocks nothing.
+
+### 12.9 Verification mapping (Unit 0 → Units 1–5)
+
+- Unit 1 (runner core): `cd src-tauri && cargo test --lib` → baseline 52 + ≥ 8 new (rows §12.4 tests 1–4 + argv-builder INV-18 + eligibility precedence + concurrency-ceiling vs fake ssh + timeout kill + `snapshot_hosts` byte-identity: config file hash+mtime unchanged across a multi-host run — INV-16/NFR-FL8).
+- Unit 2 (IPC): `fleet_start`/`fleet_stop` registered (inventory 23 — §11.5 self-check), payloads byte-for-byte as §12.3 structs; error prefixes asserted by string; `finished:true` fast path emits zero events.
+- Unit 3–4 (frontend): mock replay of the §12.3 fixtures; Cancel path = 0 `fleet_start` invocations (NFR-FL6 smoke counter); hostile-bytes fixture + CSP counter 0 (INV-17); `truncated` marker from a >64 KiB mock (Unit 4).
+- Unit 5: grep gate `sh -c|bash -c|cmd /C` = 0 hits in `src-tauri/src/fleet.rs` + fleet section of `main.ts` (INV-14); STATE.md verify numbers re-measured.
+
+---
+
+*Sources: docs/PRD-hosterm-v2.md, docs/SDD-hosterm-v1.md, docs/SDD-hosterm-v1-extension-signing-updater.md, docs/EPIC-TSD-redesign-arus-v1.md, docs/FEATURE-SPEC-wave-2-draft.md, docs/FEATURE-SPEC-fleet-run-v1.md, docs/STATE.md, docs/SPIKE-csp-findings.md, src-tauri/src/lib.rs, src/main.ts, qa-reports/headless-smoke.mjs, src-tauri/tauri.conf.json (all read 2026-10-19). Note: PRD-hosterm-v2.md landed mid-authoring from pm; header/flows reconciled against it. §12 addendum + ADR-13..16 + INV-14..19 authored for card t_a367888f (Fleet Run Unit 0).*

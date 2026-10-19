@@ -19,6 +19,13 @@ Desktop SSH/SFTP client, Tauri v2 + TypeScript, Windows-first (WebView2) but dev
 - (lead t_d4e7dde5, U4) Hardening harness smoke penuh — retry `chromium.launch()` saat 'page/browser has been closed' + close-on-error + cleanup server: U4 cuma menambah fail-fast pesan port 4199 (EADDRINUSE); flake chromium 1/4 run bersifat lingkungan, U9 memang pemilik audit smoke.
 - (lead t_d4e7dde5, U4) `APP_VERSION` hardcoded di main.ts — diganti jadi build-time define (vite `define`/`import.meta.env`) supaya tak perlu sinkron manual saat version bump; vite.config di luar scope unit UI U4.
 
+## Fleet Run v1 (epic status — playbook: docs/EPIC-TSD-fleet-run-v1.md)
+- Doc-chain landed 19 Okt (commit ini): FEATURE-SPEC approved MEKL (OQ 1–9 CLOSED, jangan dibuka) · SDD §12 + ADR-13..16 + INV-14..19 = kontrak IPC **BEKU** (21→23 commands; event `fleet://output|host|summary/{run_id}`; reason/error strings persis §12.3 — perubahan = addendum architect) · EPIC-TSD-fleet-run-v1 (analyze pass 12 findings + unit plan final).
+- Unit akhir (lead granularity call): **FL-1 merged backend** (spec Unit 1+2 jadi satu — SDD §12.2 taruh semua kode di `src-tauri/src/fleet.rs` BARU, `lib.rs` diff ±3 baris + visibilitas `pub(crate)` → serialisasi "file sama" antar-unit tidak pernah bisa paralel, split = nol gain) → **FL-2 panel+dialog** → **FL-3 live output+summary** → **FL-4 smoke canonization+docs** (paling akhir).
+- Scheduling vs Arus: FL-1 dispatch SEKARANG paralel U5–U9 (file-disjoint, tidak sentuh hotspot). FL-2 WAJIB setelah Arus U9 merge ke main (gate `git log origin/main`, hotspot `main.ts`/`styles.css`/smoke — satu card aktif per file, postur Arus §0). FL-2→FL-3→FL-4 serial.
+- Keputusan lead yang mengikat implementasi (TSD §0): sidecar presence fleet = `sidecar_aliases()` keys-only di fleet.rs (INV-15 literal utuh, FR-FL21 terpenuhi; JANGAN panggil `read_secrets`) · script file dibaca frontend via FileReader (0 IPC baru) · `run_id` = `crypto.randomUUID()` sebelum subscribe · dialog dari DTO, state awal dari response plan · close-panel = Stop→unlisten (idempoten).
+- Baseline verify loop saat dispatch = **re-measure** (cargo 52 + ≥8 fleet baru; smoke bergeser tiap unit Arus yang mendarat — angka STATE kanonik, bukan angka spec/PRD).
+
 ## Hard invariants (never break)
 1. `~/.ssh/config` must stay parseable by REAL ssh at all times. No secrets in it — ever. Sidecar only.
 2. Round-trip edits preserve comments, order, unknown directives.
