@@ -322,8 +322,8 @@ function applyAuthMode(method: string, hasPassword = false) {
   if (method === "password") {
     note.textContent = hasPassword
       ? "A password is stored for this host. Leave the field empty to keep it; type to replace it."
-      : "The password is stored in ~/.ssh/config (file perms 0600) and filled in automatically at connect.";
-    pw.placeholder = hasPassword ? "kept — type to replace" : "stored in ~/.ssh/config";
+      : "The password is stored in ~/.ssh/hosterm.secrets (file perms 0600), never in ~/.ssh/config, and filled in automatically at connect.";
+    pw.placeholder = hasPassword ? "kept — type to replace" : "stored in ~/.ssh/hosterm.secrets";
   }
 }
 
