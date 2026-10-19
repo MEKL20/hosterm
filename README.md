@@ -79,11 +79,13 @@ npm install
 npm run tauri build
 ```
 
-To cross-build the Windows `.exe` from Linux, see
-[`BUILD-WINDOWS-FROM-LINUX.md`](BUILD-WINDOWS-FROM-LINUX.md). The installer bundle
-(NSIS `.exe` / WiX `.msi`) must be produced on Windows — the
-[`.github/workflows/build-windows.yml`](.github/workflows/build-windows.yml) workflow
-does this on a `windows-latest` runner (push a `v*` tag or trigger it manually).
+The Windows installers (NSIS `.exe` / WiX `.msi`) are built on a `windows-latest`
+runner by [`.github/workflows/build-windows.yml`](.github/workflows/build-windows.yml)
+— push a `v*` tag (or trigger it manually) and the assets are attached to the
+GitHub release. Cross-building the raw `.exe` from Linux is not part of the
+release flow (the recipe used to live in `BUILD-WINDOWS-FROM-LINUX.md`, now
+removed; the knowledge is preserved in the maintainer's `tauri-cross-build-windows`
+skill).
 
 ## License
 
