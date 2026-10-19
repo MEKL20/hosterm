@@ -12,9 +12,9 @@ Agent instructions for working in this repo. Full context lives in [docs/STATE.m
 
 ## Verify loop (every change)
 
-1. `cd src-tauri && cargo test --lib` → 48 pass.
+1. `cd src-tauri && cargo test --lib` → 49 pass.
 2. `npm run build` → no TS errors.
-3. `npm install --no-save playwright@1.63.0 && node qa-reports/headless-smoke.mjs` → 43+ pass, then `rm -rf node_modules/playwright node_modules/playwright-core node_modules/.bin/playwright*` before staging.
+3. `npm install --no-save playwright@1.63.0 && node qa-reports/headless-smoke.mjs` → 51 pass, then `rm -rf node_modules/playwright node_modules/playwright-core node_modules/.bin/playwright*` before staging.
 4. Extend `qa-reports/headless-smoke.mjs` for new behavior.
 
 ## Commit hygiene
