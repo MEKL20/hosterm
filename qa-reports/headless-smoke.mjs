@@ -10,6 +10,26 @@ import { extname, join } from "path";
 const DIST = new URL("../dist", import.meta.url).pathname;
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css" };
 
+// CSP (AC R1, SEC-4): single source of truth = app.security.csp in
+// src-tauri/tauri.conf.json (JSON, no comments allowed there — rationale lives here).
+// Served on every response below so violations caught here mean real policy breaches.
+// Per-directive (docs/SPIKE-csp-findings.md §3):
+//   default-src 'self'            — deny-by-default floor
+//   script-src 'self'             — STRICT (PRD R1.6, never relax); bundle is 1 external
+//                                   file, 0 inline scripts; Tauri appends its own nonce
+//   style-src 'self' 'unsafe-inline' — SOLE relaxation: CodeMirror style-mod injects
+//                                   runtime <style>; hashes impractical (generated CSS),
+//                                   nonce would neutralize 'unsafe-inline' (spike §2 trap)
+//   img-src/font-src 'self'       — no data:/blob: usage, no @font-face
+//   connect-src 'self' ipc: http://ipc.localhost — Tauri v2 does NOT auto-append IPC
+//                                   origins (spike §1); ipc: = Linux, http://ipc.localhost = Windows
+//   object-src 'none'             — no plugins
+//   base-uri 'self'               — blocks injected <base> hijack
+//   frame-ancestors 'none'        — no embedding
+//   form-action 'none'            — zero <form> submits in app (all modals JS-driven);
+//                                   blocks form-nav exfil (CSP3: no default-src fallback)
+const CSP = JSON.parse(readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8")).app.security.csp;
+
 const sampleSftp = [
   { name: "notes.txt", is_dir: false, is_link: false, size: 142 },
   { name: "projects", is_dir: true, is_link: false, size: 4096 },
@@ -54,6 +74,7 @@ const invoke = (cmd, args = {}) => {
 const server = createServer((req, res) => {
   let p = join(DIST, req.url === "/" ? "index.html" : req.url.split("?")[0]);
   if (!existsSync(p)) p = join(DIST, "index.html");
+  res.setHeader("Content-Security-Policy", CSP); // prod policy (AC R1.4 meaningfulness)
   res.setHeader("content-type", MIME[extname(p)] || "text/plain");
   res.end(readFileSync(p));
 });
@@ -70,8 +91,16 @@ await page.addInitScript(() => {
     invoke: (cmd, args) => globalThis.__invokeImpl(cmd, args),
   };
 });
+// CSP-violation collector (AC R1.4): securitypolicyviolation events for the whole run
+await page.addInitScript(() => {
+  window.__cspViolations = [];
+  document.addEventListener("securitypolicyviolation", (e) => {
+    window.__cspViolations.push(`${e.effectiveDirective}: ${e.blockedURL || e.sourceFile || "inline"}`);
+  });
+});
 await page.exposeFunction("__invokeImpl", invoke);
-await page.goto("http://localhost:4199/");
+const firstResp = await page.goto("http://localhost:4199/");
+const servedCsp = (firstResp.headers()["content-security-policy"] || "").trim();
 await page.waitForTimeout(400);
 
 const results = [];
@@ -332,6 +361,11 @@ const g2 = await panes.nth(1).evaluate((el) => ({ x: el.getBoundingClientRect().
 check("local pane is left of remote", g1.x < g2.x && g1.t.includes("This PC") && g2.t.includes("remote"), `L=${g1.t}@${Math.round(g1.x)} R=${g2.t}@${Math.round(g2.x)}`);
 
 check("no console/page errors", errors.length === 0, errors.slice(0, 3).join(" | "));
+
+// SEC-4 / AC R1.4: zero CSP violations across the full suite
+const cspViolations = await page.evaluate(() => window.__cspViolations || []);
+check("CSP violations == 0 across suite (AC R1.4)", cspViolations.length === 0, cspViolations.slice(0, 3).join(" | "));
+check("served CSP == tauri.conf.json policy", servedCsp === CSP.trim(), servedCsp.slice(0, 80));
 
 console.log(results.join("\n"));
 const fails = results.filter((r) => r.startsWith("FAIL")).length;
