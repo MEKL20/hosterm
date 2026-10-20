@@ -75,10 +75,15 @@
           </label>
         </div>
         <div id="row-password" class="hidden">
+          <div id="pw-stored-row" class="pw-row hidden">
+            <span class="pw-badge" id="pw-badge" title="Password tersimpan di sidecar 0600, tidak di ~/.ssh/config"><span class="dot"></span> stored (sidecar, 0600)</span>
+            <button type="button" id="m-delete-pw" class="link-danger" title="Hapus password tersimpan — butuh konfirmasi">Hapus password tersimpan</button>
+          </div>
           <label>Password
             <input id="f-password" type="password" placeholder="stored in ~/.ssh/hosterm.secrets" autocomplete="off" />
           </label>
           <p class="note" id="row-password-note"></p>
+          <p class="note hidden" id="row-password-note-d3">Auto-typing hanya aktif untuk host ini (opt-in per host).</p>
         </div>
         <div class="modal-actions">
           <button id="m-delete" class="danger hidden">Delete</button>

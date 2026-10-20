@@ -97,6 +97,9 @@ const invoke = (cmd, args = {}) => {
     case "pty_spawn": return Promise.resolve(4242);
     case "pty_resize": case "pty_kill": case "pty_write": case "clipboard_write": case "clipboard_read": return Promise.resolve("");
     case "save_host": case "delete_host": case "create_identity_file": return Promise.resolve();
+    // U8 AC2: forget the stored sidecar password (frontend-only unit; the real
+    // backend command is tracked in its own card — smoke asserts the invoke)
+    case "forget_secret": return Promise.resolve();
     default: return Promise.reject(`unmocked: ${cmd}`);
   }
 };
@@ -1306,6 +1309,99 @@ await page.locator('.tab:has-text("notes.txt") .x').first().click();
 await page.waitForTimeout(250);
 await page.locator(".tab .x").first().click();
 await page.waitForTimeout(300);
+
+// ---- U8 Dialog password host (badge stored + note opt-in, EPIC-TSD §U8) ----
+const u8OpenEditor = async (name) => {
+  await page.locator(".host-item", { hasText: name }).first().click({ button: "right" });
+  await page.waitForTimeout(200);
+  await page.locator("#host-menu button", { hasText: "Edit" }).click();
+  await page.waitForTimeout(250);
+};
+const u8ModalState = () => page.evaluate(() => ({
+  modalOpen: !document.querySelector("#modal").classList.contains("hidden"),
+  chipHidden: document.querySelector("#pw-stored-row").classList.contains("hidden"),
+  chipText: (document.querySelector("#pw-badge")?.textContent || "").replace(/\s+/g, " ").trim(),
+  chipColor: document.querySelector("#pw-badge") ? getComputedStyle(document.querySelector("#pw-badge")).color : "",
+  dotColor: document.querySelector("#pw-badge .dot") ? getComputedStyle(document.querySelector("#pw-badge .dot")).backgroundColor : "",
+  rowHidden: document.querySelector("#row-password").classList.contains("hidden"),
+  note: document.querySelector("#row-password-note").textContent,
+  d3Hidden: document.querySelector("#row-password-note-d3").classList.contains("hidden"),
+  d3Text: (document.querySelector("#row-password-note-d3")?.textContent || "").trim(),
+  placeholder: document.querySelector("#f-password").placeholder,
+}));
+// AC1a + AC3 (stored side): pw-host has_password=true, auth=password
+await u8OpenEditor("pw-host");
+let u8s = await u8ModalState();
+const u8EmptyNote = "The password is stored in ~/.ssh/hosterm.secrets (file perms 0600), never in ~/.ssh/config, and filled in automatically at connect.";
+const u8D3 = "Auto-typing hanya aktif untuk host ini (opt-in per host).";
+check("U8 AC1a: has_password=true → chip '● stored (sidecar, 0600)' visible, --ok text + dot",
+  u8s.modalOpen && !u8s.chipHidden && u8s.chipText === "stored (sidecar, 0600)" &&
+  u8s.chipColor === "rgb(128, 210, 128)" && u8s.dotColor === "rgb(128, 210, 128)",
+  JSON.stringify(u8s));
+check("U8 AC3: D3 note exact text, shown while auth=password (stored state keeps 'kept' placeholder)",
+  u8s.d3Text === u8D3 && !u8s.d3Hidden && u8s.placeholder === "kept — type to replace" &&
+  u8s.note.startsWith("A password is stored for this host."), JSON.stringify(u8s));
+// AC3 (mode side): D3 exactly while auth=password — key hides it, back shows it again
+await page.locator("#f-auth").selectOption("key");
+await page.waitForTimeout(150);
+const u8Key = await u8ModalState();
+await page.locator("#f-auth").selectOption("password");
+await page.waitForTimeout(150);
+u8s = await u8ModalState();
+check("U8 AC3: D3 note hidden at auth=key, back when auth=password (chip round-trips)",
+  u8Key.d3Hidden && u8Key.rowHidden && !u8s.d3Hidden && !u8s.chipHidden, JSON.stringify({ u8Key, u8s }));
+// AC1b: prod-web has no stored password → chip absent (auth=key default)
+await page.locator("#m-cancel").click(); // modalValues untouched (auth back at snapshot value)
+await page.waitForTimeout(200);
+await u8OpenEditor("prod-web");
+u8s = await u8ModalState();
+check("U8 AC1b: has_password=false → chip absent, D3 hidden at auth=key",
+  u8s.chipHidden && u8s.rowHidden && u8s.d3Hidden, JSON.stringify(u8s));
+await page.locator("#f-auth").selectOption("password");
+await page.waitForTimeout(150);
+u8s = await u8ModalState();
+check("U8 AC3: D3 note also shown at auth=password for a host without stored password",
+  !u8s.d3Hidden && u8s.d3Text === u8D3 && u8s.chipHidden && u8s.note === u8EmptyNote, JSON.stringify(u8s));
+await page.locator("#f-auth").selectOption("key"); // restore snapshot value → clean cancel
+await page.waitForTimeout(150);
+await page.locator("#m-cancel").click();
+await page.waitForTimeout(200);
+// AC2: "Hapus password tersimpan" → in-app confirm → forget_secret → chip + note revert
+await u8OpenEditor("pw-host");
+const u8ForgetBefore = calls.filter((c) => c.cmd === "forget_secret").length;
+let u8Native = null;
+page.once("dialog", (d) => { u8Native = d.type(); d.dismiss(); });
+await page.locator("#m-delete-pw").click();
+await page.waitForTimeout(250);
+const u8Confirm = await page.evaluate(() => ({
+  open: !document.querySelector("#dialog").classList.contains("hidden"),
+  title: document.querySelector("#dialog-title").textContent,
+  buttons: [...document.querySelectorAll("#dialog-actions button")].map((b) => b.textContent),
+  focused: document.activeElement?.textContent?.trim() || "",
+}));
+check("U8 AC2: in-app confirm dialog (never native confirm), danger 'Hapus' + focus on Cancel",
+  u8Native === null && u8Confirm.open && u8Confirm.title === "Hapus password tersimpan" &&
+  u8Confirm.buttons.includes("Hapus") && u8Confirm.focused === "Cancel",
+  JSON.stringify({ u8Native, ...u8Confirm }));
+await page.locator("#dialog-actions button", { hasText: "Hapus" }).click();
+await page.waitForTimeout(250);
+const u8Forgets = calls.filter((c) => c.cmd === "forget_secret").slice(u8ForgetBefore);
+u8s = await u8ModalState();
+const u8LockGone = (await page.locator(".host-item", { hasText: "pw-host" }).first().locator(".h-key").count()) === 0;
+check("U8 AC2: forget_secret invoked once with the edited alias",
+  u8Forgets.length === 1 && u8Forgets[0].args.alias === "pw-host", JSON.stringify(u8Forgets));
+check("U8 AC2: chip gone + note back to the empty version after forget",
+  u8s.chipHidden && u8s.note === u8EmptyNote && u8s.modalOpen, JSON.stringify(u8s));
+check("U8 AC2: sidebar lock icon drops with the sidecar entry",
+  u8LockGone && u8s.chipHidden, `lockGone=${u8LockGone} chipHidden=${u8s.chipHidden}`);
+// AC4 (NFR-1): the copy names the sidecar, never claims storage inside ~/.ssh/config
+const u8Src = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8") + readFileSync(new URL("../index.html", import.meta.url), "utf8");
+check("U8 AC4: copy names the sidecar (hosterm.secrets) and never claims storage in ~/.ssh/config",
+  u8Src.includes("hosterm.secrets") && !/stored in ~\/\.ssh\/config(?!.*hosterm)/.test(u8Src) &&
+  u8Src.includes("stored (sidecar, 0600)"));
+// leave the modal clean for the closing checks
+await page.locator("#m-cancel").click();
+await page.waitForTimeout(200);
 
 check("no console/page errors", errors.length === 0, errors.slice(0, 3).join(" | "));
 

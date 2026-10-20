@@ -485,3 +485,25 @@ body.sftp-dragging { user-select: none; cursor: grabbing; }
   font-size: 11px;
 }
 #k-text { min-height: 180px; resize: vertical; font-family: var(--font-mono); font-size: 12px; line-height: 1.4; }
+
+/* U8 D2: stored-password badge chip + hapus button (mockup dialog-password-host.html) */
+.pw-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 8px; }
+.pw-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px;
+  color: var(--ok);                     /* 9.84:1 on bg */
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  padding: 2px 8px;
+  width: fit-content;
+}
+.pw-badge .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
+.link-danger {
+  background: transparent; border: none;
+  color: var(--danger);
+  font-size: 12px;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+.link-danger:hover { background: transparent; text-decoration: underline; }

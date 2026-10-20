@@ -497,6 +497,10 @@ function applyAuthMode(method: string, hasPassword = false) {
   $("#row-password").classList.toggle("hidden", method !== "password");
   const note = $("#row-password-note");
   const pw = $("#f-password") as HTMLInputElement;
+  // U8 D2: badge chip + "Hapus password tersimpan" only while a password is stored
+  $("#pw-stored-row").classList.toggle("hidden", !(method === "password" && hasPassword));
+  // U8 D3 (PRD Q3): auto-typing is per-host opt-in — exactly while auth=password
+  $("#row-password-note-d3").classList.toggle("hidden", method !== "password");
   if (method === "password") {
     note.textContent = hasPassword
       ? "A password is stored for this host. Leave the field empty to keep it; type to replace it."
@@ -659,6 +663,34 @@ async function deleteHost() {
     await loadHosts();
   } catch (e) {
     $("#modal-err").textContent = `Failed to delete host: ${msg(e)}. Fix the problem and press Delete again.`;
+  }
+}
+
+// U8 D2: forget the stored sidecar password for the host being edited.
+// Reuses the sidecar-forget path (`set_secret(alias, "")` semantics); the
+// modal stays open — chip drops, note reverts to the empty-state version.
+async function deleteHostPassword() {
+  if (!editingName) return;
+  const choice = await dialog(
+    "Hapus password tersimpan",
+    `Remove the stored password for "${editingName}" from ~/.ssh/hosterm.secrets? This cannot be undone.`,
+    [
+      { label: "Hapus", id: "delete", style: "danger" },
+      { label: "Cancel", id: "cancel" },
+    ],
+    "cancel",
+    "cancel"
+  );
+  if (choice !== "delete") return;
+  try {
+    await invoke("forget_secret", { alias: editingName });
+    const h = hosts.find((x) => x.name === editingName);
+    if (h) h.has_password = false;
+    renderHostList(); // sidebar lock icon drops with the sidecar entry
+    applyAuthMode(($("#f-auth") as HTMLSelectElement).value, false);
+    $("#modal-err").textContent = "";
+  } catch (e) {
+    $("#modal-err").textContent = `Failed to remove stored password: ${msg(e)}. Fix the problem and press Hapus again.`;
   }
 }
 
@@ -2054,9 +2086,15 @@ window.addEventListener("DOMContentLoaded", () => {
   $("#m-cancel").addEventListener("click", cancelEditor);
   $("#m-save").addEventListener("click", saveHost);
   $("#m-delete").addEventListener("click", deleteHost);
+  $("#m-delete-pw").addEventListener("click", deleteHostPassword);
   $("#raw-cancel").addEventListener("click", cancelRaw);
   $("#raw-save").addEventListener("click", saveRaw);
-  $("#f-auth").addEventListener("change", (e) => applyAuthMode((e.target as HTMLSelectElement).value));
+  $("#f-auth").addEventListener("change", (e) => {
+    // U8: keep the chip/placeholder copy in sync with the edited host's real
+    // stored-password state (toggling auth away and back must not drop it)
+    const h = hosts.find((x) => x.name === editingName);
+    applyAuthMode((e.target as HTMLSelectElement).value, h?.has_password ?? false);
+  });
   $("#f-newkey").addEventListener("click", openKeyModal);
   $("#k-cancel").addEventListener("click", closeKey);
   $("#k-save").addEventListener("click", saveKey);

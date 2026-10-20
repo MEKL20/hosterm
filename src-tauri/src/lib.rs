@@ -354,6 +354,27 @@ fn store_secret_for_host(host: &HostInput) {
     }
 }
 
+/// U8 D2: forget the stored sidecar password for an alias. The host block
+/// stays; a later save with an empty password keeps whatever is stored
+/// (the UI never re-sends the secret), so forgetting is the only way to drop
+/// it without deleting the host. Idempotent: an unknown alias is a no-op.
+#[tauri::command]
+fn forget_secret(alias: String) {
+    let a = alias.as_str();
+    if a.trim().is_empty() {
+        return;
+    }
+    // The sidecar key is the host name verbatim (save_host stores `host.name`),
+    // so drop that exact key; also drop the trimmed spelling in case the UI
+    // sent a padded name. purge_secret only rewrites the file when a row was
+    // actually removed → unknown alias is a true no-op.
+    purge_secret(a);
+    let t = a.trim();
+    if t != a {
+        purge_secret(t);
+    }
+}
+
 /// The directory holding keys + config. Keys live beside the config so the
 /// "copy the folder" portability story stays coherent.
 fn ssh_dir() -> PathBuf {
@@ -2284,6 +2305,113 @@ mod auth_key_tests {
     }
 }
 
+/// U8 D2: the `forget_secret` command drops one sidecar password row and
+/// leaves the host block (and the config file) alone.
+#[cfg(test)]
+mod forget_secret_tests {
+    use super::*;
+    use super::TEST_ENV_LOCK as ENV_LOCK;
+
+    fn tmp(tag: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!("hosterm-forget-{}-{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p.join("config")
+    }
+
+    fn pw_host(name: &str, pw: &str) -> HostInput {
+        HostInput {
+            name: name.into(),
+            host_name: "1.2.3.4".into(),
+            user: "u".into(),
+            port: "".into(),
+            identity_file: "".into(),
+            auth_method: "password".into(),
+            password: pw.into(),
+        }
+    }
+
+    #[test]
+    fn forget_secret_removes_only_the_named_row() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = tmp("row");
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        save_host(None, pw_host("keep", "keeppw")).unwrap();
+        save_host(None, pw_host("drop", "droppw")).unwrap();
+        let sec = cfg.parent().unwrap().join("hosterm.secrets");
+        assert!(std::fs::read_to_string(&sec).unwrap().contains("drop=droppw"));
+
+        forget_secret("drop".into());
+
+        let s = std::fs::read_to_string(&sec).unwrap();
+        assert!(!s.contains("drop="), "forgotten row must be gone: {s}");
+        assert!(s.contains("keep=keeppw"), "other rows must survive: {s}");
+        std::env::remove_var("HOSTERM_CONFIG");
+    }
+
+    #[test]
+    fn forget_secret_is_idempotent_and_ignores_empty_alias() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = tmp("idem");
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        save_host(None, pw_host("box", "pw")).unwrap();
+        let sec = cfg.parent().unwrap().join("hosterm.secrets");
+        let before = std::fs::read_to_string(&sec).unwrap();
+
+        // unknown alias + blank alias: no-op, no error, no sidecar churn
+        forget_secret("nope".into());
+        forget_secret("   ".into());
+        forget_secret(String::new());
+
+        assert_eq!(std::fs::read_to_string(&sec).unwrap(), before);
+        std::env::remove_var("HOSTERM_CONFIG");
+    }
+
+    #[test]
+    fn forget_secret_keeps_sidecar_0600_and_config_untouched() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = tmp("perm");
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        save_host(None, pw_host("box", "pw")).unwrap();
+        save_host(None, pw_host("other", "pw2")).unwrap();
+        let cfg_before = std::fs::read_to_string(&cfg).unwrap();
+
+        forget_secret("box".into());
+
+        // ~/.ssh/config equivalent: byte-identical, secret never in it
+        assert_eq!(std::fs::read_to_string(&cfg).unwrap(), cfg_before);
+        assert!(!cfg_before.contains("pw"), "no secret in config: {cfg_before}");
+
+        let sec = cfg.parent().unwrap().join("hosterm.secrets");
+        assert!(sec.exists(), "sidecar still there (other row remains)");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&sec).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "sidecar must stay 0600, got {mode:o}");
+        }
+        std::env::remove_var("HOSTERM_CONFIG");
+    }
+
+    #[test]
+    fn forget_secret_drops_the_stored_password_flag() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = tmp("flag");
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        save_host(None, pw_host("box", "pw")).unwrap();
+        assert_eq!(read_ssh_config().unwrap()[0].has_password, true);
+
+        forget_secret("box".into());
+
+        // host block survives, but the stored-password chip is gone
+        let hosts = read_ssh_config().unwrap();
+        assert_eq!(hosts.len(), 1, "host block must survive");
+        assert_eq!(hosts[0].has_password, false);
+        std::env::remove_var("HOSTERM_CONFIG");
+    }
+}
+
 #[cfg(test)]
 mod sftp_tests {
     use super::*;
@@ -2513,6 +2641,7 @@ pub fn run() {
             pty_resize,
             pty_kill,
             check_binaries,
+            forget_secret,
             fleet::fleet_start,
             fleet::fleet_stop
         ])
