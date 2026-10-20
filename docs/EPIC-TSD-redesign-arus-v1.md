@@ -7,7 +7,7 @@
 | Keputusan MEKL | FINAL: Arah A "Arus" + tema **Abyss Emerald** (redesign §6.5, 19 Okt 2026). Bukan untuk didiskusikan ulang. |
 | Mockup visual | `docs/UX/mockups/main.html`, `editor.html`, `dialog-password-host.html` (link `theme-abyss-emerald.css`) |
 | Gate | Semua unit kode = **triple gate penuh**: lead review + QA PASS + security clean. Developer tidak pernah push; lead yang collect & push. |
-| Status | Spec — belum ada kode |
+| Status | Implementasi berjalan seri §0: **U1–U7 LANDED** di main (U7 = 9315958, 20 Okt; baseline smoke 186), U8 in progress, U9 paling akhir |
 
 ## 0. Sequencing (WAJIB dibaca sebelum dispatch)
 
