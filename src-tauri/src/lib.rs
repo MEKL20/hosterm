@@ -9,6 +9,8 @@ use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
+mod fleet;
+
 // ============================================================
 //  SSH CONFIG MODEL  (round-trip: preserves comments + order)
 // ============================================================
@@ -655,7 +657,7 @@ struct SftpEntry {
 /// Guard a value that becomes an argv element or a batch-command token.
 /// A leading '-' would be read by sftp as an option; a newline would inject a
 /// second batch command. Both are rejected.
-fn sftp_safe(value: &str, what: &str) -> Result<(), String> {
+pub(crate) fn sftp_safe(value: &str, what: &str) -> Result<(), String> {
     if value.starts_with('-') {
         return Err(format!("{} cannot start with '-'", what));
     }
@@ -2488,6 +2490,7 @@ mod bin_check_tests {
 pub fn run() {
     tauri::Builder::default()
         .manage(PtyState::default())
+        .manage(fleet::FleetState::default())
         .invoke_handler(tauri::generate_handler![
             read_ssh_config,
             save_host,
@@ -2509,7 +2512,9 @@ pub fn run() {
             pty_write,
             pty_resize,
             pty_kill,
-            check_binaries
+            check_binaries,
+            fleet::fleet_start,
+            fleet::fleet_stop
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
