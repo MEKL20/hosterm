@@ -146,10 +146,10 @@ Setiap unit = 1 task kanban frontend, dibuat nano dari breakdown ini. Sitasi waj
 
 **Sumber:** redesign §1.7 G2, §4.7 matriks; fix §8 #5 (renderSftp/renderLocalPane — bagian sidebar sudah di U2).
 
-**Cakupan file:** `src/main.ts` (`renderSftp`, `renderLocalPane`), `src/styles.css` (`.skel-row` reuse dari U2), smoke.
+**Cakupan file (realita, reconcile lead t_8f5b7bc8 20 Okt):** perilaku `src/main.ts` (`renderSftp`/`renderLocalPane` → `skelRows()`) + `src/styles.css` (`.skel` reuse U2) SUDAH landed di HEAD via U2/U5 → diff U6 = smoke saja (`qa-reports/headless-smoke.mjs`, 8 cek; commit 5a00450).
 
 **AC terukur:**
-1. `renderSftp`/`renderLocalPane` loading = N elemen `.skel-row` statis (tanpa `animation` — pulse-free, §2 Arah A); tinggi list stabil selama loading (tanpa jump — smoke ukur offsetHeight sebelum/saat).
+1. `renderSftp`/`renderLocalPane` loading = N elemen statis berkelas **`.skel`** (U2; spec lama menulis `.skel-row` — drift nama, kelas shipped = `.skel`) tanpa `animation` — pulse-free, §2 Arah A; tinggi list stabil selama loading (tanpa jump — smoke ukur offsetHeight sebelum/saat).
 2. Empty SFTP tetap copy "Empty directory."; error tetap copy naratif + Go/Up actionable — byte-identical dengan sebelumnya (diff review: tidak ada perubahan string copy).
 3. Verify loop hijau + smoke ≥ 2 cek baru.
 
