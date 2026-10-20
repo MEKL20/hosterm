@@ -1331,6 +1331,9 @@ async function openRemoteEditor(host: string, path: string) {
   const setTitle = () => {
     (tab.querySelector(".t-label") as HTMLElement).textContent = editorLabel(sess);
     tab.classList.toggle("dirty", sess.dirty);
+    // U7 E2: mirror the tab-dot dirty signal into the ed-bar (redesign §4.5) so the
+    // second glance catches it — the dot alone was the missed "detak kedua".
+    (panel.querySelector(".ed-dirty") as HTMLElement).classList.toggle("on", sess.dirty);
   };
 
   $("#tab-split-zone").before(tab);
@@ -1343,6 +1346,7 @@ async function openRemoteEditor(host: string, path: string) {
     <div class="ed-wrap">
       <div class="ed-bar">
         <span class="ed-path" title="${escAttr(path)}">${esc(host)}:${esc(path)}</span>
+        <span class="ed-dirty">● unsaved</span>
         <button class="ed-reload">Reload</button>
         <button class="ed-save primary">Save</button>
       </div>
@@ -1376,7 +1380,7 @@ async function openRemoteEditor(host: string, path: string) {
   sess.save = save;
   saveBtn.disabled = true; // until the file is loaded
   saveBtn.addEventListener("click", save);
-  q(".ed-reload").addEventListener("click", async () => {
+  const reload = async () => {
     try {
       const text = await invoke<string>("sftp_read_file", { host, remotePath: path });
       sess.view.dispatch({ changes: { from: 0, to: sess.view.state.doc.length, insert: text } });
@@ -1385,6 +1389,37 @@ async function openRemoteEditor(host: string, path: string) {
       status("Reloaded from server", "ok");
     } catch (e) {
       status(`Failed to reload: ${msg(e)}. Check the file exists, then press Reload again.`, "err");
+    }
+  };
+  // U7 E2: Reload on a dirty buffer goes through the SAME in-app dirty dialog as
+  // close (silent overwrite was the harm redesign §1.5 E2 names).
+  (q(".ed-reload") as HTMLButtonElement).addEventListener("click", async () => {
+    if (sess.dirty) {
+      const choice = await dialog(
+        "Unsaved changes",
+        `${baseName(path)} has unsaved changes.`,
+        [
+          { label: "Save and reload", id: "save", style: "primary" },
+          { label: "Discard changes", id: "discard", style: "danger" },
+          { label: "Cancel", id: "cancel" },
+        ],
+        "save",
+        "cancel"
+      );
+      if (choice === "cancel") return;
+      if (choice === "save") {
+        await save();
+        if (sess.dirty) return; // save failed; keep the edit, don't overwrite it
+      }
+    }
+    await reload();
+  });
+  // U7 E1: Ctrl+S on the PANEL, not on view.dom — focus anywhere inside the editor
+  // (Save button, ed-status, Reload) saves. CodeMirror keydowns bubble up here.
+  panel.addEventListener("keydown", (ev) => {
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "s") {
+      ev.preventDefault();
+      if (sess.view && !saveBtn.disabled) void save();
     }
   });
 
@@ -1410,12 +1445,6 @@ async function openRemoteEditor(host: string, path: string) {
     });
     sess.view = view;
     saveBtn.disabled = false;
-    view.dom.addEventListener("keydown", (ev) => {
-      if ((ev.ctrlKey || ev.metaKey) && ev.key === "s") {
-        ev.preventDefault();
-        save();
-      }
-    });
     const lines = text.split("\n").length;
     status(`${lines} ${lines === 1 ? "line" : "lines"} · ${host}:${path}`, "ok");
   } catch (e) {

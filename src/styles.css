@@ -412,6 +412,12 @@ body.sftp-dragging { user-select: none; cursor: grabbing; }
   font-family: var(--font-mono); font-size: 12px; color: var(--muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.ed-dirty {
+  display: none;
+  flex: 0 0 auto;
+  font-family: var(--font-mono); font-size: 12px; color: var(--warn);
+}
+.ed-dirty.on { display: inline; } /* U7 E2: ed-bar dirty text (§4.5) */
 .ed-editor { flex: 1; overflow: hidden; }
 .ed-editor .cm-editor { height: 100%; background: var(--bg); }
 .ed-editor .cm-editor.cm-focused { outline: 2px solid var(--accent2); outline-offset: -2px; }

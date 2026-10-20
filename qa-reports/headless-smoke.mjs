@@ -1186,6 +1186,127 @@ check("U6 AC2: copy strings untouched in main.ts source",
 await page.locator(".tab .x").first().click();
 await page.waitForTimeout(300);
 
+// ---- U7 editor: panel-level Ctrl+S + ed-bar dirty (EPIC-TSD §U7; redesign §1.5 E1–E2, §4.5) ----
+await page.locator(".host-item .h-sftp").first().click();
+await page.locator(".panel.active .sftp-list .sftp-row", { hasText: "notes.txt" }).first().dblclick();
+await page.locator(".panel.active .cm-content").waitFor({ timeout: 5000 });
+const u7Clean = await page.evaluate(() => {
+  const el = document.querySelector(".panel.active .ed-dirty");
+  return el ? { text: el.textContent, display: getComputedStyle(el).display } : null;
+});
+check("U7 AC2: ed-bar carries '● unsaved', hidden while clean",
+  u7Clean && u7Clean.text === "● unsaved" && u7Clean.display === "none", JSON.stringify(u7Clean));
+// (AC2) edit -> unsaved text visible in --warn + tab dot still there (E2)
+await page.locator(".panel.active .cm-content").click();
+await page.keyboard.type("X");
+await page.waitForTimeout(250);
+const u7Dirty = await page.evaluate(() => {
+  const el = document.querySelector(".panel.active .ed-dirty");
+  const cs = getComputedStyle(el);
+  const tab = [...document.querySelectorAll(".tab")].find((t) => t.querySelector(".t-label")?.textContent === "notes.txt");
+  return { display: cs.display, color: cs.color, tabDirty: !!tab?.classList.contains("dirty"), dot: tab ? getComputedStyle(tab.querySelector(".t-dot")).display : "none" };
+});
+check("U7 AC2: edit shows '● unsaved' in --warn on the ed-bar",
+  u7Dirty.display !== "none" && u7Dirty.color === "rgb(255, 221, 128)", JSON.stringify(u7Dirty));
+check("U7 AC2: existing tab dirty dot + .tab.dirty survive (not replaced)",
+  u7Dirty.tabDirty && u7Dirty.dot !== "none", JSON.stringify(u7Dirty));
+// (AC1) Ctrl+S with focus on the Save BUTTON (outside .cm-editor) must still save —
+// the pre-U7 listener lived on view.dom, where this was dead (redesign §1.5 E1).
+const u7Wr0 = calls.filter((c) => c.cmd === "sftp_write_file").length;
+await page.locator(".panel.active .ed-save").focus();
+await page.keyboard.press("Control+s");
+await page.waitForTimeout(400);
+const u7Write = calls.filter((c) => c.cmd === "sftp_write_file").slice(u7Wr0);
+check("U7 AC1: Ctrl+S while focus sits on Save invokes sftp_write_file with the edit",
+  u7Write.length === 1 && u7Write[0].args.content.includes("X"), JSON.stringify(u7Write.map((c) => c.args.remotePath)));
+// (AC2) saved -> indicator gone
+const u7Saved = await page.evaluate(() => {
+  const el = document.querySelector(".panel.active .ed-dirty");
+  const tab = [...document.querySelectorAll(".tab")].find((t) => t.querySelector(".t-label")?.textContent === "notes.txt");
+  return { display: getComputedStyle(el).display, tabDirty: !!tab?.classList.contains("dirty"), status: document.querySelector(".panel.active .ed-status").textContent };
+});
+check("U7 AC2: save clears the ed-bar text and the tab dot",
+  u7Saved.display === "none" && !u7Saved.tabDirty && u7Saved.status.startsWith("Saved"), JSON.stringify(u7Saved));
+// (AC1 regression) Ctrl+S INSIDE .cm-editor must keep working after the move — the
+// keydown now reaches the panel by bubbling instead of living on view.dom.
+await page.locator(".panel.active .cm-content").click();
+await page.keyboard.type("V");
+await page.keyboard.press("Control+s");
+await page.waitForTimeout(400);
+const u7Write2 = calls.filter((c) => c.cmd === "sftp_write_file").slice(u7Wr0 + 1);
+check("U7 AC1: Ctrl+S inside .cm-editor still saves (bubbles to the panel listener)",
+  u7Write2.length === 1 && u7Write2[0].args.content.includes("V") &&
+  (await page.evaluate(() => getComputedStyle(document.querySelector(".panel.active .ed-dirty")).display === "none")),
+  JSON.stringify({ n: u7Write2.length, hasV: u7Write2[0] ? u7Write2[0].args.content.includes("V") : null }));
+// (AC2) Reload while dirty -> existing in-app dirty dialog, Cancel loses nothing
+await page.locator(".panel.active .cm-content").click();
+await page.keyboard.type("Y");
+await page.waitForTimeout(250);
+const u7Rd0 = calls.filter((c) => c.cmd === "sftp_read_file").length;
+let u7Native = null;
+page.once("dialog", (d) => { u7Native = d.type(); d.dismiss(); });
+await page.locator(".panel.active .ed-reload").click();
+await page.waitForTimeout(300);
+const u7Dlg = await page.evaluate(() => ({
+  open: !document.querySelector("#dialog").classList.contains("hidden"),
+  msg: document.querySelector("#dialog-msg").textContent,
+  btns: [...document.querySelectorAll("#dialog-actions button")].map((b) => b.textContent),
+}));
+check("U7 AC2: Reload while dirty raises the in-app dirty dialog (no native confirm)",
+  u7Native === null && u7Dlg.open && u7Dlg.msg === "notes.txt has unsaved changes." && u7Dlg.btns.length === 3,
+  JSON.stringify({ native: u7Native, ...u7Dlg }));
+await page.locator("#dialog-actions button", { hasText: "Cancel" }).click();
+await page.waitForTimeout(300);
+const u7Cancel = await page.evaluate(() => ({
+  text: document.querySelector(".panel.active .cm-content").textContent,
+  dirty: getComputedStyle(document.querySelector(".panel.active .ed-dirty")).display !== "none",
+}));
+check("U7 AC2: Cancel reload = no read invoked, edit + dirty kept",
+  calls.filter((c) => c.cmd === "sftp_read_file").length === u7Rd0 && u7Cancel.text.includes("Y") && u7Cancel.dirty,
+  JSON.stringify(u7Cancel));
+// Discard branch -> server text restored, dirty cleared
+await page.locator(".panel.active .ed-reload").click();
+await page.waitForTimeout(300);
+await page.locator("#dialog-actions button", { hasText: "Discard changes" }).click();
+await page.waitForTimeout(500);
+const u7Discard = await page.evaluate(() => ({
+  text: document.querySelector(".panel.active .cm-content").textContent,
+  dirty: getComputedStyle(document.querySelector(".panel.active .ed-dirty")).display !== "none",
+  status: document.querySelector(".panel.active .ed-status").textContent,
+}));
+check("U7 AC2: Discard reloads server text, clears dirty, keeps 'Reloaded from server' copy",
+  u7Discard.text.includes("hello editor") && !u7Discard.text.includes("Y") && !u7Discard.dirty && u7Discard.status === "Reloaded from server",
+  JSON.stringify(u7Discard));
+// "Save and reload" branch -> write first, then read
+const u7Wr1 = calls.filter((c) => c.cmd === "sftp_write_file").length;
+const u7Rd1 = calls.filter((c) => c.cmd === "sftp_read_file").length;
+await page.locator(".panel.active .cm-content").click();
+await page.keyboard.type("Z");
+await page.waitForTimeout(250);
+await page.locator(".panel.active .ed-reload").click();
+await page.waitForTimeout(300);
+await page.locator("#dialog-actions button", { hasText: "Save and reload" }).click();
+await page.waitForTimeout(600);
+const u7SR = await page.evaluate(() => ({
+  dirty: getComputedStyle(document.querySelector(".panel.active .ed-dirty")).display !== "none",
+  text: document.querySelector(".panel.active .cm-content").textContent,
+}));
+const u7WrCalls = calls.filter((c) => c.cmd === "sftp_write_file").slice(u7Wr1);
+check("U7 AC2: 'Save and reload' writes the edit THEN re-reads (1 write + 1 read), ends clean",
+  u7WrCalls.length === 1 && u7WrCalls[0].args.content.includes("Z") &&
+  calls.filter((c) => c.cmd === "sftp_read_file").length === u7Rd1 + 1 &&
+  !u7SR.dirty && u7SR.text === "hello editorline two", JSON.stringify({ ...u7SR, wr: u7WrCalls.length, rd: calls.filter((c) => c.cmd === "sftp_read_file").length - u7Rd1 }));
+// source pins: listener now on the PANEL, old view.dom handler gone; Ln/Col stays v1.1
+check("U7 AC1: keydown listener lives on the editor panel (view.dom handler removed)",
+  u3src.includes('panel.addEventListener("keydown"') && !u3src.includes('view.dom.addEventListener("keydown"'),
+  `panel=${u3src.includes('panel.addEventListener("keydown"')}`);
+check("U7: pasteNormalize + 0 draggable untouched by U7", /function pasteNormalize/.test(u3src) && !/draggable/i.test(u3src));
+// end clean: editor tab is not dirty -> close it, then the SFTP tab
+await page.locator('.tab:has-text("notes.txt") .x').first().click();
+await page.waitForTimeout(250);
+await page.locator(".tab .x").first().click();
+await page.waitForTimeout(300);
+
 check("no console/page errors", errors.length === 0, errors.slice(0, 3).join(" | "));
 
 // SEC-4 / AC R1.4: zero CSP violations across the full suite
