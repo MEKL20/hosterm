@@ -69,16 +69,28 @@ const invoke = (cmd, args = {}) => {
     case "list_identity_files": return Promise.resolve(["~/.ssh/id_test"]);
     case "sftp_list": {
       if (sftpFailFirst && args.host === "pw-host") { sftpFailFirst = false; return Promise.reject("sftp session unreachable"); }
+      // U6: "/boom" rejects BOTH attempts (retry path too) → narrative error copy observable;
+      // "/empty" → 0 entries → "Empty directory." byte-identical check
+      if (String(args.path || "").includes("boom")) return Promise.reject("sftp boom (mock)");
+      const sftpEntries = String(args.path || "").includes("empty") ? [] : sampleSftp;
       return delayList > 0
-        ? new Promise((r) => setTimeout(() => r(sampleSftp), delayList))
-        : Promise.resolve(sampleSftp);
+        ? new Promise((r) => setTimeout(() => r(sftpEntries), delayList))
+        : Promise.resolve(sftpEntries);
     }
     case "sftp_upload": case "sftp_download": {
       if (xferFail) return Promise.reject("permission denied (mock)");
       // 150ms so tests can observe the .xf-row.run (spinner) state
       return new Promise((r) => setTimeout(r, 150));
     }
-    case "local_list": return Promise.resolve([{ name: "notes.txt", is_dir: false, size: 5 }, { name: "sub", is_dir: true, size: 0 }]);
+    case "local_list": {
+      // U6: mirror remote mock — delayList + "/boom" reject + "/empty" zero entries,
+      // so renderLocalPane's skeleton/empty/error states are observable
+      if (String(args.path || "").includes("boom")) return Promise.reject("permission denied (mock-local)");
+      const locEntries = String(args.path || "").includes("empty") ? [] : [{ name: "notes.txt", is_dir: false, size: 5 }, { name: "sub", is_dir: true, size: 0 }];
+      return delayList > 0
+        ? new Promise((r) => setTimeout(() => r(locEntries), delayList))
+        : Promise.resolve(locEntries);
+    }
     case "home_dir": return Promise.resolve("/tmp/mockhome");
     case "sftp_read_file": return Promise.resolve("hello editor\nline two\n");
     case "sftp_write_file": return Promise.resolve();
@@ -1077,6 +1089,102 @@ const sigAfterU5 = await page.evaluate(() => ({
 }));
 check("U5: sftp drag listener released on closeTab (AbortController, live==0)",
   sigAfterU5.live === 0 && sigAfterU5.sftp >= 1, JSON.stringify(sigAfterU5));
+
+// ---- U6 skeleton rows list + empty/error CTA (EPIC-TSD §U6; redesign §1.7 G2, §4.7) ----
+// U5 cleanup closed all tabs — reopen a fresh SFTP tab (same smoke quirk as §U5)
+await page.locator(".host-item .h-sftp").first().click();
+await page.locator(".panel.active .sftp-list .sftp-row").first().waitFor({ timeout: 5000 });
+await page.locator(".panel.active .loc-list .sftp-row").first().waitFor({ timeout: 5000 });
+const u6Heights = await page.evaluate(() => {
+  const p = document.querySelector(".panel.active");
+  return { sftp: p.querySelector(".sftp-list").offsetHeight, loc: p.querySelector(".loc-list").offsetHeight };
+});
+// (AC1) reload while a LIST of rows is shown: content swaps to static .skel rows,
+// container offsetHeight must not move (no layout jump — delta = 0, flex height)
+delayList = 500;
+await page.locator(".panel.active .sftp-refresh").click();
+await page.waitForTimeout(100);
+const u6Mid = await page.evaluate(() => {
+  const list = document.querySelector(".panel.active .sftp-list");
+  const skel = list.querySelector(".skel");
+  const cs = skel ? getComputedStyle(skel) : null;
+  return {
+    skels: list.querySelectorAll(".skel").length,
+    rows: list.querySelectorAll(".sftp-row").length,
+    spinners: list.querySelectorAll(".spinner").length,
+    h: list.offsetHeight,
+    anim: cs ? cs.animationName : "",
+    tdur: cs ? cs.transitionDuration : "",
+  };
+});
+check("U6 AC1: loading = 3 static .skel rows (0 list rows, 0 spinner)",
+  u6Mid.skels === 3 && u6Mid.rows === 0 && u6Mid.spinners === 0, JSON.stringify(u6Mid));
+check("U6 AC1: pulse-free skeletons (animationName none, zero transition)",
+  u6Mid.anim === "none" && u6Mid.tdur.split(",").every((d) => d.trim() === "0s"), `${u6Mid.anim}/${u6Mid.tdur}`);
+check("U6 AC1: remote list height stable during loading (delta 0)",
+  u6Mid.h === u6Heights.sftp, `before=${u6Heights.sftp} during=${u6Mid.h}`);
+// same for renderLocalPane (skeleton path was never observable before — mock now delays)
+await page.locator(".panel.active .loc-go").click();
+await page.waitForTimeout(100);
+const u6MidLoc = await page.evaluate(() => {
+  const list = document.querySelector(".panel.active .loc-list");
+  return { skels: list.querySelectorAll(".skel").length, rows: list.querySelectorAll(".sftp-row").length, h: list.offsetHeight };
+});
+check("U6 AC1: local list loading = 3 .skel rows + height stable (delta 0)",
+  u6MidLoc.skels === 3 && u6MidLoc.rows === 0 && u6MidLoc.h === u6Heights.loc, JSON.stringify({ ...u6MidLoc, before: u6Heights.loc }));
+delayList = 0;
+await page.locator(".panel.active .loc-list .sftp-row").first().waitFor({ timeout: 5000 });
+// (AC2) empty state byte-identical on BOTH panes (redesign §4.7: "Empty directory.", no CTA here)
+await page.locator(".panel.active .sftp-path").fill("/empty");
+await page.locator(".panel.active .sftp-go").click();
+await page.locator(".panel.active .loc-path").fill("/empty");
+await page.locator(".panel.active .loc-go").click();
+await page.waitForTimeout(250);
+const u6Empty = await page.evaluate(() => {
+  const p = document.querySelector(".panel.active");
+  const r = p.querySelector(".sftp-list .list-state");
+  const l = p.querySelector(".loc-list .list-state");
+  return { r: r ? r.textContent : null, l: l ? l.textContent : null };
+});
+check("U6 AC2: empty copy byte-identical \"Empty directory.\" (remote + local)",
+  u6Empty.r === "Empty directory." && u6Empty.l === "Empty directory.", JSON.stringify(u6Empty));
+// (AC2) error copy byte-identical + Go/Up stay actionable; list cleared but height stable
+await page.locator(".panel.active .sftp-path").fill("/boom");
+await page.locator(".panel.active .sftp-go").click();
+await page.waitForTimeout(250);
+const u6Err = await page.evaluate(() => {
+  const p = document.querySelector(".panel.active");
+  const st = p.querySelector(".sftp-status");
+  return {
+    text: st.textContent, err: st.classList.contains("err"),
+    goOn: !p.querySelector(".sftp-go").disabled, upOn: !p.querySelector(".sftp-up").disabled,
+    h: p.querySelector(".sftp-list").offsetHeight,
+  };
+});
+check("U6 AC2: remote error copy byte-identical + Go/Up actionable + no height jump",
+  u6Err.text === "Failed to list /boom: sftp boom (mock). Fix the path and press Go, or go up one level." &&
+  u6Err.err && u6Err.goOn && u6Err.upOn && u6Err.h === u6Heights.sftp, JSON.stringify({ ...u6Err, before: u6Heights.sftp }));
+await page.locator(".panel.active .loc-path").fill("/boom");
+await page.locator(".panel.active .loc-go").click();
+await page.waitForTimeout(250);
+const u6ErrL = await page.evaluate(() => {
+  const p = document.querySelector(".panel.active");
+  return {
+    text: p.querySelector(".sftp-status").textContent,
+    goOn: !p.querySelector(".loc-go").disabled, upOn: !p.querySelector(".loc-up").disabled,
+  };
+});
+check("U6 AC2: local error copy byte-identical + Go/Up actionable",
+  u6ErrL.text === "Failed to read /boom: permission denied (mock-local). Fix the path and press Go." &&
+  u6ErrL.goOn && u6ErrL.upOn, JSON.stringify(u6ErrL));
+// source pin: U6 changed no copy strings in main.ts (diff review guard, EPIC-TSD §U6 AC2)
+check("U6 AC2: copy strings untouched in main.ts source",
+  (u3src.match(/<div class="list-state">Empty directory\.<\/div>/g) || []).length === 2 &&
+  u3src.includes("Fix the path and press Go, or go up one level.") &&
+  u3src.includes("Failed to read ${dir || \"home\"}: ${msg(err)}. Fix the path and press Go."));
+// close the U6 tab so the suite ends as it started (no leftover listeners)
+await page.locator(".tab .x").first().click();
+await page.waitForTimeout(300);
 
 check("no console/page errors", errors.length === 0, errors.slice(0, 3).join(" | "));
 
