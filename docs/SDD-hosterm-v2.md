@@ -36,7 +36,7 @@ Shipped reality this document consolidates (STATE.md, 19 Okt 2026): wave-1 secur
 │  ┌───────────────────────────────┐   IPC (invoke /  ┌─────────────────────────────┐  │
 │  │ Frontend  src/main.ts         │   emit events)    │ Config model                │  │
 │  │  sidebar · host form          │ ────────────────► │  parse/serialize (round-    │  │
-│  │  tab shell (4 session maps)   │   21 commands     │  trip) · atomic write       │  │
+│  │  tab shell (4 session maps)   │   24 commands     │  trip) · atomic write       │  │
 │  │  xterm.js terminals           │ ◄──────────────── │ Secrets sidecar (0600)      │  │
 │  │  CodeMirror editor            │   pty://output/N  │ Identity-file store (0600)  │  │
 │  │  SFTP browser (dual panes)    │   pty://exit/N    │ PTY engine (portable-pty)   │  │
@@ -84,11 +84,12 @@ Key custody: Authenticode key lives and dies inside Azure HSM (non-exportable); 
 | Terminal sessions (`src/main.ts`) | One xterm.js `Terminal` per tab/split; fit addon; key/copy/paste; `pasteNormalize` (CRLF→LF) | `pty_spawn/write/resize/kill`; events `pty://output/{id}`, `pty://exit/{id}` |
 | SFTP browser (`src/main.ts`) | Dual-pane remote + local listing, upload/download, manual-mouse drag/copy (never HTML5 DnD — dead in WebView2); Arus U5/U6: transfer strip, pane-head actions, selection, skeleton rows | `sftp_list`, `local_list`, `home_dir`, `sftp_upload/download` |
 | Remote editor (`src/main.ts`) | CodeMirror 6, line numbers, Ctrl/Cmd+S write-back (Arus U7: Ctrl+S panel-level + dirty marker); 2 MB text cap, binary refusal | `sftp_read_file`, `sftp_write_file` |
-| Host management UI (`src/main.ts`) | Host form (key vs password auth), key-paste modal, raw config editor, dirty-state guards; Arus U8: stored-password chip + delete-with-confirm | `read_ssh_config`, `save_host`, `delete_host`, `read/write_config_raw`, `list_identity_files`, `create_identity_file` |
+| Host management UI (`src/main.ts`) | Host form (key vs password auth), key-paste modal, raw config editor, dirty-state guards; Arus U8: stored-password chip + delete-with-confirm; U8 D2: "hapus password tersimpan" → `forget_secret` (sidecar-only, host block tetap) | `read_ssh_config`, `save_host`, `delete_host`, `read/write_config_raw`, `list_identity_files`, `create_identity_file`, `forget_secret` |
 | Startup binary check (W2-A, shipped) | Read-only presence check of ssh/sftp; blocking "install OpenSSH" guide screen in frontend, no spawn/side effects | `check_binaries` → `BinCheck {ssh_missing, sftp_missing}` |
 | Fleet runner (`src-tauri/src/fleet.rs`, planned v1 — §12) | Run one command/script across selected hosts: thread-per-host behind an N-permit token channel, per-host deadline kill, Stop = kill-all + skipped, 64 KiB/host retention counters; zero new deps, zero writes, zero secret reads | `fleet_start`, `fleet_stop`; events `fleet://output/{run_id}`, `fleet://host/{run_id}`, `fleet://summary/{run_id}` |
 | Config model (`src-tauri/src/lib.rs`) | Round-trip parse/serialize of `~/.ssh/config` (preserves comments, order, unknown directives); atomic write (sibling temp → chmod 0600 → rename); `HOSTERM_CONFIG` override | Filesystem `~/.ssh/config` |
 | Secrets sidecar (`lib.rs`) | `~/.ssh/hosterm.secrets` (`alias=password` lines, 0600, deleted when empty); opt-in per host, purged on delete/uncheck; lookup result **never crosses IPC** | Filesystem sidecar |
+| Secret forget (U8 D2, shipped) | Drop **one** stored sidecar row for one alias; the `~/.ssh/config` host block stays untouched; idempotent (unknown alias = no-op, empty alias = no-op); sidecar stays 0600 and is deleted when it becomes empty; the secret value never enters `~/.ssh/config` and never crosses IPC | `forget_secret(alias: String) -> ()` |
 | Identity-file store (`lib.rs`) | Paste-private-key → `~/.ssh/<name>` at 0600; dropdown listing | Filesystem `~/.ssh/` |
 | PTY engine (`lib.rs`: `PtyState`, `pump_pty`) | portable-pty openpty per terminal; spawns real `ssh <host>`; reader thread → `pty://output/{id}`; one-shot password injection on `'s password:` prompt; reaper thread | portable-pty, `ssh` binary, secrets |
 | SFTP layer (`lib.rs`: `run_sftp_op`, `sftp_spawn`, `parse_sftp_ls`) | Dual mode, one operation API: stored secret → **persistent** interactive `sftp` in a PTY per host alias, shared across tabs (completion = next `sftp> ` prompt, 120 s watchdog, one respawn-retry); no secret → one-shot `sftp -b -` batch (real exit codes). `sftp_safe` validation (no leading `-`, no newlines) on every host/path argument | `sftp` binary, secrets |
@@ -110,6 +111,7 @@ Key custody: Authenticode key lives and dies inside Azure HSM (non-exportable); 
 4. **Edit a remote file:** click file in SFTP pane → `sftp_read_file` → CodeMirror tab → Ctrl/Cmd+S → `sftp_write_file` with full document text → backend writes temp + verified re-read → editor stays open.
 5. **Fill a host password:** stored-secret path — `pump_pty` watches PTY output for `'s password:`, writes secret + CR **once** into the PTY writer; secret never enters JS. Unstored path — user types. SFTP variant: `sftp_spawn` types the password during login and waits for `sftp>` (wrong password → clear error).
 6. **Release & update (planned M2/M3):** `v*` tag → CI build (bundler signs via signCommand → emits `.sig` → gates verify → upload) → release job (assembles `latest.json`, `fail_on_unmatched_files: true`) → GitHub Releases = only feed. Update path: user clicks "Check for updates" → plugin GET `releases/latest/download/latest.json` (one request) → forward-only compare → consent → download → minisign verify vs baked pubkey → passive install → app exits (Windows limitation) → relaunch.
+7. **Forget a stored password (U8 D2, shipped):** host dialog → user clicks "hapus password tersimpan" → in-app confirm (never native `confirm`) → `invoke("forget_secret", { alias })` → backend removes exactly that one sidecar row (0600 kept, file deleted when empty) and returns unit → frontend clears its own `has_password` chip. `~/.ssh/config` is never read or written on this path, and the secret value never crosses the IPC boundary in either direction (ADR-17, INV-20).
 
 ---
 
@@ -261,7 +263,7 @@ Failure modes and the system's observable response:
 ### ADR-15: IPC surface = 2 commands + 3 run-scoped event families, plan-in-response, error-code prefixes (Fleet Run v1, §12.3)
 - Context: Unit 3–4 (frontend) must be buildable and smoke-mockable before the backend exists (OQ-9 closed: contract frozen early); Tauri events are fire-and-forget with no replay, so anything emitted before the frontend attaches a listener is lost.
 - Decision: exactly two commands, inventory 21 → 23: `fleet_start(req) -> FleetStartResp` and `fleet_stop(run_id) -> ()`; three event families keyed by run: `fleet://output/{run_id}` (chunk: alias, seq, stream, bytes, total_bytes, truncated), `fleet://host/{run_id}` (terminal: status ok|fail|timeout|skipped, exit_code, reason, stdout_bytes, stderr_bytes, truncated), `fleet://summary/{run_id}` (counts, elapsed_ms, min/max non-zero exit). `run_id` is a **client-generated opaque string** supplied in the request: the frontend subscribes to the exact event names *before* invoking `fleet_start`, which closes the fire-and-forget race structurally; the backend echoes it and never invents one. The response additionally carries the authoritative per-host plan (queued|skipped+reason) and, on the all-skipped fast path, the complete summary with no events at all. Rejection errors are stable machine-readable strings (`fleet:already-running`, `fleet:text-too-large`, …) that frontend maps to copy. Payload fields are snake_case, matching every existing DTO as consumed by `src/main.ts`.
-- Consequences: the full contract lives in §12.3 with JSON fixtures the smoke harness can replay via `__emitTauri` without a backend; initial skipped states are response-derived while every post-start transition is event-carried, and pre-subscription (client-run-id) means no transition can be emitted into a window with no listener; contract change = addendum revision, reviewable; 23 commands keeps the §3/§11 inventory self-check meaningful.
+- Consequences: the full contract lives in §12.3 with JSON fixtures the smoke harness can replay via `__emitTauri` without a backend; initial skipped states are response-derived while every post-start transition is event-carried, and pre-subscription (client-run-id) means no transition can be emitted into a window with no listener; contract change = addendum revision, reviewable; 23 commands keeps the §3/§11 inventory self-check meaningful (current total 24 after ADR-17 — this ADR's own count is 21 → 23 and stays historical).
 - Rejected alternatives: `tauri::ipc::Channel` streams — breaks the `pty://`-style event convention the smoke mock plugin already replays; per-host event names `fleet://output/{run_id}/{alias}` — puts still-hostile alias bytes into listener strings for no gain; a `fleet_status` poll command — latency cost and a second state source; backend-assigned run_id — frontend cannot subscribe before invoke, so fast finishes on CI (fake ssh in milliseconds) could emit into a listener-less window.
 
 ### ADR-16: `HOSTERM_SSH_BIN` — fleet-only ssh binary override (Fleet Run v1, §12.5)
@@ -269,6 +271,12 @@ Failure modes and the system's observable response:
 - Decision: env var `HOSTERM_SSH_BIN`, read per fleet spawn: if set, its value is argv[0] verbatim (literal path, no PATH magic, no shell); if unset, `ssh`. Scope is the fleet spawn path only — `pty_spawn` (portable-pty `CommandBuilder::new("ssh")`), the sftp layer, and `check_binaries`/`binaries_missing` never read it.
 - Consequences: Unit 1 cargo tests drive the real runner (concurrency ceiling, timeout kill, exit classification, byte-ordering) against shell-script fakes; `check_binaries` stays honest on test machines; override on a production machine is an accepted, documented foot-gun identical in risk profile to the sftp hook.
 - Rejected alternatives: global ssh override across all paths — drags portable-pty spawn changes and terminal smoke churn into a fleet testability need; `#[cfg(test)]`-only injection — tests must exercise the shipping spawn code path, not a parallel one; a config-file directive — fleet must touch no persisted config (NFR-FL2).
+
+### ADR-17: `forget_secret` = one sidecar row, host block untouched, idempotent, no IPC payload (U8 D2, inventory 23 → 24)
+- Context: U8 D2 asks the host dialog for a "Hapus password tersimpan" action (EPIC-TSD §U8). The stored secret lives only in the 0600 sidecar; the `~/.ssh/config` host block is the SoT and holds no secret (INV-3). The only existing way to drop a stored password was deleting the whole host, which is a different user intent (and destroys the host block). The save path never re-sends the secret (empty password = keep stored), so "forget" needs its own command.
+- Decision: one new Tauri command, `forget_secret(alias: String) -> ()` — unit return, no DTO, no error string, no event. It removes exactly the sidecar row keyed by that alias (the alias is also matched against its trimmed spelling, so a padded name still resolves to its own row — no other alias' row is ever touched); the `~/.ssh/config` host block is not read, parsed, or written. Unknown alias = no-op (no file rewrite — the sidecar is only rewritten when a row was actually removed); empty/whitespace alias = no-op. Sidecar keeps 0600 and is deleted when it becomes empty (INV-8 unchanged). The secret value never crosses the IPC boundary in either direction (INV-4 unchanged). Frontend contract: `invoke("forget_secret", { alias })` — the `alias` argument name is camelCase at the Tauri boundary, matching every existing command.
+- Consequences: the IPC surface grows 23 → 24 (`grep -rc "tauri::command" src-tauri/src/*.rs` → 24: lib.rs 22 + fleet.rs 2); §3 and the §11 self-check carry the new number. The command is sidecar-only, so the Fleet Run frozen contract (§12.3) is untouched — `forget_secret` is not a fleet payload and the §12.3 table stays frozen. The frontend owns the confirm dialog (in-app, never native `confirm`) and refreshes its own `has_password` flag; the backend returns nothing, so the frontend must not expect a re-read of the sidecar.
+- Rejected alternatives: `forget_secret(alias) -> bool` (changed?) — the frontend already knows the row existed (chip state) and a false return would be indistinguishable from a race; a `delete_host`-style cascade — destroys the host block, wrong intent; writing a "no password" marker into `~/.ssh/config` — violates INV-3/NFR-1 (no secret material, and no marker directives in a real ssh config); re-reading the sidecar and returning it to the frontend — violates INV-4 (secret crossing IPC); batching several aliases in one call — no caller needs it, YAGNI.
 
 ---
 
@@ -295,6 +303,7 @@ Failure modes and the system's observable response:
 | INV-17 | Untuk setiap byte output remote fleet yang valid dirender ke DOM, THE SYSTEM SHALL melewatkan `esc()`/`escAttr()` — output fleet adalah input hostile (kelas INV-11); pane fleet bukan terminal emulator | smoke fixture `<script>` di stdout chunk → 0 CSP violation, 0 script element di DOM (Unit 4) |
 | INV-18 | Untuk setiap spawn fleet yang valid, argv SHALL memuat `-o BatchMode=yes` dan tidak pernah memuat flag auto-accept host key (`StrictHostKeyChecking=no`, `-o UserKnownHostsFile=/dev/null`), forwarding tambahan (`-A`/`-X`), PTY (`-t`), atau eskalasi (`sudo`, `-A` ssh-agent forwarding ke perintah) | cargo test pure argv-builder + grep gate (FR-FL18/FL23/FL35, OQ-2/OQ-3 closed) |
 | INV-19 | Untuk setiap alias terpilih yang valid menuju spawn fleet, THE SYSTEM SHALL menerapkan guard yang sama dengan `sftp_safe` (leading `-`, CR atau LF → `skipped` reason `unsafe alias`, 0 spawn) | cargo test guard alias; reuse fungsi yang sama dengan INV-10 (FR-FL20) |
+| INV-20 | Untuk setiap pemanggilan `forget_secret` yang valid, THE SYSTEM SHALL menghapus hanya entri sidecar untuk alias itu, tidak pernah mengubah blok host di `~/.ssh/config`, tidak pernah menulis secret ke config, menjaga sidecar 0600, dan bersifat idempoten (alias tak dikenal / kosong = no-op tanpa penulisan file) | `cargo test --lib` `forget_secret_tests::` (4 test: hapus hanya row bernama, idempotency, sidecar 0600 + config untouched, flag drop) |
 
 ---
 
@@ -342,12 +351,12 @@ Pyramid mapped to the real, measured baseline (STATE.md, 19 Okt 2026, post-W2-A/
 
 ## 11. Verification Steps
 
-1. `cd src-tauri && cargo test --lib` → 52 pass (baseline; re-measure at dispatch — Arus units may shift smoke only; backend untouched by Arus units).
+1. `cd src-tauri && cargo test --lib` → 77 pass (73 FL-1 + 4 `forget_secret_tests::`; re-measure at dispatch — Arus units shift smoke only; backend untouched by Arus units).
 2. `npm run build` → 0 TS errors.
-3. `npm install --no-save playwright@1.63.0 && node qa-reports/headless-smoke.mjs` → 75 pass (baseline + new checks per landed unit), CSP-violation counter == 0; then remove playwright per repo hygiene.
+3. `npm install --no-save playwright@1.63.0 && node qa-reports/headless-smoke.mjs` → 196 pass (186 U7 + 10 U8 dialog checks), CSP-violation counter == 0; then remove playwright per repo hygiene.
 4. SDD self-checks (executed at authoring): `grep -c 'INV-' docs/SDD-hosterm-v2.md` → ≥ 8; `grep -c 'IF .* THEN THE SYSTEM SHALL' docs/SDD-hosterm-v2.md` → ≥ 6; section headers byte-identical to `templates/sdd.md`; every ADR carries Context/Decision/Consequences/Rejected alternatives; testing commands above are the live verify loop.
-5. Code-claim traceability: command list §3 matches `#[tauri::command]` inventory (21 today; Fleet Run v1 adds `fleet_start` + `fleet_stop` → 23 when Unit 2 lands, §12.3); CSP string §7 ADR-6 matches `tauri.conf.json`; `plugins.updater` absent from `tauri.conf.json` until M3 (AC-B3.3).
-6. Invariant flow: INV-1..19 carry named existing-or-proposed checks; wave-2 rows (INV-12/13) activate with M2/M3 code per extension §E.8; fleet rows (INV-14..19) activate with Fleet Run v1 code per §12.
+5. Code-claim traceability: command list §3 matches `#[tauri::command]` inventory (**24 today** = 21 base + `fleet_start`/`fleet_stop` (Fleet Run v1, §12.3) + `forget_secret` (U8 D2, ADR-17)); canonical count gate = `grep -rc "tauri::command" src-tauri/src/*.rs` → 24 (lib.rs 22 + fleet.rs 2); CSP string §7 ADR-6 matches `tauri.conf.json`; `plugins.updater` absent from `tauri.conf.json` until M3 (AC-B3.3).
+6. Invariant flow: INV-1..20 carry named existing-or-proposed checks; wave-2 rows (INV-12/13) activate with M2/M3 code per extension §E.8; fleet rows (INV-14..19) activate with Fleet Run v1 code per §12; INV-20 (`forget_secret`, U8 D2) is active now — the command and its 4 cargo tests shipped.
 
 ---
 
@@ -421,7 +430,9 @@ Panic-safety: the coordinator clears `FleetState.active` through a guard struct'
 
 Conventions: command args are camelCase at the Tauri boundary (v2 auto-maps to snake_case Rust fields, same as every existing command); **event payload fields are snake_case JSON**, matching how `src/main.ts` already consumes `HostDto` (`h.host_name`, `h.auth_method`). `run_id` is an opaque client-generated string, max 64 chars, treated only as an event-name suffix + echo — backend never parses it.
 
-Commands (inventory 21 → 23):
+Commands (inventory 21 → 23 saat Fleet Run v1; **total IPC inventory sekarang 24** — `forget_secret` ADR-17; **tabel payload di bawah BEKU, tidak disentuh oleh 24**):
+
+> Addendum (ADR-17, U8 D2): `forget_secret(alias: String) -> ()` menambah command ke-24. Addendum ini **bukan** perubahan §12.3 — `forget_secret` bukan payload fleet, tidak menambah event family, dan tidak mengubah struct/field mana pun di bawah. Tabel §12.3 tetap beku untuk Unit 2–4 (implement verbatim / mock verbatim). Yang berubah hanya angka inventory (23 → 24) yang dirujuk di §3 dan §11.5.
 
 ```ts
 invoke("fleet_start", { req: FleetStartReq }): Promise<FleetStartResp>
@@ -594,7 +605,7 @@ Structural verdict for the spec's Clarifying Q3 / R-FL-1: a spawn has exactly on
 ### 12.9 Verification mapping (Unit 0 → Units 1–5)
 
 - Unit 1 (runner core): `cd src-tauri && cargo test --lib` → baseline 52 + ≥ 8 new (rows §12.4 tests 1–4 + argv-builder INV-18 + eligibility precedence + concurrency-ceiling vs fake ssh + timeout kill + `snapshot_hosts` byte-identity: config file hash+mtime unchanged across a multi-host run — INV-16/NFR-FL8).
-- Unit 2 (IPC): `fleet_start`/`fleet_stop` registered (inventory 23 — §11.5 self-check), payloads byte-for-byte as §12.3 structs; error prefixes asserted by string; `finished:true` fast path emits zero events.
+- Unit 2 (IPC): `fleet_start`/`fleet_stop` registered (inventory 23 → 24 setelah `forget_secret` ADR-17 — §11.5 self-check), payloads byte-for-byte as §12.3 structs; error prefixes asserted by string; `finished:true` fast path emits zero events.
 - Unit 3–4 (frontend): mock replay of the §12.3 fixtures; Cancel path = 0 `fleet_start` invocations (NFR-FL6 smoke counter); hostile-bytes fixture + CSP counter 0 (INV-17); `truncated` marker from a >64 KiB mock (Unit 4).
 - Unit 5: grep gate `sh -c|bash -c|cmd /C` = 0 hits in `src-tauri/src/fleet.rs` + fleet section of `main.ts` (INV-14); STATE.md verify numbers re-measured.
 
