@@ -87,6 +87,41 @@ release flow (the recipe used to live in `BUILD-WINDOWS-FROM-LINUX.md`, now
 removed; the knowledge is preserved in the maintainer's `tauri-cross-build-windows`
 skill).
 
+## Code signing policy
+
+Windows releases of hosterm are Authenticode-signed so Windows can confirm they
+come from this project and have not been altered since. Only the artifacts this
+project builds from its own source are signed: `hosterm.exe` and the NSIS/WiX
+installers that carry it.
+
+Free code signing provided by [SignPath.io](https://about.signpath.io),
+certificate by [SignPath Foundation](https://signpath.org).
+
+Nothing is signed by hand. Pushing a `v*` tag runs
+[`.github/workflows/build-windows.yml`](.github/workflows/build-windows.yml) on
+GitHub's own `windows-latest` runners, which builds hosterm from the source at
+that tag, submits the artifacts to SignPath via the official
+`signpath/github-action-submit-signing-request`, and attaches the signed
+artifacts to the GitHub release. A build from any other branch or workflow is
+not signed, and each release's signing request requires one manual approval in
+the SignPath dashboard.
+
+### Project roles
+
+hosterm is maintained by a single developer who holds all roles:
+
+- Committers and reviewers: [MEKL20](https://github.com/MEKL20)
+- Approvers: [MEKL20](https://github.com/MEKL20)
+
+### Privacy policy
+
+This program will not transfer any information to other networked systems unless
+specifically requested by the user or the person installing or operating it.
+hosterm only connects to the SSH/SFTP hosts its user starts a session to, and
+has no telemetry, analytics, or automatic update checks. The one exception is
+the user-initiated "Check for updates" action (planned), which fetches release
+metadata from GitHub Releases only when the user clicks it.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
