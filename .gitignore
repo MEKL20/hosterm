@@ -25,3 +25,4 @@ dist-ssr
 
 # Build output / local deliverables (shipped via Releases, not committed)
 dist-win/
+.worktrees/

@@ -4,7 +4,7 @@
 // Mocks window.__TAURI_INTERNALS__.invoke, loads dist/, asserts DOM behavior.
 import { chromium } from "playwright";
 import { createServer } from "http";
-import { readFileSync, existsSync } from "fs";
+import { readFileSync, existsSync, readdirSync } from "fs";
 import { extname, join } from "path";
 
 const DIST = new URL("../dist", import.meta.url).pathname;
@@ -55,14 +55,28 @@ let sftpFailFirst = false;
 // listing so the skeleton loading state is observable.
 let xferFail = false;
 let delayList = 0;
+// U9: sidebar listing mode ("normal" | "empty" | "fail" | "hostile")
+let hostsMode = "normal";
+// hostile bytes (INV-11): must render inert everywhere — never parsed as HTML
+const HOSTILE = "<img src=x onerror=window.__pwn=1>";
+const HOSTILE_ENTRIES = [
+  { name: HOSTILE, is_dir: false, is_link: false, size: 1 },
+  { name: "\"><svg onload=window.__pwn=2>", is_dir: true, is_link: false, size: 0 },
+  { name: "&amp;<b>x</b>", is_dir: false, is_link: true, size: 2 },
+];
 // W2-A startup ssh/sftp check state (AC-A1.5); read by the check_binaries case
 let binCheckState = { ssh_missing: false, sftp_missing: false };
 const invoke = (cmd, args = {}) => {
   calls.push({ cmd, args });
   switch (cmd) {
-    case "read_ssh_config": return delayRead > 0
-      ? new Promise((r) => setTimeout(() => r(sampleHosts), delayRead))
-      : Promise.resolve(sampleHosts);
+    case "read_ssh_config": {
+      // U9: "empty"/"fail" = sidebar narrative states, "hostile" = esc fixture
+      if (hostsMode === "fail") return Promise.reject("permission denied (mock)");
+      const hs = hostsMode === "empty" ? [] : hostsMode === "hostile" ? [...sampleHosts, { ...sampleHosts[0], name: HOSTILE }] : sampleHosts;
+      return delayRead > 0
+        ? new Promise((r) => setTimeout(() => r(hs), delayRead))
+        : Promise.resolve(hs);
+    }
     case "check_binaries": return Promise.resolve({ ...binCheckState });
     case "read_config_raw": return Promise.resolve(sampleConfig);
     case "write_config_raw": return Promise.resolve();
@@ -72,6 +86,8 @@ const invoke = (cmd, args = {}) => {
       // U6: "/boom" rejects BOTH attempts (retry path too) → narrative error copy observable;
       // "/empty" → 0 entries → "Empty directory." byte-identical check
       if (String(args.path || "").includes("boom")) return Promise.reject("sftp boom (mock)");
+      // U9 hostile-byte fixture (SEC t_ec1dbd02 LOW): "/xss" lists attacker-named entries
+      if (String(args.path || "").includes("xss")) return Promise.resolve(HOSTILE_ENTRIES);
       const sftpEntries = String(args.path || "").includes("empty") ? [] : sampleSftp;
       return delayList > 0
         ? new Promise((r) => setTimeout(() => r(sftpEntries), delayList))
@@ -118,12 +134,44 @@ await new Promise((resolve, reject) => {
   server.listen(4199, resolve);
 });
 
-const browser = await chromium.launch();
-const page = await browser.newPage();
+const results = [];
+let lastCheck = "(none yet)";
+const check = (name, ok, extra = "") => {
+  lastCheck = name;
+  results.push(`${ok ? "PASS" : "FAIL"} ${name}${extra ? " — " + extra : ""}`);
+};
+// U9 harness hardening (U4/U7 deferred): any throw/rejection mid-suite prints
+// what ran, names the last recorded check, closes chromium + frees port 4199.
+let browser;
+const bail = async (why) => {
+  console.log(results.join("\n"));
+  console.error(`\nSMOKE ABORTED after check "${lastCheck}" (${results.length} recorded): ${why}`);
+  await browser?.close().catch(() => {});
+  server.close();
+  process.exit(1);
+};
+process.on("uncaughtException", (e) => bail(e?.stack || e));
+process.on("unhandledRejection", (e) => bail(e?.stack || e));
+process.on("SIGINT", () => bail("SIGINT"));
+// cold-start flake: chromium can die right after launch ("Target page, context
+// or browser has been closed") — retry launch+newPage up to 3×, other errors throw
+let page;
+for (let attempt = 1; ; attempt++) {
+  try {
+    browser = await chromium.launch();
+    page = await browser.newPage();
+    break;
+  } catch (e) {
+    await browser?.close().catch(() => {});
+    if (attempt >= 3 || !/has been closed/.test(String(e))) throw e;
+    console.error(`chromium launch attempt ${attempt} failed (${String(e).split("\n")[0]}) — retrying`);
+  }
+}
 const errors = [];
 page.on("pageerror", (e) => errors.push(String(e)));
 page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
-await page.addInitScript(() => {
+// Shared init scripts (U9 dedupe: page + winPage used verbatim copies)
+const mockTauri = () => {
   window.__cbMap = {};
   window.__events = {};
   window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
@@ -146,7 +194,15 @@ await page.addInitScript(() => {
       return globalThis.__invokeImpl(cmd, args);
     },
   };
-});
+};
+// CSP-violation collector (AC R1.4): securitypolicyviolation events for the whole run
+const cspCollector = () => {
+  window.__cspViolations = [];
+  document.addEventListener("securitypolicyviolation", (e) => {
+    window.__cspViolations.push(`${e.effectiveDirective}: ${e.blockedURL || e.sourceFile || "inline"}`);
+  });
+};
+await page.addInitScript(mockTauri);
 await page.addInitScript(() => {
   // Track AbortController signals passed to window listeners (U4 split drag).
   // Each split registers its mousemove/mouseup under ONE shared signal; if the
@@ -166,20 +222,11 @@ await page.addInitScript(() => {
     return origAdd(type, fn, opts);
   };
 });
-// CSP-violation collector (AC R1.4): securitypolicyviolation events for the whole run
-await page.addInitScript(() => {
-  window.__cspViolations = [];
-  document.addEventListener("securitypolicyviolation", (e) => {
-    window.__cspViolations.push(`${e.effectiveDirective}: ${e.blockedURL || e.sourceFile || "inline"}`);
-  });
-});
+await page.addInitScript(cspCollector);
 await page.exposeFunction("__invokeImpl", invoke);
 const firstResp = await page.goto("http://localhost:4199/");
 const servedCsp = (firstResp.headers()["content-security-policy"] || "").trim();
 await page.waitForTimeout(400);
-
-const results = [];
-const check = (name, ok, extra = "") => results.push(`${ok ? "PASS" : "FAIL"} ${name}${extra ? " — " + extra : ""}`);
 
 // ---- W2-A: startup ssh/sftp check + install guide (AC-A1.5, NFR-W2-4) ----
 const PS_CMD = "Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0";
@@ -210,36 +257,8 @@ await page.waitForTimeout(200);
 const winPage = await browser.newPage({ userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36" });
 winPage.on("pageerror", (e) => errors.push(String(e)));
 winPage.on("console", (m) => m.type() === "error" && errors.push(m.text()));
-await winPage.addInitScript(() => {
-  window.__cbMap = {};
-  window.__events = {};
-  window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
-  // emit mock Tauri events from tests, e.g. __emitTauri("pty://exit/4242")
-  window.__emitTauri = (event, payload) =>
-    (window.__events[event] || []).forEach((cb) => cb({ event, id: 0, payload }));
-  window.__TAURI_INTERNALS__ = {
-    transformCallback: (cb) => {
-      const id = (window.__cbN = (window.__cbN || 0) + 1);
-      window.__cbMap[id] = cb;
-      return id;
-    },
-    invoke: (cmd, args) => {
-      // event listen/unlisten handled in-page so tests can emit via __emitTauri
-      if (cmd === "plugin:event|listen") {
-        (window.__events[args.event] = window.__events[args.event] || []).push(window.__cbMap[args.handler]);
-        return Promise.resolve(1);
-      }
-      if (cmd === "plugin:event|unlisten") return Promise.resolve("");
-      return globalThis.__invokeImpl(cmd, args);
-    },
-  };
-});
-await winPage.addInitScript(() => {
-  window.__cspViolations = [];
-  document.addEventListener("securitypolicyviolation", (e) => {
-    window.__cspViolations.push(`${e.effectiveDirective}: ${e.blockedURL || e.sourceFile || "inline"}`);
-  });
-});
+await winPage.addInitScript(mockTauri);
+await winPage.addInitScript(cspCollector);
 await winPage.exposeFunction("__invokeImpl", invoke);
 await winPage.goto("http://localhost:4199/");
 await winPage.waitForTimeout(400);
@@ -858,6 +877,11 @@ check("U3: PTY exit marks terminal tab dead", (await page.locator(".tab.dead").c
 const deadTab = page.locator(".tab.dead");
 check("U3: dead tab title exact", (await deadTab.getAttribute("title")) === "Session ended — click to reconnect");
 check("U3: dead icon is --danger", (await deadTab.locator(".t-ico").evaluate((el) => getComputedStyle(el).color)) === "rgb(253, 156, 159)");
+// U9 polish (STATE Deferred U3): dead tab no longer shows two ✕ glyphs — the
+// reconnect icon differs from the .x close glyph, close button still present
+const deadGlyphs = await deadTab.evaluate((t) => ({ ico: t.querySelector(".t-ico").innerHTML, x: t.querySelector(".x")?.innerHTML || "" }));
+check("U9: dead tab shows ONE ✕ (reconnect icon ≠ close glyph)",
+  deadGlyphs.x !== "" && deadGlyphs.ico !== deadGlyphs.x && deadGlyphs.ico.includes("<svg"), JSON.stringify(deadGlyphs).slice(0, 120));
 await deadTab.locator(".t-label").click();
 await page.waitForTimeout(400);
 check("U3: clicking dead tab respawns PTY", calls.filter((c) => c.cmd === "pty_spawn").length === spawnsU3 + 1);
@@ -993,7 +1017,9 @@ check("U5: strip row reaches ok state", (await page.locator(".panel.active .xf-r
 await page.locator(".panel.active .loc-list .sftp-row").first().click();
 await page.waitForTimeout(400);
 await page.locator(".panel.active .sftp-pane:nth-child(2) .pane-head .sftp-upload").click();
-await page.waitForTimeout(80);
+// U9 flake fix: observe the run row as soon as it renders (was a fixed 80ms
+// sleep racing the 150ms mock under CDP load); timeout → check FAILs below
+await page.locator(".panel.active .xf-row.run .spinner").first().waitFor({ timeout: 1000 }).catch(() => {});
 check("U5: running transfer shows 12px spinner row",
   (await page.locator(".panel.active .xf-row.run .spinner").count()) === 1 &&
   (await page.locator(".panel.active .xf-row.run .spinner").first().evaluate((el) => getComputedStyle(el).width)) === "12px");
@@ -1188,6 +1214,15 @@ check("U6 AC2: copy strings untouched in main.ts source",
 // close the U6 tab so the suite ends as it started (no leftover listeners)
 await page.locator(".tab .x").first().click();
 await page.waitForTimeout(300);
+// U9 (QA NIT-1 / SEC INFO-2): U6's own open/close lifecycle must also leave live==0
+const sigAfterU6 = await page.evaluate(() => ({
+  n: window.__sigList.length,
+  live: window.__sigList.filter((e) => !e.sig.aborted).length,
+}));
+check("U6: listeners released after U6 tab lifecycle (AbortController, live==0)",
+  sigAfterU6.live === 0 && sigAfterU6.n > sigAfterU5.n, JSON.stringify(sigAfterU6));
+// U9 hygiene (SEC INFO-3): global list delay must be back to 0 after U6
+check("U6: delayList reset to 0 (later checks assume instant listings)", delayList === 0, `delayList=${delayList}`);
 
 // ---- U7 editor: panel-level Ctrl+S + ed-bar dirty (EPIC-TSD §U7; redesign §1.5 E1–E2, §4.5) ----
 await page.locator(".host-item .h-sftp").first().click();
@@ -1403,6 +1438,174 @@ check("U8 AC4: copy names the sidecar (hosterm.secrets) and never claims storage
 await page.locator("#m-cancel").click();
 await page.waitForTimeout(200);
 
+// ---- U9 audit: cross-feature invariants + narrative copy + hostile bytes (EPIC-TSD §U9) ----
+// (a) no `draggable` anywhere under src/ (every file, not just main.ts) + index.html + live DOM
+const srcDir = new URL("../src/", import.meta.url);
+const u9Files = readdirSync(srcDir, { recursive: true }).filter((f) => /\.(ts|css|svg|html)$/.test(f));
+const dragHits = u9Files.filter((f) => /draggable/i.test(readFileSync(new URL(f, srcDir), "utf8")));
+check("U9 (a): grep draggable in src/ = 0", u9Files.length >= 3 && dragHits.length === 0, `files=${u9Files.length} hits=${dragHits.join(",")}`);
+check("U9 (a): no draggable in index.html + 0 [draggable] in live DOM",
+  !/draggable/i.test(readFileSync(new URL("../index.html", import.meta.url), "utf8")) &&
+  (await page.evaluate(() => document.querySelectorAll("[draggable]").length)) === 0);
+// (c) pasteNormalize: body byte-pinned to the contract the 9g1 check re-implements, wired on both paste paths
+const pnBody = (u3src.match(/function pasteNormalize\(text: string\): string \{([\s\S]*?)\n\}/) || [])[1] || "";
+check("U9 (c): pasteNormalize body unchanged (CRLF/CR→LF, strip 1 trailing LF)",
+  pnBody === '\n  const lf = text.replace(/\\r\\n/g, "\\n").replace(/\\r/g, "\\n");\n  return lf.endsWith("\\n") ? lf.slice(0, -1) : lf;', JSON.stringify(pnBody));
+check("U9 (c): pasteNormalize wired on both PTY paste paths",
+  (u3src.match(/pasteNormalize\(String\(raw\)\)/g) || []).length === 2);
+// (d) motion: only the 2 shipped keyframes (spinner + xfer sweep), both off under reduced-motion
+check("U9 (d): keyframes = spin + sweep only (no new animation)",
+  JSON.stringify((cssU4.match(/@keyframes\s+[\w-]+/g) || []).map((k) => k.split(/\s+/)[1]).sort()) === '["spin","sweep"]');
+await page.emulateMedia({ reducedMotion: "reduce" });
+const rmAnim = await page.evaluate(() => {
+  const s = document.createElement("span");
+  s.className = "spinner";
+  document.body.appendChild(s);
+  const a = getComputedStyle(s).animationName;
+  s.remove();
+  return a;
+});
+await page.emulateMedia({ reducedMotion: null });
+check("U9 (d): prefers-reduced-motion stops the spinner", rmAnim === "none", rmAnim);
+check("U9: shipped skeleton class is .skel (no .skel-row) + no @font-face",
+  /\.skel\b/.test(cssU4) && !/skel-row/.test(cssU4 + u3src) && !/@font-face/.test(cssU4));
+// (b) sidebar narrative copy byte-identical (empty / error / no-match) + empty CTA formalized
+const sbState = () => page.evaluate(() => {
+  const s = document.querySelector("#host-list .list-state");
+  return s ? { text: s.firstChild?.nodeValue ?? "", err: s.classList.contains("err"), btn: s.querySelector("button")?.textContent ?? null } : null;
+});
+hostsMode = "empty";
+await page.locator("#btn-reload").click();
+await page.waitForTimeout(250);
+const sbEmpty = await sbState();
+check("U9 (b): sidebar empty copy byte-identical",
+  sbEmpty?.text === "No hosts in ~/.ssh/config yet. Click + to add one." && !sbEmpty.err, JSON.stringify(sbEmpty));
+await page.locator("#host-list .list-state button").click();
+await page.waitForTimeout(200);
+check("U9: empty-state CTA 'Add host' opens the add-host modal",
+  sbEmpty?.btn === "Add host" && (await page.locator("#modal").evaluate((el) => !el.classList.contains("hidden"))) &&
+  (await page.locator("#modal-title").textContent()) === "Add host");
+await page.locator("#m-cancel").click();
+await page.waitForTimeout(200);
+hostsMode = "fail";
+await page.locator("#btn-reload").click();
+await page.waitForTimeout(250);
+const sbErr = await sbState();
+check("U9 (b): sidebar error copy byte-identical (.list-state.err)",
+  sbErr?.text === "Could not read ~/.ssh/config: permission denied (mock). Check the file, then press Reload." && sbErr.err, JSON.stringify(sbErr));
+// loadHosts logs the rejection via console.error by design (main.ts) — drop only
+// that expected entry so the global "no console/page errors" check stays strict
+const expErr = errors.findIndex((e) => e === "permission denied (mock)");
+check("U9: fail fixture logs exactly the expected console.error", expErr !== -1 && errors.filter((e) => e.includes("permission denied (mock)")).length === 1);
+if (expErr !== -1) errors.splice(expErr, 1);
+hostsMode = "normal";
+await page.locator("#btn-reload").click();
+await page.waitForTimeout(250);
+await page.locator("#host-search").fill("zzz");
+await page.waitForTimeout(150);
+const sbNone = await sbState();
+check("U9 (b): sidebar no-match copy byte-identical", sbNone?.text === 'No host matches "zzz".', JSON.stringify(sbNone));
+await page.locator("#host-search").fill("");
+await page.waitForTimeout(150);
+// row-level ↑/↓ (STATE Deferred U2): search ↓ enters list, rows move focus both ways
+await page.locator("#host-search").focus();
+await page.keyboard.press("ArrowDown");
+const hostOrder = await page.evaluate(() => [...document.querySelectorAll(".host-item")].map((e) => e.dataset.host));
+const focusedHost = () => page.evaluate(() => document.activeElement?.dataset?.host ?? null);
+const fh0 = await focusedHost();
+await page.keyboard.press("ArrowDown");
+const fh1 = await focusedHost();
+await page.keyboard.press("ArrowUp");
+const fh2 = await focusedHost();
+check("U9: ArrowDown from search focuses the first host row", hostOrder.length === 3 && fh0 === hostOrder[0], `${fh0} vs ${hostOrder[0]}`);
+check("U9: row ArrowDown/ArrowUp move focus between host rows", fh1 === hostOrder[1] && fh2 === hostOrder[0], `${fh1}/${fh2}`);
+await page.evaluate(() => { const a = document.activeElement; if (a instanceof HTMLElement) a.blur(); });
+// SFTP narrative copy: fixed U5 nit (local pane is the LEFT pane) + rest pinned verbatim
+await page.locator(".host-item .h-sftp").first().click();
+await page.locator(".panel.active .sftp-list .sftp-row").first().waitFor({ timeout: 5000 });
+const paneGeo = await page.evaluate(() => {
+  const [a, b] = document.querySelectorAll(".panel.active .sftp-pane");
+  return { leftLocal: !!a.querySelector(".loc-list"), ax: a.getBoundingClientRect().left, bx: b.getBoundingClientRect().left };
+});
+check("U9: local pane renders on the LEFT and copy says so",
+  paneGeo.leftLocal && paneGeo.ax < paneGeo.bx && u3src.includes('"Open a local directory on the left first."') && !u3src.includes("on the right first"),
+  JSON.stringify(paneGeo));
+check("U9 (b): SFTP selection/transfer copy byte-identical in source",
+  (u3src.match(/"Select a file in the local pane first \(single click\)\."/g) || []).length === 3 &&
+  (u3src.match(/"Select a file in the remote pane first \(single click\)\."/g) || []).length === 3 &&
+  u3src.includes("`Failed to upload ${name}: ${msg(e)}. Check the path and try again.`") &&
+  u3src.includes("`Failed to download ${name}: ${msg(e)}. Check the path and try again.`"));
+// hostile bytes (SEC t_ec1dbd02 LOW → INV-11): attacker-named remote entries render inert
+await page.locator(".panel.active .sftp-path").fill("/xss");
+await page.locator(".panel.active .sftp-go").click();
+await page.waitForFunction(() => document.querySelectorAll(".panel.active .sftp-list .sftp-row").length === 3, null, { timeout: 5000 }).catch(() => {});
+await page.waitForTimeout(200); // give a would-be onerror/onload time to fire
+const xssList = await page.evaluate(() => [...document.querySelectorAll(".panel.active .sftp-list .sftp-row")].map((r) => {
+  const nm = r.querySelector(".nm");
+  return { kids: nm.childElementCount, text: nm.textContent, ds: r.dataset.name };
+}));
+const hostileNames = HOSTILE_ENTRIES.map((e) => e.name);
+check("U9 hostile: remote .nm childElementCount 0 for every entry", xssList.length === 3 && xssList.every((r) => r.kids === 0), JSON.stringify(xssList.map((r) => r.kids)));
+check("U9 hostile: .nm text + dataset.name keep raw bytes",
+  JSON.stringify(xssList.map((r) => r.text)) === JSON.stringify(hostileNames) &&
+  JSON.stringify(xssList.map((r) => r.ds)) === JSON.stringify(hostileNames), JSON.stringify(xssList.map((r) => r.text)));
+check("U9 hostile: 0 <img>/<b> + 0 on* attributes injected anywhere in the DOM",
+  await page.evaluate(() => document.querySelectorAll("img, b, [onerror], [onload]").length === 0));
+// hostile path echoed into the error copy goes through textContent
+await page.locator(".panel.active .sftp-path").fill(`/boom/${HOSTILE}`);
+await page.locator(".panel.active .sftp-go").click();
+await page.waitForTimeout(300);
+const xssStatus = await page.evaluate(() => {
+  const st = document.querySelector(".panel.active .sftp-status");
+  return { kids: st.childElementCount, text: st.textContent };
+});
+check("U9 hostile: path echo in .sftp-status inert (0 child elements, raw text)",
+  xssStatus.kids === 0 && xssStatus.text.includes(HOSTILE) && xssStatus.text.endsWith("Fix the path and press Go, or go up one level."), JSON.stringify(xssStatus));
+// hostile host alias in sidebar + tab label + pane title
+hostsMode = "hostile";
+await page.locator("#btn-reload").click();
+await page.waitForTimeout(250);
+const xssHost = await page.evaluate((H) => {
+  const row = [...document.querySelectorAll(".host-item")].find((e) => e.dataset.host === H);
+  if (!row) return null;
+  const nm = row.querySelector(".h-name");
+  return { kids: nm.childElementCount, text: nm.textContent, aria: row.getAttribute("aria-label") };
+}, HOSTILE);
+check("U9 hostile: sidebar .h-name inert + aria-label raw",
+  xssHost?.kids === 0 && xssHost.text === HOSTILE && xssHost.aria === `Open terminal to ${HOSTILE}`, JSON.stringify(xssHost));
+await page.evaluate((H) => [...document.querySelectorAll(".host-item")].find((e) => e.dataset.host === H).querySelector(".h-sftp").click(), HOSTILE);
+await page.locator(".panel.active .sftp-list .sftp-row").first().waitFor({ timeout: 5000 });
+const xssChrome = await page.evaluate(() => {
+  const lbl = document.querySelector(".tab.active .t-label");
+  const ttl = document.querySelector(".panel.active .sftp-pane:nth-child(2) .pane-title");
+  return { lk: lbl.childElementCount, lt: lbl.textContent, tk: ttl.childElementCount, tt: ttl.textContent };
+});
+check("U9 hostile: tab label + remote pane title inert",
+  xssChrome.lk === 0 && xssChrome.lt === HOSTILE && xssChrome.tk === 0 && xssChrome.tt === `${HOSTILE} — remote`, JSON.stringify(xssChrome));
+await page.waitForTimeout(200);
+check("U9 hostile: window.__pwn undefined + CSP 0 after all hostile fixtures",
+  (await page.evaluate(() => typeof window.__pwn)) === "undefined" &&
+  (await page.evaluate(() => (window.__cspViolations || []).length)) === 0);
+// teardown: close U9 tabs, restore normal host list
+for (let i = 0; i < 6 && (await page.locator(".tab").count()) > 0; i++) {
+  await page.locator(".tab .x").first().click();
+  await page.waitForTimeout(250);
+}
+hostsMode = "normal";
+await page.locator("#btn-reload").click();
+await page.waitForTimeout(250);
+check("U9: teardown — 0 tabs, 3 hosts back", (await page.locator(".tab").count()) === 0 && (await page.locator(".host-item").count()) === 3);
+const sigEnd = await page.evaluate(() => window.__sigList.filter((e) => !e.sig.aborted).length);
+check("U9: end-of-suite window drag listeners live == 0", sigEnd === 0, `live=${sigEnd}`);
+// audit: EPIC §8 #9 checklist features each have explicit checks; every unit U3–U8 recorded, none failing
+const unitIssues = ["U3", "U4", "U5", "U6", "U7", "U8"].filter((u) => {
+  const mine = results.filter((r) => r.slice(5).startsWith(u));
+  return mine.length === 0 || mine.some((r) => r.startsWith("FAIL"));
+});
+const need = ["host menu", "divider", "status bar", "strip"].filter((k) => !results.some((r) => r.startsWith("PASS") && r.includes(k)));
+check("U9 audit: §8#9 (host menu/divider/status bar/strip) covered + U3–U8 all PASS",
+  unitIssues.length === 0 && need.length === 0, `units=${unitIssues.join(",")} missing=${need.join(",")}`);
+
 check("no console/page errors", errors.length === 0, errors.slice(0, 3).join(" | "));
 
 // SEC-4 / AC R1.4: zero CSP violations across the full suite
@@ -1413,9 +1616,8 @@ check("served CSP == tauri.conf.json policy", servedCsp === CSP.trim(), servedCs
 console.log(results.join("\n"));
 const fails = results.filter((r) => r.startsWith("FAIL")).length;
 console.log(`\n${results.length - fails}/${results.length} passed`);
+// identity of failed checks on stderr too (U7 cold-start flake went unrecorded)
+if (fails) console.error("FAILED checks:\n" + results.filter((r) => r.startsWith("FAIL")).join("\n"));
 await browser.close();
 server.close();
 process.exit(fails ? 1 : 0);
-
-// v0.4.1 checks appended: delete button on host rows + right-click paste handler
-import { chromium as _c } from "playwright";

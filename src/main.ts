@@ -1026,7 +1026,7 @@ async function openSftp(host: string) {
     }
     if (!name) return status("Select a file in the remote pane first (single click).", "err");
     const localDir = localPane.get(tabId) || "";
-    if (!localDir) return status("Open a local directory on the right first.", "err");
+    if (!localDir) return status("Open a local directory on the left first.", "err");
     const remotePath = joinRemote(s.path, name);
     const localPath = joinLocal(joinLocal(localDir, intoDir), name);
     const job = () => {
@@ -1583,7 +1583,8 @@ function makeTab(tabId: number, kind: "terminal" | "sftp" | "editor", label: str
   return tab;
 }
 
-// U3 §4.2: dead terminal tab = ✕ icon --danger; clicking it respawns the PTY.
+// U3 §4.2: dead terminal tab = reload icon --danger (U9: was a 2nd ✕ beside
+// the .x close glyph); clicking it respawns the PTY.
 const DEAD_TITLE = "Session ended — click to reconnect";
 function kindIcon(kind: string): string {
   return kind === "sftp" ? ICONS.arrows : kind === "editor" ? ICONS.pencil : ICONS.terminal;
@@ -1593,7 +1594,7 @@ function markTabDead(tabId: number, dead: boolean) {
   if (!tab) return;
   tab.classList.toggle("dead", dead);
   const ico = tab.querySelector(".t-ico");
-  if (ico) ico.innerHTML = dead ? ICONS.close : kindIcon(tab.dataset.kind || "terminal");
+  if (ico) ico.innerHTML = dead ? ICONS.reload : kindIcon(tab.dataset.kind || "terminal");
   if (dead) tab.title = DEAD_TITLE;
   else tab.removeAttribute("title");
 }
