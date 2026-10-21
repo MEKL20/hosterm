@@ -244,22 +244,24 @@ fn read_secrets() -> std::collections::BTreeMap<String, String> {
     m
 }
 
-fn write_secrets(m: &std::collections::BTreeMap<String, String>) {
+fn write_secrets(m: &std::collections::BTreeMap<String, String>) -> std::io::Result<()> {
     let body: String = m.iter().map(|(k, v)| format!("{}={}\n", k, v)).collect();
     if m.is_empty() {
-        let _ = std::fs::remove_file(secrets_path());
-        return;
+        // Removing a file that is already gone is success, not an error — the
+        // sidecar may never have existed. Any other error (EACCES, ROFS) propagates.
+        return match std::fs::remove_file(secrets_path()) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
+        };
     }
-    if std::fs::write(secrets_path(), body).is_ok() {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(
-                secrets_path(),
-                std::fs::Permissions::from_mode(0o600),
-            );
-        }
+    std::fs::write(secrets_path(), body)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(secrets_path(), std::fs::Permissions::from_mode(0o600))?;
     }
+    Ok(())
 }
 
 /// Add/update/remove one alias→secret row. Empty pw removes.
@@ -270,7 +272,9 @@ fn set_secret(alias: &str, pw: &str) {
     } else {
         m.insert(alias.to_string(), pw.to_string());
     }
-    write_secrets(&m);
+    // Save path already surfaces config-write errors; the sidecar write is
+    // best-effort here. forget_secret is the path that must propagate.
+    let _ = write_secrets(&m);
 }
 
 /// One-time cleanup for configs written by <= 0.6.1: pull any stored secret
@@ -337,12 +341,15 @@ fn apply_host_fields(hb: &mut HostBlock, host: &HostInput) {
     }
 }
 
-/// Remove a deleted host's secret row, if any.
-fn purge_secret(alias: &str) {
+/// Remove a deleted host's secret row, if any. Returns the io error if the
+/// sidecar rewrite fails (EACCES, read-only FS, ENOSPC); a no-op row removal
+/// touches no file and is always Ok.
+fn purge_secret(alias: &str) -> std::io::Result<()> {
     let mut m = read_secrets();
     if m.remove(alias).is_some() {
-        write_secrets(&m);
+        write_secrets(&m)?;
     }
+    Ok(())
 }
 
 /// Persist (or clear) the secret for an alias in the sidecar. Called from the
@@ -359,20 +366,23 @@ fn store_secret_for_host(host: &HostInput) {
 /// (the UI never re-sends the secret), so forgetting is the only way to drop
 /// it without deleting the host. Idempotent: an unknown alias is a no-op.
 #[tauri::command]
-fn forget_secret(alias: String) {
+fn forget_secret(alias: String) -> Result<(), String> {
     let a = alias.as_str();
     if a.trim().is_empty() {
-        return;
+        return Ok(());
     }
     // The sidecar key is the host name verbatim (save_host stores `host.name`),
     // so drop that exact key; also drop the trimmed spelling in case the UI
     // sent a padded name. purge_secret only rewrites the file when a row was
-    // actually removed → unknown alias is a true no-op.
-    purge_secret(a);
+    // actually removed → unknown alias is a true no-op. A real fs failure
+    // (EACCES, read-only FS, ENOSPC) propagates so the UI never shows success
+    // while the password is still on disk.
+    purge_secret(a).map_err(|e| format!("Failed to remove stored password: {e}"))?;
     let t = a.trim();
     if t != a {
-        purge_secret(t);
+        purge_secret(t).map_err(|e| format!("Failed to remove stored password: {e}"))?;
     }
+    Ok(())
 }
 
 /// The directory holding keys + config. Keys live beside the config so the
@@ -477,7 +487,7 @@ fn save_host(original_name: Option<String>, host: HostInput) -> Result<(), Strin
                 let mut m = read_secrets();
                 if let Some(pw) = m.remove(&orig) {
                     m.insert(host.name.clone(), pw);
-                    write_secrets(&m);
+                    let _ = write_secrets(&m);
                 }
             }
             store_secret_for_host(&host);
@@ -512,7 +522,7 @@ fn delete_host(name: String) -> Result<(), String> {
         None => Err(format!("Host '{}' not found", name)),
         Some(i) => {
             cfg.hosts.remove(i);
-            purge_secret(&name);
+            purge_secret(&name).map_err(|e| format!("Failed to remove stored password: {e}"))?;
     write_config_file(&path, &serialize_config(&cfg))
         }
     }
@@ -2342,7 +2352,7 @@ mod forget_secret_tests {
         let sec = cfg.parent().unwrap().join("hosterm.secrets");
         assert!(std::fs::read_to_string(&sec).unwrap().contains("drop=droppw"));
 
-        forget_secret("drop".into());
+        forget_secret("drop".into()).unwrap();
 
         let s = std::fs::read_to_string(&sec).unwrap();
         assert!(!s.contains("drop="), "forgotten row must be gone: {s}");
@@ -2360,9 +2370,9 @@ mod forget_secret_tests {
         let before = std::fs::read_to_string(&sec).unwrap();
 
         // unknown alias + blank alias: no-op, no error, no sidecar churn
-        forget_secret("nope".into());
-        forget_secret("   ".into());
-        forget_secret(String::new());
+        forget_secret("nope".into()).unwrap();
+        forget_secret("   ".into()).unwrap();
+        forget_secret(String::new()).unwrap();
 
         assert_eq!(std::fs::read_to_string(&sec).unwrap(), before);
         std::env::remove_var("HOSTERM_CONFIG");
@@ -2377,7 +2387,7 @@ mod forget_secret_tests {
         save_host(None, pw_host("other", "pw2")).unwrap();
         let cfg_before = std::fs::read_to_string(&cfg).unwrap();
 
-        forget_secret("box".into());
+        forget_secret("box".into()).unwrap();
 
         // ~/.ssh/config equivalent: byte-identical, secret never in it
         assert_eq!(std::fs::read_to_string(&cfg).unwrap(), cfg_before);
@@ -2402,12 +2412,41 @@ mod forget_secret_tests {
         save_host(None, pw_host("box", "pw")).unwrap();
         assert_eq!(read_ssh_config().unwrap()[0].has_password, true);
 
-        forget_secret("box".into());
+        forget_secret("box".into()).unwrap();
 
         // host block survives, but the stored-password chip is gone
         let hosts = read_ssh_config().unwrap();
         assert_eq!(hosts.len(), 1, "host block must survive");
         assert_eq!(hosts[0].has_password, false);
+        std::env::remove_var("HOSTERM_CONFIG");
+    }
+
+    /// A real fs failure (read-only sidecar dir) must surface as Err, and the
+    /// stored row must still be on disk — never a silent success while the
+    /// password remains. Unix-only: relies on directory 0o500 denying writes.
+    #[cfg(unix)]
+    #[test]
+    fn forget_secret_propagates_write_error_and_keeps_row() {
+        use std::os::unix::fs::PermissionsExt;
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = tmp("roerr");
+        let dir = cfg.parent().unwrap().to_path_buf();
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        save_host(None, pw_host("box", "secretpw")).unwrap();
+        let sec = dir.join("hosterm.secrets");
+        assert!(std::fs::read_to_string(&sec).unwrap().contains("box=secretpw"));
+
+        // Deny writes to the dir so the sidecar rewrite (unlink+create) fails.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let r = forget_secret("box".into());
+        // Restore before any assert so a failed assert can't leave the dir locked.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert!(r.is_err(), "fs failure must propagate as Err, got {r:?}");
+        assert!(
+            std::fs::read_to_string(&sec).unwrap().contains("box=secretpw"),
+            "row must still be on disk after a failed forget"
+        );
         std::env::remove_var("HOSTERM_CONFIG");
     }
 }
