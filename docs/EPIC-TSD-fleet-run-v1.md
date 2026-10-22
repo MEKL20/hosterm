@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Author | crew-coding-lead (card t_73655e4e) |
-| Sumber | `docs/FEATURE-SPEC-fleet-run-v1.md` §1–5 (approved MEKL 19 Okt; OQ CLOSED — tidak dibuka di sini) · `docs/SDD-hosterm-v2.md` §12 + ADR-13..16 + INV-14..19 (kontrak IPC **BEKU**, architect card t_a367888f) · `docs/PRD-hosterm-v2.md` §7 row Fleet Run |
+| Sumber | `docs/FEATURE-SPEC-fleet-run-v1.md` §1–5 (approved MEKL 19 Okt; OQ CLOSED — tidak dibuka di sini) · `docs/SDD.md` §12 + ADR-13..16 + INV-14..19 (kontrak IPC **BEKU**, architect card t_a367888f) · `docs/PRD.md` §7 row Fleet Run |
 | Status | Spec — belum ada kode fleet. FL-1 siap dispatch segera (paralel Arus); FL-2..FL-4 ter-gate Arus U9 |
 | Gate | FL-1..FL-3 = kode lane → **triple gate penuh** (lead review + QA PASS + SEC clean). FL-4 menyentuh `qa-reports/` → diperlakukan kode lane juga (in-doubt-as-code rule, MEKL 19 Okt). Developer tidak pernah push; lead collect & push |
 | Aturan kontrak | Nama payload/command/event = §12.3 verbatim. Perubahan apa pun = addendum SDD (ADR baru), bukan drift implementasi. Angka verify = "baseline saat dispatch + N" (re-measure, STATE.md kanonik) |
@@ -120,4 +120,4 @@ Satu card hosterm aktif pada `main.ts`/`styles.css`/smoke setiap waktu (postur A
 - **Jangan:** menulis direktif `Group`/`ForwardAgent` ke config (OQ CLOSED #4/#3); auto-accept host key (OQ #2); membuka lagi password-host v1 (OQ #1; §12.8 = input v2, bukan scope); menambah command di luar inventori 23; menyentuh `~/.ssh/authorized_keys` (hard rule #6) — cargo test fleet WAJIB pakai HOME fixture, bukan home nyata.
 
 ---
-*Sources: docs/FEATURE-SPEC-fleet-run-v1.md §1–5 · docs/SDD-hosterm-v2.md §12 (read 2026-10-19, working-tree version) + ADR-13..16 + INV-14..19 · docs/STATE.md · docs/EPIC-TSD-redesign-arus-v1.md §0/§2/U9 · src-tauri/src/lib.rs (inv 21 commands; read_ssh_config:370–417 incl. has_password:402 via read_secrets:233–243, sidecar format `alias=value`; sftp_safe:658; run_sftp_batch:717) · src/main.ts:317–366 (group prefix derivation) · kondisi working tree 19 Okt (U5 aktif). Prepared as card t_73655e4e deliverable JOB 1.*
+*Sources: docs/FEATURE-SPEC-fleet-run-v1.md §1–5 · docs/SDD.md §12 (read 2026-10-19, working-tree version) + ADR-13..16 + INV-14..19 · docs/STATE.md · docs/EPIC-TSD-redesign-arus-v1.md §0/§2/U9 · src-tauri/src/lib.rs (inv 21 commands; read_ssh_config:370–417 incl. has_password:402 via read_secrets:233–243, sidecar format `alias=value`; sftp_safe:658; run_sftp_batch:717) · src/main.ts:317–366 (group prefix derivation) · kondisi working tree 19 Okt (U5 aktif). Prepared as card t_73655e4e deliverable JOB 1.*

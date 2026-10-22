@@ -4,7 +4,7 @@
 |---|---|
 | Author | crew-coding-uiux |
 | Status | For MEKL review — design deliverable only, no code |
-| Input | `docs/PRD-hosterm-v1.md`, `docs/STATE.md`, `DESIGN.md`, `src/styles.css`, `src/main.ts`, root `index.html`, `docs/screenshot-main.png` + `docs/screenshot-edit.png` (2240×1440) |
+| Input | `docs/archive/PRD-hosterm-v1.md`, `docs/STATE.md`, `DESIGN.md`, `src/styles.css`, `src/main.ts`, root `index.html`, `docs/images/screenshot-main.png` + `docs/images/screenshot-edit.png` (2240×1440) |
 | Scope | docs/UX/ only. Tidak menyentuh `src/`, tidak mengubah PRD/STATE/DESIGN.md |
 | Mockup | `docs/UX/mockups/main.html`, `editor.html`, `dialog-password-host.html` (statis, self-contained, buka di browser) |
 

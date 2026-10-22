@@ -1,6 +1,6 @@
 # FEATURE-SPEC: Fleet Run v1
 
-> Milik epic produk — sitasi `PRD-hosterm-v2 §7` (row ditambahkan pm, satu baris).
+> Milik epic produk — sitasi `PRD.md §7` (row ditambahkan pm, satu baris).
 > EARS untuk semua behavior. Initiative tunggal → dokumen ini FEATURE-SPEC, bukan PRD.
 > Boss intent (MEKL via nano): "fitur ansible — bisa jalanin script/command ke banyak host".
 > Keputusan final nano (1–7, card t_04e6f2a2) di bawah diperlakukan sebagai constraint,
@@ -195,7 +195,7 @@ perintah penambah direktif config apa pun (fleet tidak menulis config).
 
 | Unit | Cakupan file | Deps | Demo: (bukti observable selesai) |
 |---|---|---|---|
-| 0 — SDD addendum Fleet Run | `docs/SDD-hosterm-v2.md` (architect lane, bukan deliverable pm) | spec ini | Architect memutuskan: kelayakan password-host PTY vs pipe, nama command/event IPC, nama env override ssh-test, bentuk kill/timeout. Ditulis sebagai ADR + INV baru sebelum kode apa pun |
+| 0 — SDD addendum Fleet Run | `docs/SDD.md` (architect lane, bukan deliverable pm) | spec ini | Architect memutuskan: kelayakan password-host PTY vs pipe, nama command/event IPC, nama env override ssh-test, bentuk kill/timeout. Ditulis sebagai ADR + INV baru sebelum kode apa pun |
 | 1 — Fleet runner core (backend) | `src-tauri/src/lib.rs`, `src-tauri/src/*` tests | Unit 0 | `cd src-tauri && cargo test --lib` → ≥ 52 + 8 baru pass: kelayakan/skip reason, pemilihan transport, normalisasi CRLF+trailing newline, guard alias, klasifikasi status, concurrency ceiling ≤ N hidup serentak vs fake-ssh, timeout kill, dan assert byte-config `~/.ssh/config` tidak berubah |
 | 2 — IPC surface + event contract (backend) | `src-tauri/src/lib.rs` | Unit 1; **satu file dengan Unit 1 → serial di dalam epic ini** | Daftar `#[tauri::command]` bertambah (inventori 21 → baru) dengan payload start/run/stop + event output/selesai; `cargo test --lib` hijau; kontrak didokumentasikan buat frontend (request/response shape per host: alias, status, exit code, chunk seq) |
 | 3 — Panel Fleet + dialog konfirmasi (frontend) | `src/main.ts`, `src/styles.css` | **Arus U9 selesai (hotspot queue — nano keputusan 7)** + Unit 2 kontrak IPC | `npm run build` 0 TS error; smoke: panel render N baris per host, select-all/group toggle, Run disabled saat 0 terpilih, dialog menampilkan `N hosts · command · timeout · cap · skipped`, Cancel → 0 invoke spawn tercatat di mock |
@@ -286,8 +286,8 @@ selesai; lead yang menjadwalkan.
 
 ---
 
-*Sources: docs/STATE.md (verify loop 52 cargo / 144 smoke post-U4) · docs/PRD-hosterm-v2.md §1.1/§3/§4/§5/§7/§8 ·
-docs/SDD-hosterm-v2.md ADR-1/3/6/7/8, §3, §5, §6, §8 INV-1..11, §9 R-1/R-3/R-5/R-14, §10 ·
+*Sources: docs/STATE.md (verify loop 52 cargo / 144 smoke post-U4) · docs/PRD.md §1.1/§3/§4/§5/§7/§8 ·
+docs/SDD.md ADR-1/3/6/7/8, §3, §5, §6, §8 INV-1..11, §9 R-1/R-3/R-5/R-14, §10 ·
 src-tauri/src/lib.rs (read_ssh_config 369–417, sftp_safe 655–666, run_sftp_batch 716+, pty_spawn 1266–1324,
 inventori 21 `#[tauri::command]`) · src/main.ts:317–366 (host list + group prefix derivation + wildcard filter) ·
 qa-reports/headless-smoke.mjs:38–40 (mock hosts prod-web/db-core/pw-host) ·

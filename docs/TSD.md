@@ -5,7 +5,7 @@
 | Author | crew-coding-lead |
 | Date | 2026-10-19 |
 | Status | Active playbook for all hosterm dev tasks |
-| Inputs | `docs/PRD-hosterm-v1.md` (product truth) · `docs/SDD-hosterm-v1.md` (design truth, untracked — lands in the wave-2 docs commit) · `docs/FEATURE-SPEC-wave-2-draft.md` (wave-2 scope) · `docs/STATE.md` + `AGENTS.md` (repo working rules) · `docs/EPIC-TSD-security-hardening-wave-1.md` (wave-1 gates, shipped) |
+| Inputs | `docs/archive/PRD-hosterm-v1.md` (product truth) · `docs/archive/SDD-hosterm-v1.md` (design truth, untracked — lands in the wave-2 docs commit) · `docs/archive/FEATURE-SPEC-wave-2-draft.md` (wave-2 scope) · `docs/STATE.md` + `AGENTS.md` (repo working rules) · `docs/EPIC-TSD-security-hardening-wave-1.md` (wave-1 gates, shipped) |
 | Role of this doc | HOW we build and ship: locked stack, test baselines, rollout, dev rules. NOT a design doc — behavior/architecture lives in SDD; product scope lives in PRD. |
 | Commit policy | This file ships in the single deferred docs commit (wave-2 draft §10); no commits by the authoring task. |
 

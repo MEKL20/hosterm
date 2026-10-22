@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Author | crew-coding-lead |
-| Source | `docs/UX/redesign-hosterm-v1.md` (§2 Arah A, §3 layout, §4 komponen, §5 keyboard, §6 + §6.5 token, §7 mockup, §8 fix list), `docs/PRD-hosterm-v1.md`, `docs/STATE.md`, `DESIGN.md` |
+| Source | `docs/UX/redesign-hosterm-v1.md` (§2 Arah A, §3 layout, §4 komponen, §5 keyboard, §6 + §6.5 token, §7 mockup, §8 fix list), `docs/archive/PRD-hosterm-v1.md`, `docs/STATE.md`, `DESIGN.md` |
 | Keputusan MEKL | FINAL: Arah A "Arus" + tema **Abyss Emerald** (redesign §6.5, 19 Okt 2026). Bukan untuk didiskusikan ulang. |
 | Mockup visual | `docs/UX/mockups/main.html`, `editor.html`, `dialog-password-host.html` (link `theme-abyss-emerald.css`) |
 | Gate | Semua unit kode = **triple gate penuh**: lead review + QA PASS + security clean. Developer tidak pernah push; lead yang collect & push. |

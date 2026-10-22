@@ -1,11 +1,11 @@
 # SDD: hosterm v2
 
-> Deliverable architect. Requirements-first lane: derived dari `docs/PRD-hosterm-v2.md` (§3/§4/§5, pm's living doc) + wave-2 feature draft §4/§5 + Arus epic. SDD v1 + its signing/updater extension are folded here; this document supersedes SDD v1 as the single architecture source.
+> Deliverable architect. Requirements-first lane: derived dari `docs/PRD.md` (§3/§4/§5, pm's living doc) + wave-2 feature draft §4/§5 + Arus epic. SDD v1 + its signing/updater extension are folded here; this document supersedes SDD v1 as the single architecture source.
 
 | Field | Value |
 |---|---|
 | Author | crew-coding-architect |
-| Inputs | `docs/PRD-hosterm-v2.md` (requirements authoritative), `docs/SDD-hosterm-v1.md` (basis), `docs/SDD-hosterm-v1-extension-signing-updater.md` (folded into §2.2/§7 ADR-9..12), `docs/EPIC-TSD-redesign-arus-v1.md`, `docs/FEATURE-SPEC-wave-2-draft.md` §4/§5, `docs/FEATURE-SPEC-fleet-run-v1.md` (drives the §12 Fleet Run v1 addendum + ADR-13..16 + INV-14..19), `docs/STATE.md`, `docs/SPIKE-csp-findings.md`, `src-tauri/src/lib.rs`, `src/main.ts`, `src-tauri/tauri.conf.json` |
+| Inputs | `docs/PRD.md` (requirements authoritative), `docs/archive/SDD-hosterm-v1.md` (basis), `docs/SDD-signing-updater.md` (folded into §2.2/§7 ADR-9..12), `docs/EPIC-TSD-redesign-arus-v1.md`, `docs/archive/FEATURE-SPEC-wave-2-draft.md` §4/§5, `docs/FEATURE-SPEC-fleet-run-v1.md` (drives the §12 Fleet Run v1 addendum + ADR-13..16 + INV-14..19), `docs/STATE.md`, `docs/SPIKE-csp-findings.md`, `src-tauri/src/lib.rs`, `src/main.ts`, `src-tauri/tauri.conf.json` |
 | Status | Draft — for MEKL review; downstream input to lead's TSD. Supersedes SDD v1 (kept as history, never edited). |
 | Scope | Whole product as shipped today (v0.10.0 + W2-A + U1) plus committed in-flight work: wave-2 signing/updater (M2/M3, designed, not implemented) and UI redesign "Arus" (U1 landed, U2–U9 pending). ADRs are harvested, not invented. |
 | Version constraint | No commits by architect; this document only |
@@ -364,7 +364,7 @@ Pyramid mapped to the real, measured baseline (STATE.md, 19 Okt 2026, post-W2-A/
 1. `cd src-tauri && cargo test --lib` → 77 pass (73 FL-1 + 4 `forget_secret_tests::`; re-measure at dispatch — Arus units shift smoke only; backend untouched by Arus units).
 2. `npm run build` → 0 TS errors.
 3. `npm install --no-save playwright@1.63.0 && node qa-reports/headless-smoke.mjs` → 196 pass (186 U7 + 10 U8 dialog checks), CSP-violation counter == 0; then remove playwright per repo hygiene.
-4. SDD self-checks (executed at authoring): `grep -c 'INV-' docs/SDD-hosterm-v2.md` → ≥ 8; `grep -c 'IF .* THEN THE SYSTEM SHALL' docs/SDD-hosterm-v2.md` → ≥ 6; section headers byte-identical to `templates/sdd.md`; every ADR carries Context/Decision/Consequences/Rejected alternatives; testing commands above are the live verify loop.
+4. SDD self-checks (executed at authoring): `grep -c 'INV-' docs/SDD.md` → ≥ 8; `grep -c 'IF .* THEN THE SYSTEM SHALL' docs/SDD.md` → ≥ 6; section headers byte-identical to `templates/sdd.md`; every ADR carries Context/Decision/Consequences/Rejected alternatives; testing commands above are the live verify loop.
 5. Code-claim traceability: command list §3 matches `#[tauri::command]` inventory (**24 today** = 21 base + `fleet_start`/`fleet_stop` (Fleet Run v1, §12.3) + `forget_secret` (U8 D2, ADR-17)); canonical count gate = `grep -rc "tauri::command" src-tauri/src/*.rs` → 24 (lib.rs 22 + fleet.rs 2); CSP string §7 ADR-6 matches `tauri.conf.json`; `plugins.updater` absent from `tauri.conf.json` until M3 (AC-B3.3).
 6. Invariant flow: INV-1..20 carry named existing-or-proposed checks; wave-2 rows (INV-12/13) activate with M2/M3 code per extension §E.8; fleet rows (INV-14..19) activate with Fleet Run v1 code per §12; INV-20 (`forget_secret`, U8 D2) is active now — the command and its 4 cargo tests shipped.
 
@@ -621,4 +621,4 @@ Structural verdict for the spec's Clarifying Q3 / R-FL-1: a spawn has exactly on
 
 ---
 
-*Sources: docs/PRD-hosterm-v2.md, docs/SDD-hosterm-v1.md, docs/SDD-hosterm-v1-extension-signing-updater.md, docs/EPIC-TSD-redesign-arus-v1.md, docs/FEATURE-SPEC-wave-2-draft.md, docs/FEATURE-SPEC-fleet-run-v1.md, docs/STATE.md, docs/SPIKE-csp-findings.md, src-tauri/src/lib.rs, src/main.ts, qa-reports/headless-smoke.mjs, src-tauri/tauri.conf.json (all read 2026-10-19). Note: PRD-hosterm-v2.md landed mid-authoring from pm; header/flows reconciled against it. §12 addendum + ADR-13..16 + INV-14..19 authored for card t_a367888f (Fleet Run Unit 0).*
+*Sources: docs/PRD.md, docs/archive/SDD-hosterm-v1.md, docs/SDD-signing-updater.md, docs/EPIC-TSD-redesign-arus-v1.md, docs/archive/FEATURE-SPEC-wave-2-draft.md, docs/FEATURE-SPEC-fleet-run-v1.md, docs/STATE.md, docs/SPIKE-csp-findings.md, src-tauri/src/lib.rs, src/main.ts, qa-reports/headless-smoke.mjs, src-tauri/tauri.conf.json (all read 2026-10-19). Note: PRD-hosterm-v2.md landed mid-authoring from pm; header/flows reconciled against it. §12 addendum + ADR-13..16 + INV-14..19 authored for card t_a367888f (Fleet Run Unit 0).*

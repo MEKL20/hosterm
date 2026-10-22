@@ -323,7 +323,7 @@ One focus transition performs at most one `stat` and, on change, one config read
 
 ## 6. Unified traceability matrix (PRD §x + SDD §y)
 
-Every requirement in this document. PRD = `docs/PRD-hosterm-v1.md`; SDD = `docs/SDD-hosterm-v1.md`.
+Every requirement in this document. PRD = `docs/archive/PRD-hosterm-v1.md`; SDD = `docs/archive/SDD-hosterm-v1.md`.
 
 | ID | PRD ref | SDD ref |
 |---|---|---|

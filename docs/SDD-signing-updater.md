@@ -5,15 +5,15 @@
 | Author | crew-coding-architect |
 | Date | 2026-10-19 |
 | Status | Draft — prerequisite for M2 implementation tasks (TSD §4.2/§7.2); input to wave-2 TSD update. **Rev. 2 (2026-10-20, MEKL): Authenticode vendor = SignPath Foundation** (was Azure Trusted Signing → now paid fallback) — see ADR-9 Rev. 2 |
-| Extends | `docs/SDD-hosterm-v1.md` (§2.4, §5 R-9, ADR-5) |
-| Requirements source | `docs/FEATURE-SPEC-wave-2-draft.md` §4 (FR-W2-5..10, AC-B1..B6, NFR-W2-6..9, HR-W2-1); PRD §6.2 Q4 (resolved), OQ-B1; TSD §4.2 milestones, §4.4 channel table, §7.2 |
+| Extends | `docs/archive/SDD-hosterm-v1.md` (§2.4, §5 R-9, ADR-5) |
+| Requirements source | `docs/archive/FEATURE-SPEC-wave-2-draft.md` §4 (FR-W2-5..10, AC-B1..B6, NFR-W2-6..9, HR-W2-1); PRD §6.2 Q4 (resolved), OQ-B1; TSD §4.2 milestones, §4.4 channel table, §7.2 |
 | Version constraint | No commits by architect; docs only. Lead folds this into SDD v1 at the deferred docs commit (§E.10). |
 
 ---
 
 ## E.0 Why a separate extension file, not an in-place §2.4 edit
 
-Decision: this content ships as `docs/SDD-hosterm-v1-extension-signing-updater.md`, merged into `SDD-hosterm-v1.md` §2.4 by the lead at the deferred docs commit (wave-2 draft §10).
+Decision: this content ships as `docs/SDD-signing-updater.md`, merged into `SDD-hosterm-v1.md` §2.4 by the lead at the deferred docs commit (wave-2 draft §10).
 
 Reason: SDD v1 is frozen pending MEKL review and rides the single deferred docs commit (TSD §1 inputs, draft §10); editing it in place would mutate a review-pending document and blur its scope ("architecture of the shipped product") with wave-2 scope ("architecture we commit to building next"). A separate file gives M2 implementation tasks a self-contained, citable contract now. Sections here are prefixed `E.` to avoid colliding with SDD v1 numbering; ADRs continue v1's sequence (9–12).
 
@@ -338,9 +338,9 @@ When folding into `SDD-hosterm-v1.md`:
 2. Append ADR-9..12 to the v1 ADR section (numbering continues).
 3. Append R-11..R-13 to the risk table.
 4. Add `plugins.updater.pubkey` to TSD §2's frozen-strings list at the M3 flip.
-5. Mirror the vendor change into `SDD-hosterm-v2.md` in the same docs commit: §2.2 stage-A paragraph, §3 components row, §7 ADR-9/ADR-10/ADR-12, §9 R-11 (v2 mirrors this extension verbatim today).
+5. Mirror the vendor change into `docs/SDD.md` in the same docs commit: §2.2 stage-A paragraph, §3 components row, §7 ADR-9/ADR-10/ADR-12, §9 R-11 (v2 mirrors this extension verbatim today).
 6. This file then becomes historical; the SDD is the single source.
 
 ---
 
-*Sources: docs/FEATURE-SPEC-wave-2-draft.md §4/§7/§8, docs/PRD-hosterm-v1.md §6.2 (Q4, OQ-B1), docs/TSD-hosterm-v1.md §2/§4.2/§4.4/§7.2, docs/SDD-hosterm-v1.md, .github/workflows/build-windows.yml, src-tauri/tauri.conf.json (all read 2026-10-19); Tauri v2 docs — plugin/updater + distribute/sign/windows (fetched 2026-10-19: createUpdaterArtifacts + env-key behavior, signCommand hook, latest.json schema, installMode, non-disableable verification, EV/OV SmartScreen parity 2024). Rev. 2 sources: signpath.org (Foundation program: free OSS signing, cert issued to the Foundation, HSM-held keys) + docs.signpath.io/trusted-build-systems/github (submit-signing-request action inputs SIGNPATH_API_TOKEN/organization-id/project-slug/signing-policy-slug; origin-verification checks: workflow-of-this-repo, artifact uploaded pre-submission, GitHub-hosted agents for OSS) (fetched 2026-10-20); Azure Trusted/Artifact Signing ≈ $120/tahun Basic (MEKL decision record, 20 Okt).*
+*Sources: docs/archive/FEATURE-SPEC-wave-2-draft.md §4/§7/§8, docs/archive/PRD-hosterm-v1.md §6.2 (Q4, OQ-B1), docs/TSD.md §2/§4.2/§4.4/§7.2, docs/archive/SDD-hosterm-v1.md, .github/workflows/build-windows.yml, src-tauri/tauri.conf.json (all read 2026-10-19); Tauri v2 docs — plugin/updater + distribute/sign/windows (fetched 2026-10-19: createUpdaterArtifacts + env-key behavior, signCommand hook, latest.json schema, installMode, non-disableable verification, EV/OV SmartScreen parity 2024). Rev. 2 sources: signpath.org (Foundation program: free OSS signing, cert issued to the Foundation, HSM-held keys) + docs.signpath.io/trusted-build-systems/github (submit-signing-request action inputs SIGNPATH_API_TOKEN/organization-id/project-slug/signing-policy-slug; origin-verification checks: workflow-of-this-repo, artifact uploaded pre-submission, GitHub-hosted agents for OSS) (fetched 2026-10-20); Azure Trusted/Artifact Signing ≈ $120/tahun Basic (MEKL decision record, 20 Okt).*

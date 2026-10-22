@@ -4,7 +4,7 @@
 > dirujuk ke sini, bukan sebaliknya. Kata vague dilarang tanpa kuantifikasi;
 > validasi grep wajib 0 hit kata sifat vague di luar kutipan.
 >
-> Supersedes `docs/PRD-hosterm-v1.md` (kept as history, never edited). Regenerated
+> Supersedes `docs/archive/PRD-hosterm-v1.md` (kept as history, never edited). Regenerated
 > to reflect shipped reality v0.10.0+ (19 Okt 2026) and in-flight epics.
 
 | Field | Value |
@@ -13,7 +13,7 @@
 | Status | Living doc — current |
 | Product | hosterm — desktop SSH/SFTP client (Windows-first) |
 | Shipped baseline | v0.10.0 (tag bb93631) + post-tag commits 3a3b5a0 (W2-A), 33a1833 (U1) |
-| Supersedes | docs/PRD-hosterm-v1.md (t_c1bc9a7a) — archive only |
+| Supersedes | docs/archive/PRD-hosterm-v1.md (t_c1bc9a7a) — archive only |
 | Version constraint | No git commits/push by PM; this document only |
 
 ---
@@ -48,7 +48,7 @@ Founding technical principle (product-visible): hosterm spawns the OS's **real `
 | UC6 | Operator hand-edits the raw config inside the app for directives the form doesn't cover | Raw config editor | Shipped |
 | UC7 | New user runs `hosterm.exe` on a machine missing the optional OpenSSH client: the app detects missing `ssh`/`sftp` at launch and shows a one-screen OpenSSH install guide instead of opaque spawn errors | Startup check (W2-A) | Shipped (3a3b5a0) |
 | UC8 | Operator sees the app in the Abyss Emerald theme: single-line grouped sidebar, kind-colored tabs, terminal well + status bar, SFTP transfer strip | Full UI (redesign Arus) | U1 shipped (33a1833); U2–U9 in flight |
-| UC9 | Operator clicks "Check for updates"; the app verifies the downloaded installer against a baked minisign key before installing | Update flow (wave 2 M3) | Speced (FEATURE-SPEC-wave-2-draft §4/B) |
+| UC9 | Operator clicks "Check for updates"; the app verifies the downloaded installer against a baked minisign key before installing | Update flow (wave 2 M3) | Speced (docs/archive/FEATURE-SPEC-wave-2-draft.md §4/B) |
 
 ---
 
@@ -208,11 +208,11 @@ Living-doc rule: FEATURE-SPEC-*/EPIC-TSD-* implement this PRD; this section trac
 |---|---|---|---|
 | Security hardening wave 1 | CSP enforcement + dev-server CSP header (R1); CI action SHA pinning + token scope (R2/R4); dependency audit gates (R3) | **Shipped — v0.10.0** (bb93631; SEC-4 CSP 6f5ce3f + ae60f28; SEC-1/2 bb6e1fc; withGlobalTauri=false 5339962) | docs/PRD-security-hardening-wave-1.md · docs/EPIC-TSD-security-hardening-wave-1.md · docs/SPIKE-csp-findings.md |
 | Password-SFTP persistent sessions | One interactive `sftp` per host shared across tabs; sidecar-stored password auto-type; sidecar copy fix | **Shipped — v0.10.0** (8b36f2b, 6ce0381) | docs/STATE.md §layout; PRD v1 US-D2 |
-| W2-A startup ssh/sftp missing-check + OpenSSH guide | Launch-time binary detection, blocking guide + re-check, per-attempt refusal errors | **Shipped — post-tag, rides next release** (3a3b5a0) | docs/FEATURE-SPEC-startup-ssh-check.md · FEATURE-SPEC-wave-2-draft §3 |
+| W2-A startup ssh/sftp missing-check + OpenSSH guide | Launch-time binary detection, blocking guide + re-check, per-attempt refusal errors | **Shipped — post-tag, rides next release** (3a3b5a0) | docs/FEATURE-SPEC-startup-ssh-check.md · docs/archive/FEATURE-SPEC-wave-2-draft.md §3 |
 | Redesign Arus U1 — Abyss Emerald theme | 16+3 token swap, xterm/CodeMirror remap, glow on 3 active selectors, offline fonts, +4 smoke checks | **Shipped — post-tag** (33a1833) | EPIC-TSD-redesign-arus-v1.md §U1 · redesign §6.5 |
 | Redesign Arus U2–U9 | Sidebar (U2, dispatch in progress), tab bar (U3), terminal well/divider/status bar (U4), SFTP strip/selection (U5), skeletons (U6), editor dirty/Ctrl+S (U7), password dialog chips (U8), smoke canonization (U9) | **In flight** (U2 running on working tree; U1 done; units dispatched serially — hotspot `src/styles.css`/`src/main.ts`) | docs/EPIC-TSD-redesign-arus-v1.md §2 · docs/UX/redesign-hosterm-v1.md §2/§6.5 |
-| Wave 2 B — signing (M2) then updater (M3) | Authenticode via SignPath Foundation (free OSS program; cert issued to the Foundation) + minisign artifacts, fail-closed gates, `latest.json` feed; then user-initiated verified updater | **Speced — awaiting MEKL approval** (draft uncommitted, commit deferred §10) | docs/FEATURE-SPEC-wave-2-draft.md §4 · docs/SDD-hosterm-v1-extension-signing-updater.md |
-| Wave 2 C — config auto-reload on focus | mtime+size stat on window focus, no watcher daemon | **Speced** (same draft; HR-W2-2) | docs/FEATURE-SPEC-wave-2-draft.md §5 |
+| Wave 2 B — signing (M2) then updater (M3) | Authenticode via SignPath Foundation (free OSS program; cert issued to the Foundation) + minisign artifacts, fail-closed gates, `latest.json` feed; then user-initiated verified updater | **Speced — awaiting MEKL approval** (draft uncommitted, commit deferred §10) | docs/archive/FEATURE-SPEC-wave-2-draft.md §4 · docs/SDD-signing-updater.md |
+| Wave 2 C — config auto-reload on focus | mtime+size stat on window focus, no watcher daemon | **Speced** (same draft; HR-W2-2) | docs/archive/FEATURE-SPEC-wave-2-draft.md §5 |
 | Fleet Run v1 — multi-host command/script runner | native parallel `ssh`-argv runner over the existing `~/.ssh/config` host list; command or stdin-script to selected hosts; concurrency cap + per-host timeout; per-host status/exit/live output + run summary; confirm-gated blast radius | **Approved (MEKL 19 Okt — OQ closed, spec §5)** — backend Unit 1–2 paralel Arus; frontend Unit 3–5 antre setelah U9 | docs/FEATURE-SPEC-fleet-run-v1.md |
 | Parking lot | SBOM per release; 21-site `innerHTML` refactor (CSP is the compensating control until then); first-class Linux/macOS installers; terminal font size, go-to-line (v1.1 options) | **Backlog — no spec yet** | PRD v1 §5 · redesign §6 out-of-scope |
 
@@ -248,4 +248,4 @@ Milestone order (binding): next release carries W2-A + U1 + U2–U9 as they land
 
 ---
 
-*Sources: docs/STATE.md · docs/PRD-hosterm-v1.md (superseded) · docs/PRD-security-hardening-wave-1.md · docs/EPIC-TSD-security-hardening-wave-1.md · docs/FEATURE-SPEC-security-hardening-wave-1.md · docs/FEATURE-SPEC-startup-ssh-check.md · docs/FEATURE-SPEC-wave-2-draft.md · docs/SDD-hosterm-v1-extension-signing-updater.md · docs/EPIC-TSD-redesign-arus-v1.md · docs/UX/redesign-hosterm-v1.md §2/§6.5 · git log (33a1833, 3a3b5a0, bb93631, 8b36f2b, 6ce0381, 5339962, 6f5ce3f, ae60f28, bb6e1fc). Read 2026-10-19.*
+*Sources: docs/STATE.md · docs/archive/PRD-hosterm-v1.md (superseded) · docs/PRD-security-hardening-wave-1.md · docs/EPIC-TSD-security-hardening-wave-1.md · docs/FEATURE-SPEC-security-hardening-wave-1.md · docs/FEATURE-SPEC-startup-ssh-check.md · docs/archive/FEATURE-SPEC-wave-2-draft.md · docs/SDD-signing-updater.md · docs/EPIC-TSD-redesign-arus-v1.md · docs/UX/redesign-hosterm-v1.md §2/§6.5 · git log (33a1833, 3a3b5a0, bb93631, 8b36f2b, 6ce0381, 5339962, 6f5ce3f, ae60f28, bb6e1fc). Read 2026-10-19.*

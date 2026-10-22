@@ -1,68 +1,105 @@
-# Hosterm
+<a name="readme-top"></a>
 
-A lightweight desktop SSH client (Termius-style) whose **single source of truth is
-`~/.ssh/config`** — no vault, no proprietary store. Switch devices by copying one file.
+<div align="center">
 
-Built with Tauri v2 (Rust backend + web UI). Spawns the real OS `ssh` binary in an
-embedded terminal, so everything in your `~/.ssh/config` is honored exactly as the
-command line would honor it (ProxyJump, IdentityFile, forwarding, Match blocks, etc.).
+# hosterm
 
-![hosterm — host sidebar and embedded terminal](docs/screenshot-main.png)
+A lightweight desktop SSH client whose **single source of truth is `~/.ssh/config`** —
+no vault, no proprietary store.
 
-![hosterm — edit a host, written back to ~/.ssh/config](docs/screenshot-edit.png)
+[Features](#features) · [Getting Started](#getting-started) · [Usage](#usage) · [Docs](#docs)
+
+![Release](https://img.shields.io/github/v/release/MEKL20/hosterm)
+![License](https://img.shields.io/github/license/MEKL20/hosterm)
+![Platform](https://img.shields.io/badge/platform-Windows-blue)
+
+</div>
+
+## Table of Contents
+
+<details>
+<summary>Click to expand</summary>
+
+- [About The Project](#about-the-project)
+- [Built With](#built-with)
+- [Features](#features)
+- [Getting Started](#getting-started)
+  - [Install (Windows)](#install-windows)
+  - [Develop](#develop)
+  - [Build](#build)
+- [Usage](#usage)
+- [Roadmap](#roadmap)
+- [Docs](#docs)
+- [License](#license)
+
+</details>
+
+## About The Project
+
+hosterm is a Termius-style desktop SSH client built on a simple principle: your
+`~/.ssh/config` stays the one file that matters. hosterm reads it, lists your hosts,
+and writes edits straight back — it never introduces a database or a proprietary store.
+Switch devices by copying one file.
+
+It spawns the real OS `ssh` binary in an embedded terminal, so everything your
+`~/.ssh/config` already expresses is honored exactly as the command line would honor
+it: `ProxyJump`, `IdentityFile`, forwarding, `Match` blocks, and the rest.
+
+![hosterm — host sidebar and embedded terminal](docs/images/screenshot-main.png)
+
+![hosterm — edit a host, written back to ~/.ssh/config](docs/images/screenshot-edit.png)
 
 > Screenshots use sample hosts; the app reads your real `~/.ssh/config`.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+## Built With
+
+- [Tauri v2](https://v2.tauri.app/) — Rust backend + web UI
+- [Rust](https://www.rust-lang.org/)
+- [TypeScript](https://www.typescriptlang.org/)
+- [xterm.js](https://xtermjs.org/) — embedded terminal
+- [CodeMirror](https://codemirror.net/) — remote editor
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Features
 
 - Sidebar listing every `Host` entry from `~/.ssh/config`
-- Click a host to open an embedded terminal tab (xterm.js); multiple tabs at once
-- **SFTP file browser** per host (⇅ tab): browse remote directories, upload and
-  download files — powered by the real `sftp` binary, so it honors your ssh
-  config (ProxyJump, IdentityFile, …). Requires key/agent auth; password-auth
-  hosts still work in the terminal tab (persistent-session SFTP is planned).
-- **Remote text editor** (✎ tab): click any file in the SFTP browser to edit it
-  in place (CodeMirror, line numbers, Ctrl/Cmd+S to save back) — no more
-  nano/vim over ssh. Text files up to 2 MB; binary files are refused.
-- Add / edit / delete hosts via a form — writes straight back to `~/.ssh/config`,
-  **preserving comments, ordering, and unknown directives** (round-trip safe)
-- Choose auth per host: **key** (pick an `IdentityFile` from a dropdown) or
-  **password** (ssh prompts you on connect — with your opt-in, the password is stored once in a 0600 sidecar file next to your config and auto-typed on connect; nothing leaves your machine)
-- **Create an identity key by pasting the private key text** — hosterm writes it
-  to `~/.ssh/<name>` at `0600`, then it appears in the key dropdown (Termius-style)
-- "Raw config" editor to hand-edit the file directly inside the app
-- Config written atomically (temp + rename) and never overwritten with empty if
-  an existing file can't be read; files get `0600` permissions on Unix
-- No telemetry, no network calls except the SSH connections you start
+- Embedded terminal tabs (xterm.js) — multiple connections, split view, per-tab status
+- **SFTP file browser** per host: browse remote directories, upload and download files —
+  powered by the real `sftp` binary, so it honors your ssh config too
+- **Remote text editor**: click any file in the SFTP browser to edit it in place
+  (CodeMirror, line numbers, Ctrl/Cmd+S to save back) — no more nano/vim over ssh
+- Add / edit / delete hosts via a form — **round-trip safe**: comments, ordering, and
+  unknown directives in your config are preserved
+- Auth per host: **key** (pick an `IdentityFile`) or **password** (ssh prompts you on
+  connect; with your opt-in the password is stored once in a `0600` sidecar file and
+  never leaves your machine)
+- **Paste a private key** to create an identity — hosterm writes it to `~/.ssh/<name>`
+  at `0600` and it appears in the key dropdown
+- "Raw config" editor to hand-edit `~/.ssh/config` directly inside the app
+- Config written **atomically** (temp + rename), never overwritten with empty if the
+  existing file can't be read; `0600` permissions on Unix
+- **No telemetry** — no network calls except the SSH connections you start
 
-## Authentication
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
-OpenSSH's config format has no `Password` directive — passwords live only in a
-client's vault, which hosterm deliberately avoids (the whole point is a portable
-plain-text config). So:
+## Getting Started
 
-- **Key auth** writes `IdentityFile`. Pick an existing key from the dropdown, or
-  paste a new private key and hosterm saves it as a `0600` file beside the config.
-- **Password auth** writes `PreferredAuthentications password` +
-  `PubkeyAuthentication no`, and ssh prompts for the password in the embedded
-  terminal at connect time. Nothing secret is stored, so copying your
-  `~/.ssh/config` to another device stays safe and complete.
+### Install (Windows)
 
-## How it stores config
+Download the `hosterm` installer (`.exe` / `.msi`) from the
+[Releases](https://github.com/MEKL20/hosterm/releases) page and run it. Requires the
+**Microsoft Edge WebView2 Runtime**, preinstalled on current Windows 10/11; on older
+installs, get it free from Microsoft.
 
-There is no database. The app reads and writes `~/.ssh/config` directly using a
-parser that keeps every line it does not understand verbatim. Pattern blocks
-(`Host *`, wildcards) are shown read-only in the sidebar and never rewritten by the form.
+> Note: Windows releases are currently **unsigned**, so SmartScreen may show an
+> "unknown publisher" prompt.
 
-Override the path for testing with the `HOSTERM_CONFIG` env var.
+### Develop
 
-## Install (Windows)
-
-Download `hosterm.exe` from the [Releases](https://github.com/MEKL20/hosterm/releases)
-page and run it. Requires the **Microsoft Edge WebView2 Runtime**, which is preinstalled
-on current Windows 10/11; on older installs, install it from Microsoft (free).
-
-## Develop (Linux/macOS/Windows)
+Linux/macOS/Windows:
 
 ```bash
 npm install
@@ -72,21 +109,57 @@ npm run tauri dev
 Linux build deps (Debian/Ubuntu): `libwebkit2gtk-4.1-dev build-essential pkg-config
 librsvg2-dev libssl-dev libxdo-dev libayatana-appindicator3-dev`.
 
-## Build
+### Build
 
 ```bash
-npm install
 npm run tauri build
 ```
 
-The Windows installers (NSIS `.exe` / WiX `.msi`) are built on a `windows-latest`
-runner by [`.github/workflows/build-windows.yml`](.github/workflows/build-windows.yml)
-— push a `v*` tag (or trigger it manually) and the assets are attached to the
-GitHub release. Cross-building the raw `.exe` from Linux is not part of the
-release flow (the recipe used to live in `BUILD-WINDOWS-FROM-LINUX.md`, now
-removed; the knowledge is preserved in the maintainer's `tauri-cross-build-windows`
-skill).
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+## Usage
+
+1. Open hosterm — it lists every `Host` entry from your `~/.ssh/config` in the sidebar.
+2. Click a host to open a terminal tab; the real `ssh` binary connects using your
+   config (keys, ProxyJump, forwarding — all as configured).
+3. Open the ⇅ tab on a host to browse its files over SFTP; click a text file to edit
+   it in place and save back with Ctrl/Cmd+S.
+4. Add or edit a host from the sidebar — changes are written back to `~/.ssh/config`
+   atomically, preserving everything hosterm doesn't touch.
+
+Override the config path for testing with the `HOSTERM_CONFIG` env var.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+## Roadmap
+
+- [x] UX redesign "Arus" + Abyss Emerald theme (shipped in v0.11.0)
+- [x] Fleet Run v1 — backend command engine
+- [ ] Fleet Run v1 — panel UI, live output, summary
+- [ ] Windows code signing (SignPath — postponed; releases are unsigned for now)
+- [ ] Verified auto-updater (after signing)
+- [ ] Config auto-reload on window focus
+- [ ] SFTP for password-auth hosts (persistent session)
+
+See [docs/STATE.md](docs/STATE.md) for detailed status, risks, and waivers.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+## Docs
+
+Full documentation lives in [`docs/`](docs/README.md):
+
+- [PRD.md](docs/PRD.md) — product requirements
+- [SDD.md](docs/SDD.md) — architecture & design
+- [TSD.md](docs/TSD.md) — technical/delivery spec
+- [STATE.md](docs/STATE.md) — living status, risks & waivers
+
+Release history: [CHANGELOG.md](CHANGELOG.md).
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Distributed under the MIT License. See [`LICENSE`](LICENSE) for more information.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>

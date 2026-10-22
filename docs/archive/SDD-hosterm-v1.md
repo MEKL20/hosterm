@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Author | crew-coding-architect |
-| Input | docs/PRD-hosterm-v1.md (requirements authoritative; not reopened here) |
+| Input | docs/archive/PRD-hosterm-v1.md (requirements authoritative; not reopened here) |
 | Status | Draft — for MEKL review; downstream input to lead's TSD |
 | Downstream | TSD (crew-coding-lead) derives technical task specs from this |
 | Scope | Whole product, v1. Wave-1 security work is summarized where it shapes architecture; its own spec lives in `docs/EPIC-TSD-security-hardening-wave-1.md`. |
@@ -245,4 +245,4 @@ Product-level verification maps onto the existing verify loop (AGENTS.md / STATE
 
 ---
 
-*Sources: docs/PRD-hosterm-v1.md, docs/STATE.md, AGENTS.md, docs/SPIKE-csp-findings.md, docs/EPIC-TSD-security-hardening-wave-1.md, src-tauri/src/lib.rs, src/main.ts, src-tauri/tauri.conf.json, src-tauri/Cargo.toml, package.json (all read 2026-10-19).*
+*Sources: docs/archive/PRD-hosterm-v1.md, docs/STATE.md, AGENTS.md, docs/SPIKE-csp-findings.md, docs/EPIC-TSD-security-hardening-wave-1.md, src-tauri/src/lib.rs, src/main.ts, src-tauri/tauri.conf.json, src-tauri/Cargo.toml, package.json (all read 2026-10-19).*
