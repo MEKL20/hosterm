@@ -55,7 +55,13 @@ Commit → bump version (package.json, tauri.conf.json, Cargo.toml + `cargo upda
 Release-scope note: tag v0.9.0 = 7a8bd8c (glob fix, assets attached); SEC-6 withGlobalTauri=false landed post-tag (5339962) → rides the NEXT release.
 Dari M2: checklist rilis += 1 approval manual di dashboard SignPath saat submission muncul (tanpa approval = job tetap merah, SDD §E.8.4).
 
-## Wave-2 B signing vendor (CLOSED — MEKL, 20 Okt 2026)
+## Wave-2 B signing vendor (DITUNDA — aplikasi Foundation DITOLAK, MEKL, 22 Okt 2026)
+- **SignPath Foundation MENOLAK aplikasi hosterm (22 Okt 2026).** Alasan (email Phillip): program Foundation untuk proyek yang sudah punya trust/visibilitas publik (GitHub stars/forks/contributors, artikel/diskusi eksternal, institutional backing, aktivitas berkelanjutan). Hosterm belum menunjukkan sinyal-sinyal itu. BUKAN soal kualitas — murni visibilitas. Boleh reapply setelah proyek lebih dikenal.
+- **Keputusan MEKL: TUNDA signing.** Rilis sementara = UNSIGNED (SmartScreen "unknown publisher"). README section "Code signing policy" DIHAPUS (jangan ada klaim signed yang menyesatkan). Workflow `signpath/github-action-submit-signing-request` tetap ter-desain tapi INERT (fail-open: tanpa secret `SIGNPATH_*`, build jalan + rilis unsigned — tidak ada yang rusak).
+- **Prasyarat reapply:** bangun sinyal publik (stars/forks/contributors, artikel/diskusi, aktivitas). Alternatif lebih cepat = SignPath BERBAYAR (bukan Foundation; https://docs.signpath.io/change-subscription) — infra teknis sama, cuma ganti cert source; biaya langganan, belum sepadan untuk produk tanpa audiens.
+- Catatan di bawah (vendor/mekanisme) tetap VALID sebagai desain beku untuk saat signing diaktifkan nanti (Foundation setelah reapply, atau paid):
+
+## Wave-2 B signing vendor (desain beku — CLOSED MEKL, 20 Okt 2026)
 - M2 Authenticode vendor = **SignPath Foundation** (program OSS gratis: OV cert terbit ATAS NAMA SignPath Foundation, private key di HSM SignPath, origin-verified GitHub) — menggantikan Azure Trusted Signing (≈$120/thn), yang turun jadi fallback berbayar (SDD extension ADR-9 Rev. 2). Trade-off di-accept: publisher name binary = "SignPath Foundation"; 1 approval manual dashboard SignPath per rilis; SmartScreen akru OV-class (paritas Azure Basic).
 - CI prasyarat (masuk TSD M2): GH secret `SIGNPATH_API_TOKEN` (submitter scope) + `SIGNPATH_ORGANIZATION_ID` (variable) + org/project/signing-policy slug; action `signpath/github-action-submit-signing-request` (SignPath GitHub App; semua job di GitHub-hosted agents).
 - TIDAK berubah: minisign artifacts, `latest.json` feed, fail-closed verify gates, M2 sebelum M3 (HR-W2-1), semua INV integritas update. Yang berubah mekanisme in-job: service round-trip upload→submit→download + REGENERASI `.sig` atas binary SIGNED (Authenticode mengubah byte PE — `.sig` provisional bundler basi; gate `tauri signer verify` pembuktinya) — SDD extension §E.2.1 + ADR-10 Rev. 2 note.
