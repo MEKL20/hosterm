@@ -187,6 +187,8 @@ for (let attempt = 1; ; attempt++) {
     console.error(`chromium launch attempt ${attempt} failed (${String(e).split("\n")[0]}) — retrying`);
   }
 }
+const requestLog = [];
+page.on("request", (request) => requestLog.push(request.url()));
 const errors = [];
 page.on("pageerror", (e) => errors.push(String(e)));
 page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
@@ -875,8 +877,8 @@ const mainSrc = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8")
 const abyssLiterals = ["#08080a", "#050507", "#00d992", "#818cf8", "#0e2a20", "var(--glow)"];
 const abyssHits = abyssLiterals.filter((lit) => (cssSrc + "\n" + mainSrc + "\n" + htmlSrc).includes(lit));
 check("U-D1 INV-21: zero Abyss literal in src/ (grep gate)", abyssHits.length === 0, abyssHits.join(", "));
-// (d) elevation: --shadow-drawer (box-shadow via that var) ONLY on drawer + settings modal;
-//     glow removed — no box-shadow rule carries the old Abyss glow rgba/var(--glow).
+// (d) elevation: --shadow-drawer (box-shadow via that var) ONLY on floating
+//     drawer/modal/popover surfaces; glow remains forbidden everywhere.
 const shadowSelectors = await page.evaluate(() => {
   const out = { glow: [], elevation: [] };
   for (const sheet of document.styleSheets) {
@@ -893,9 +895,9 @@ const shadowSelectors = await page.evaluate(() => {
   return out;
 });
 check("U-D1: Abyss glow box-shadow fully removed", shadowSelectors.glow.length === 0, shadowSelectors.glow.join(", "));
-// --shadow-drawer only lands on modal/drawer surfaces; no sidebar/tab/row carries it.
-const elevationOk = shadowSelectors.elevation.every((s) => /modal-box|\.settings\b|\.drawer\b/.test(s));
-check("U-D1: elevation (--shadow-drawer) only on modal/drawer box", elevationOk && shadowSelectors.elevation.length > 0,
+// --shadow-drawer only lands on floating surfaces; no sidebar/tab/row carries it.
+const elevationOk = shadowSelectors.elevation.every((s) => /modal-box|\.settings\b|\.drawer\b|\.signin-popover\b/.test(s));
+check("U-D1/U-D6: elevation only on drawer/modal/popover boxes", elevationOk && shadowSelectors.elevation.length > 0,
   shadowSelectors.elevation.join(", "));
 // AC4 letter: inactive tab + plain button carry no box-shadow (no glow at idle/hover)
 const noShadow = await page.evaluate(() => {
@@ -1964,6 +1966,111 @@ check("U-D5: close returns Terminal mode and restores trigger focus",
       document.activeElement?.id === "mode-snippets";
   }));
 // End U-D5 checks.
+
+// U-D6 Google account visual mock (FR-GL1..5, ADR-22).
+const googleSignedOut = await page.locator("#user-chip").evaluate((chip) => ({
+  state: chip.dataset.state,
+  hasPopup: chip.getAttribute("aria-haspopup"),
+  expanded: chip.getAttribute("aria-expanded"),
+  name: chip.querySelector(".user-name")?.textContent,
+  avatar: chip.querySelectorAll(".avatar").length,
+  gmark: chip.querySelectorAll(".gmark").length,
+  caret: chip.querySelectorAll(".chip-caret").length,
+}));
+check("U-D6 FR-GL1: signed-out user-chip exposes the Google dialog",
+  googleSignedOut.state === "signed-out" && googleSignedOut.hasPopup === "dialog" &&
+  googleSignedOut.expanded === "false" && googleSignedOut.name === "Google account" &&
+  googleSignedOut.avatar === 0 && googleSignedOut.gmark === 1 && googleSignedOut.caret === 1,
+  JSON.stringify(googleSignedOut));
+
+await page.locator("#user-chip").click();
+const googleSignin = await page.evaluate(() => {
+  const popover = document.getElementById("signin-popover");
+  const button = document.getElementById("signin-btn");
+  const style = getComputedStyle(button);
+  return {
+    hidden: popover.hidden,
+    role: popover.getAttribute("role"),
+    expanded: document.getElementById("user-chip").getAttribute("aria-expanded"),
+    title: document.getElementById("google-pop-title").textContent,
+    button: button.textContent.trim().replace(/\s+/g, " "),
+    surface: style.backgroundColor,
+    text: style.color,
+    radius: style.borderRadius,
+    focused: document.activeElement?.id,
+  };
+});
+check("U-D6 FR-GL1: popover + Google-brand sign-in button match the approved visual",
+  !googleSignin.hidden && googleSignin.role === "dialog" && googleSignin.expanded === "true" &&
+  googleSignin.title === "Use hosterm with Google" && googleSignin.button === "Sign in with Google" &&
+  googleSignin.surface === "rgb(255, 255, 255)" && googleSignin.text === "rgb(31, 31, 31)" &&
+  googleSignin.radius === "4px" && googleSignin.focused === "signin-btn",
+  JSON.stringify(googleSignin));
+
+const googleCallsBefore = calls.length;
+const googleRequestsBefore = requestLog.length;
+await page.locator("#signin-btn").click();
+await page.waitForTimeout(50);
+const googleSignedIn = await page.locator("#user-chip").evaluate((chip) => {
+  const avatar = chip.querySelector(".avatar");
+  const name = chip.querySelector(".user-name");
+  return {
+    state: chip.dataset.state,
+    label: chip.getAttribute("aria-label"),
+    expanded: chip.getAttribute("aria-expanded"),
+    avatar: avatar?.textContent,
+    avatarKids: avatar?.childElementCount,
+    name: name?.textContent,
+    nameKids: name?.childElementCount,
+    gmark: chip.querySelectorAll(".gmark").length,
+    caret: chip.querySelectorAll(".chip-caret").length,
+    popoverHidden: document.getElementById("signin-popover").hidden,
+  };
+});
+check("U-D6 FR-GL2: mock signed-in chip renders escaped initials + name + G mark + caret",
+  googleSignedIn.state === "mock-signed-in" && googleSignedIn.avatar === "MR" && googleSignedIn.avatarKids === 0 &&
+  googleSignedIn.name === "Morgan Reyes" && googleSignedIn.nameKids === 0 &&
+  googleSignedIn.gmark === 1 && googleSignedIn.caret === 1 && googleSignedIn.expanded === "false" &&
+  googleSignedIn.popoverHidden && googleSignedIn.label.includes("UI preview") && googleSignedIn.label.includes("no session connected"),
+  JSON.stringify(googleSignedIn));
+check("U-D6 FR-GL3/ADR-22: sign-in toggle performs zero invoke and zero network requests",
+  calls.length === googleCallsBefore && requestLog.length === googleRequestsBefore,
+  JSON.stringify({ calls: calls.slice(googleCallsBefore), requests: requestLog.slice(googleRequestsBefore) }));
+
+await page.locator("#user-chip").click();
+const googleMockPopover = await page.evaluate(() => ({
+  title: document.getElementById("google-pop-title").textContent,
+  sub: document.getElementById("google-pop-sub").textContent,
+  signinHidden: document.getElementById("signin-btn").hidden,
+  signoutHidden: document.getElementById("signout-btn").hidden,
+  signout: document.getElementById("signout-btn").textContent,
+}));
+check("U-D6 FR-GL3/4: account popover labels the state UI-only and offers Sign out",
+  googleMockPopover.title === "Google account preview" &&
+  googleMockPopover.sub === "UI-only mock. No Google session is connected." &&
+  googleMockPopover.signinHidden && !googleMockPopover.signoutHidden && googleMockPopover.signout === "Sign out",
+  JSON.stringify(googleMockPopover));
+
+await page.locator("#signout-btn").click();
+const googleReturned = await page.locator("#user-chip").evaluate((chip) => ({
+  state: chip.dataset.state,
+  expanded: chip.getAttribute("aria-expanded"),
+  name: chip.querySelector(".user-name")?.textContent,
+  avatar: chip.querySelectorAll(".avatar").length,
+  popoverHidden: document.getElementById("signin-popover").hidden,
+}));
+check("U-D6 FR-GL4: Sign out returns to the signed-out chip",
+  googleReturned.state === "signed-out" && googleReturned.expanded === "false" &&
+  googleReturned.name === "Google account" && googleReturned.avatar === 0 && googleReturned.popoverHidden,
+  JSON.stringify(googleReturned));
+
+await page.locator("#user-chip").click();
+await page.keyboard.press("Escape");
+check("U-D6 a11y: Escape closes the account dialog and restores chip focus",
+  await page.evaluate(() => document.getElementById("signin-popover").hidden &&
+    document.getElementById("user-chip").getAttribute("aria-expanded") === "false" &&
+    document.activeElement?.id === "user-chip"));
+// End U-D6 checks.
 
 // (b) sidebar narrative copy byte-identical (empty / error / no-match) + empty CTA formalized
 const sbState = () => page.evaluate(() => {

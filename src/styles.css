@@ -26,7 +26,7 @@
   --danger: #e07856;    /* terracotta — error / dead / reject */
   /* radius */
   --r-lg: 10px; --r-md: 8px; --r-sm: 6px;
-  /* elevation — drawer + settings modal ONLY */
+  /* elevation — drawer + settings modal + account popover ONLY */
   --shadow-drawer: 0 10px 30px rgba(0, 0, 0, .42);
   /* geometry (carried, pre-existing) */
   --bar-h: 24px;
@@ -38,7 +38,7 @@
 /* Active-state accent emphasis (§6.5, Dusk FR-DT2): fill/underline on the 3
    active selectors only (.tab.active underline, .term-side.focused border,
    button.primary fill) — NOT hover/idle. The old Abyss glow box-shadow is gone;
-   elevation (--shadow-drawer) lives on drawer + settings modal only. */
+   elevation (--shadow-drawer) lives on drawer + settings modal + account popover only. */
 
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
@@ -190,13 +190,68 @@ body.sb-collapsed #sidebar > :not(#btn-expand) { display: none; }
 }
 .list-state.err { color: var(--danger); }
 .list-state button { font-size: 12px; padding: 2px 10px; }
+.sidebar-footer {
+  position: relative;
+  border-top: 1px solid var(--border);
+  padding: 10px 12px 12px;
+}
 .sidebar-foot {
   display: flex; gap: 8px; align-items: center;
-  padding: 12px;
-  border-top: 1px solid var(--border);
+  margin-bottom: 8px;
 }
 .sidebar-foot #btn-raw { flex: 1; }
 .sidebar-foot #btn-reload, .sidebar-foot #open-settings { width: 26px; height: 26px; }
+.user-chip {
+  width: 100%; min-width: 0;
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px;
+  background: transparent; border-color: transparent;
+  border-radius: var(--r-md);
+  text-align: left;
+}
+.user-chip:hover { background: var(--surface); border-color: transparent; }
+.avatar {
+  width: 24px; height: 24px; flex: none;
+  display: grid; place-items: center;
+  background: var(--raised); border: 1px solid var(--hairline);
+  border-radius: 50%;
+  color: var(--accent); font-size: 10px; font-weight: 650;
+}
+.user-name {
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text); font-size: 12.5px;
+}
+.user-chip .gmark { margin-left: auto; flex: none; }
+.user-chip[data-state="signed-out"] .gmark { margin-left: 0; }
+.chip-caret { flex: none; color: var(--faint); }
+.signin-popover {
+  position: absolute; left: 12px; right: 12px; bottom: calc(100% + 8px);
+  z-index: 15;
+  padding: 14px;
+  background: var(--raised); border: 1px solid var(--border);
+  border-radius: var(--r-lg); box-shadow: var(--shadow-drawer);
+}
+.signin-popover::after {
+  content: "";
+  position: absolute; left: 34px; bottom: -5px;
+  width: 8px; height: 8px;
+  background: var(--raised); border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);
+  transform: rotate(45deg);
+}
+.pop-title { margin-bottom: 3px; font-size: 12.5px; font-weight: 600; }
+.pop-sub { margin-bottom: 11px; color: var(--dim); font-size: 11.5px; }
+.signin-btn {
+  width: 100%; height: 34px;
+  display: flex; align-items: center; justify-content: center; gap: 9px;
+  background: #ffffff; color: #1f1f1f; border: 1px solid #747775;
+  border-radius: 4px;
+  font-size: 12.5px; font-weight: 550;
+}
+.signin-btn:hover { background: #f2f2f2; color: #1f1f1f; border-color: #747775; }
+.signin-btn .gmark { flex: none; }
+.signout-btn { width: 100%; height: 34px; padding: 0 12px; }
+.signin-popover[hidden], .signin-btn[hidden], .signout-btn[hidden] { display: none; }
 
 /* tabs */
 /* U-D2 Dusk §13.3: tab bar 42px (Arus 36px) */
