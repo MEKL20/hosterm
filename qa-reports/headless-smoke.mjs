@@ -1697,43 +1697,62 @@ check("U-D4 FR-SET7/8/10: teal updates inline accent + pressed chip + preview on
   tealState.preview === "#5fbfae" && tealState.previewButton === "rgb(95, 191, 174)" &&
   JSON.stringify(tealState.stable) === JSON.stringify(stableBefore), JSON.stringify(tealState));
 
-const chipContrast = await page.evaluate(() => {
-  const luminance = (hex) => {
-    const values = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
-      .map((v) => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
-    return 0.2126 * values[0] + 0.7152 * values[1] + 0.0722 * values[2];
-  };
-  const ratio = (a, b) => {
-    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
-    return (hi + 0.05) / (lo + 0.05);
-  };
-  return [...document.querySelectorAll(".accent-chip")].map((chip) => ({
-    accent: chip.dataset.accent,
-    ratio: ratio(chip.dataset.accent, "#241404"),
-  }));
-});
-check("U-D4 INV-23: all five quick chips contrast >=4.5 with #241404",
-  chipContrast.length === 5 && chipContrast.every((x) => x.ratio >= 4.5), JSON.stringify(chipContrast));
-
-await page.locator("#accent-input").evaluate((input) => {
-  input.value = "#101010";
-  input.dispatchEvent(new Event("input", { bubbles: true }));
-});
-const darkFree = await page.evaluate(() => {
-  const luminance = (hex) => {
-    const values = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
-      .map((v) => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
-    return 0.2126 * values[0] + 0.7152 * values[1] + 0.0722 * values[2];
-  };
-  const root = document.documentElement;
-  const accent = root.style.getPropertyValue("--accent").trim();
-  const ink = root.style.getPropertyValue("--accent-ink").trim();
-  const [hi, lo] = [luminance(accent), luminance(ink)].sort((x, y) => y - x);
-  return { accent, ink, ratio: (hi + 0.05) / (lo + 0.05), pressed: document.querySelectorAll('.accent-chip[aria-pressed="true"]').length };
-});
-check("U-D4 INV-23: dark free color auto-switches to light ink at >=4.5",
-  darkFree.accent === "#101010" && darkFree.ink === "#f2e9dc" && darkFree.ratio >= 4.5 && darkFree.pressed === 0,
-  JSON.stringify(darkFree));
+const inv23Luminance = (hex) => {
+  const linear = [1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16) / 255)
+    .map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+};
+const inv23Contrast = (a, b) => {
+  const [lighter, darker] = [inv23Luminance(a), inv23Luminance(b)].sort((x, y) => y - x);
+  return (lighter + 0.05) / (darker + 0.05);
+};
+const inputAccent = async (accent) => {
+  await page.locator("#accent-input").evaluate((input, value) => {
+    input.value = value;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  }, accent);
+  return page.evaluate(() => {
+    const root = document.documentElement;
+    const preview = document.getElementById("pv-mock");
+    return {
+      accent: root.style.getPropertyValue("--accent").trim(),
+      ink: root.style.getPropertyValue("--accent-ink").trim(),
+      input: document.getElementById("accent-input").value,
+      previewInk: preview.style.getPropertyValue("--pi").trim(),
+      pressed: document.querySelectorAll('.accent-chip[aria-pressed="true"]').length,
+    };
+  });
+};
+const inv23Vectors = [
+  { accent: "#e2a35c", ink: "#241404", ratio: 8.18060039728731 },
+  { accent: "#5fbfae", ink: "#241404", ratio: 8.115110618605044 },
+  { accent: "#e0869b", ink: "#241404", ratio: 6.842802495508517 },
+  { accent: "#aec267", ink: "#241404", ratio: 9.102683799795606 },
+  { accent: "#b99be3", ink: "#241404", ratio: 7.529220380096464 },
+  { accent: "#000000", ink: "#ffffff", ratio: 21 },
+  { accent: "#101010", ink: "#ffffff", ratio: 19.028110547666497 },
+  { accent: "#6f6f6f", ink: "#ffffff", ratio: 5.024865064757633 },
+  { accent: "#757575", ink: "#ffffff", ratio: 4.607518093747377 },
+  { accent: "#766cb5", ink: "#ffffff", ratio: 4.58257700240974 },
+  { accent: "#cf0dcc", ink: "#000000", ratio: 4.5825758149421025 },
+  { accent: "#767676", ink: "#000000", ratio: 4.6232848849972035 },
+  { accent: "#777777", ink: "#000000", ratio: 4.68949989000882 },
+  { accent: "#ffffff", ink: "#000000", ratio: 21 },
+];
+for (const vector of inv23Vectors) {
+  const actual = await inputAccent(vector.accent);
+  const ratio = inv23Contrast(actual.accent, actual.ink);
+  check(`U-D4 INV-23 vector ${vector.accent} -> ${vector.ink}`,
+    actual.accent === vector.accent && actual.input === vector.accent &&
+    actual.ink === vector.ink && actual.previewInk === vector.ink &&
+    Math.abs(ratio - vector.ratio) < 1e-12 && ratio >= 4.5,
+    JSON.stringify({ ...actual, ratio }));
+}
+const normalizedUpper = await inputAccent("#E0869B");
+check("U-D4 INV-23: valid uppercase input normalizes before value-based mapping",
+  normalizedUpper.accent === "#e0869b" && normalizedUpper.input === "#e0869b" &&
+  normalizedUpper.ink === "#241404" && normalizedUpper.previewInk === "#241404",
+  JSON.stringify(normalizedUpper));
 
 await page.locator("#accent-reset").click();
 const resetState = await page.evaluate(() => ({
@@ -1743,7 +1762,11 @@ const resetState = await page.evaluate(() => ({
 }));
 check("U-D4 FR-SET11: reset restores Dusk + #e2a35c", resetState.theme === "dusk" && resetState.accent === "#e2a35c" && resetState.dusk === "true", JSON.stringify(resetState));
 
-await page.locator('.accent-chip[data-accent="#5fbfae"]').click();
+const tealInputState = await inputAccent("#5fbfae");
+check("U-D4 INV-23: same curated value maps identically via chip and input",
+  tealState.accent === tealInputState.accent && tealState.ink === tealInputState.ink &&
+  tealInputState.ink === "#241404" && tealInputState.pressed === 1,
+  JSON.stringify({ chip: tealState, input: tealInputState }));
 const writesBeforeDone = calls.filter((c) => c.cmd === "write_settings").length;
 await page.locator("#settings-done").click();
 await page.waitForTimeout(200);
@@ -1761,12 +1784,42 @@ await page.waitForTimeout(400);
 const bootApplied = await page.evaluate(() => ({
   theme: document.documentElement.dataset.theme,
   accent: document.documentElement.style.getPropertyValue("--accent").trim(),
+  ink: document.documentElement.style.getPropertyValue("--accent-ink").trim(),
+  previewInk: document.getElementById("pv-mock").style.getPropertyValue("--pi").trim(),
   teal: document.querySelector('.accent-chip[data-accent="#5fbfae"]')?.getAttribute("aria-pressed"),
 }));
-check("U-D4 FR-SET13 boot: persisted theme/accent read and applied",
+check("U-D4 INV-23: curated input -> persist -> reload stays value-based",
   calls.filter((c) => c.cmd === "read_settings").length === readsBeforeReload + 1 &&
-  bootApplied.theme === "dusk" && bootApplied.accent === "#5fbfae" && bootApplied.teal === "true",
+  bootApplied.theme === "dusk" && bootApplied.accent === tealInputState.accent &&
+  bootApplied.ink === tealInputState.ink && bootApplied.previewInk === tealInputState.ink && bootApplied.teal === "true",
   JSON.stringify(bootApplied));
+
+await page.locator("#open-settings").click();
+await page.waitForTimeout(100);
+const nonCuratedInputState = await inputAccent("#777777");
+const writesBeforeNonCurated = calls.filter((c) => c.cmd === "write_settings").length;
+await page.locator("#settings-done").click();
+await page.waitForTimeout(200);
+const nonCuratedWrite = calls.filter((c) => c.cmd === "write_settings").at(-1);
+check("U-D4 INV-23: non-curated accent persists without clamp/remap/reject",
+  calls.filter((c) => c.cmd === "write_settings").length === writesBeforeNonCurated + 1 &&
+  nonCuratedInputState.accent === "#777777" && nonCuratedInputState.ink === "#000000" &&
+  nonCuratedWrite?.args?.settings?.accent === "#777777",
+  JSON.stringify({ input: nonCuratedInputState, write: nonCuratedWrite?.args }));
+const readsBeforeNonCuratedReload = calls.filter((c) => c.cmd === "read_settings").length;
+await page.reload();
+await page.waitForTimeout(400);
+const nonCuratedBoot = await page.evaluate(() => ({
+  accent: document.documentElement.style.getPropertyValue("--accent").trim(),
+  ink: document.documentElement.style.getPropertyValue("--accent-ink").trim(),
+  input: document.getElementById("accent-input").value,
+  pressed: document.querySelectorAll('.accent-chip[aria-pressed="true"]').length,
+}));
+check("U-D4 INV-23: non-curated input -> persist -> reload stays value-based",
+  calls.filter((c) => c.cmd === "read_settings").length === readsBeforeNonCuratedReload + 1 &&
+  nonCuratedBoot.accent === nonCuratedInputState.accent && nonCuratedBoot.input === nonCuratedInputState.accent &&
+  nonCuratedBoot.ink === nonCuratedInputState.ink && nonCuratedBoot.pressed === 0,
+  JSON.stringify(nonCuratedBoot));
 
 await page.locator("#open-settings").click();
 await page.waitForTimeout(100);

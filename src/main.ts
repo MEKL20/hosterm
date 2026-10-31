@@ -106,8 +106,9 @@ const DEFAULT_SETTINGS: AppSettings = {
   allowlist: [],
 };
 const QUICK_ACCENTS = new Set(["#e2a35c", "#5fbfae", "#e0869b", "#aec267", "#b99be3"]);
-const DARK_ACCENT_INK = "#241404";
-const LIGHT_ACCENT_INK = "#f2e9dc";
+const CURATED_ACCENT_INK = "#241404";
+const DARK_ACCENT_INK = "#000000";
+const LIGHT_ACCENT_INK = "#ffffff";
 let appSettings: AppSettings = { ...DEFAULT_SETTINGS, allowlist: [] };
 let settingsDirty = false;
 let settingsClosing = false;
@@ -268,20 +269,18 @@ function validAccent(value: string): boolean {
 function relativeLuminance(hex: string): number {
   const channel = (offset: number) => {
     const value = parseInt(hex.slice(offset, offset + 2), 16) / 255;
-    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
   };
   return 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5);
 }
 
-function contrastRatio(a: string, b: string): number {
-  const [lighter, darker] = [relativeLuminance(a), relativeLuminance(b)].sort((x, y) => y - x);
-  return (lighter + 0.05) / (darker + 0.05);
-}
-
 function guardedAccentInk(accent: string): string {
-  return contrastRatio(accent, DARK_ACCENT_INK) >= contrastRatio(accent, LIGHT_ACCENT_INK)
-    ? DARK_ACCENT_INK
-    : LIGHT_ACCENT_INK;
+  const normalized = accent.toLowerCase();
+  if (QUICK_ACCENTS.has(normalized)) return CURATED_ACCENT_INK;
+  const luminance = relativeLuminance(normalized);
+  const darkContrast = (luminance + 0.05) / 0.05;
+  const lightContrast = 1.05 / (luminance + 0.05);
+  return darkContrast >= lightContrast ? DARK_ACCENT_INK : LIGHT_ACCENT_INK;
 }
 
 function applyTheme(preset: ThemePreset, markDirty: boolean) {
@@ -293,10 +292,10 @@ function applyTheme(preset: ThemePreset, markDirty: boolean) {
   if (markDirty) settingsDirty = true;
 }
 
-function applyAccent(hex: string, source: "chip" | "free", markDirty: boolean) {
+function applyAccent(hex: string, markDirty: boolean) {
   if (!validAccent(hex)) return;
   const accent = hex.toLowerCase();
-  const ink = source === "chip" ? DARK_ACCENT_INK : guardedAccentInk(accent);
+  const ink = guardedAccentInk(accent);
   const root = document.documentElement;
   root.style.setProperty("--accent", accent);
   root.style.setProperty("--accent-ink", ink);
@@ -346,7 +345,7 @@ async function readAndApplySettings() {
     allowlist: Array.isArray(loaded.allowlist) ? loaded.allowlist : [],
   };
   applyTheme(theme, false);
-  applyAccent(accent, QUICK_ACCENTS.has(accent) ? "chip" : "free", false);
+  applyAccent(accent, false);
   settingsDirty = false;
 }
 
@@ -410,14 +409,14 @@ function initSettings() {
     });
   });
   document.querySelectorAll<HTMLButtonElement>(".accent-chip").forEach((button) => {
-    button.addEventListener("click", () => applyAccent(button.dataset.accent || "", "chip", true));
+    button.addEventListener("click", () => applyAccent(button.dataset.accent || "", true));
   });
   ($("#accent-input") as HTMLInputElement).addEventListener("input", (event) => {
-    applyAccent((event.target as HTMLInputElement).value, "free", true);
+    applyAccent((event.target as HTMLInputElement).value, true);
   });
   $("#accent-reset").addEventListener("click", () => {
     applyTheme("dusk", true);
-    applyAccent(DEFAULT_SETTINGS.accent, "chip", true);
+    applyAccent(DEFAULT_SETTINGS.accent, true);
   });
   settingsReady = readAndApplySettings();
 }
