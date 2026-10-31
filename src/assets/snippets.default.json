@@ -1,0 +1,26 @@
+[
+  {
+    "category": "Docker",
+    "items": [
+      { "name": "Prune everything", "command": "docker system prune -af" },
+      { "name": "List running containers", "command": "docker ps" },
+      { "name": "Tail container logs", "command": "docker logs -f --tail 100 <container>" }
+    ]
+  },
+  {
+    "category": "Git",
+    "items": [
+      { "name": "Status (short)", "command": "git status -sb" },
+      { "name": "Pull with rebase", "command": "git pull --rebase" },
+      { "name": "Last commit", "command": "git log -1 --stat" }
+    ]
+  },
+  {
+    "category": "systemd",
+    "items": [
+      { "name": "Service status", "command": "systemctl status <service>" },
+      { "name": "Restart service", "command": "sudo systemctl restart <service>" },
+      { "name": "Follow journal", "command": "journalctl -u <service> -f" }
+    ]
+  }
+]

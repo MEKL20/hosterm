@@ -661,6 +661,238 @@ fn create_identity_file(name: String, private_key: String) -> Result<String, Str
 }
 
 // ============================================================
+//  STORE  (settings + allowlist JSON in app-data; bundled snippets)
+// ============================================================
+//
+// U-D3 (SDD §13.4/§13.5/§13.7, ADR-18/19/21). One app-data JSON file for
+// settings+allowlist, one read-only bundled JSON for default snippets.
+// Additive and isolated: this path NEVER reads or writes ~/.ssh/config or the
+// hosterm.secrets sidecar (INV-22). Resolution mirrors config_path()'s posture
+// — the `dirs` crate already in the tree, no tauri-plugin-store/-fs.
+
+/// AI exact-command approval entry. `(host, command)` is byte-exact (no
+/// pattern/glob in v1); `added_at` is backend-stamped RFC 3339 UTC, audit-only.
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
+struct AllowEntry {
+    host: String,
+    command: String,
+    #[serde(default)]
+    added_at: String,
+}
+
+/// Persisted appearance + allowlist. `read_settings` never throws: a missing or
+/// corrupt file yields DEFAULT_SETTINGS and the backend coerces unknown
+/// theme/version and invalid accent to defaults.
+#[derive(Serialize, Deserialize, Clone)]
+struct Settings {
+    version: u32,
+    theme: String,
+    accent: String,
+    allowlist: Vec<AllowEntry>,
+}
+
+const DEFAULT_THEME: &str = "dusk";
+const DEFAULT_ACCENT: &str = "#e2a35c";
+const SETTINGS_VERSION: u32 = 1;
+
+fn default_settings() -> Settings {
+    Settings {
+        version: SETTINGS_VERSION,
+        theme: DEFAULT_THEME.to_string(),
+        accent: DEFAULT_ACCENT.to_string(),
+        allowlist: Vec::new(),
+    }
+}
+
+/// One bundled snippet (name + command).
+#[derive(Serialize, Deserialize, Clone)]
+struct Snippet {
+    name: String,
+    command: String,
+}
+
+/// A category of bundled snippets.
+#[derive(Serialize, Deserialize, Clone)]
+struct SnippetGroup {
+    category: String,
+    items: Vec<Snippet>,
+}
+
+/// Default snippet set, embedded at compile time (ADR-19, zero network).
+/// Path is relative to this source file: lib.rs lives in src-tauri/src/, the
+/// asset in src/assets/ at the repo root.
+const SNIPPETS_DEFAULT_JSON: &str = include_str!("../../src/assets/snippets.default.json");
+
+/// Directory holding the app-data store. `HOSTERM_DATA_DIR` overrides the
+/// parent dir (test hook, parity with HOSTERM_CONFIG); otherwise use the OS
+/// per-user config dir. The store always lives under a `hosterm/` subdir so it
+/// matches the shipped `dirs::config_dir()/hosterm/` layout (§13.4) and so a
+/// temp override dir only ever gains that one subdir.
+fn data_dir() -> PathBuf {
+    let base = if let Ok(p) = std::env::var("HOSTERM_DATA_DIR") {
+        PathBuf::from(p)
+    } else {
+        dirs::config_dir().unwrap_or_else(|| PathBuf::from("."))
+    };
+    base.join("hosterm")
+}
+
+fn settings_path() -> PathBuf {
+    data_dir().join("settings.json")
+}
+
+/// Accent must be exactly `#RRGGBB` (6 hex digits). Anything else is invalid.
+fn accent_is_valid(accent: &str) -> bool {
+    let b = accent.as_bytes();
+    b.len() == 7 && b[0] == b'#' && b[1..].iter().all(|c| c.is_ascii_hexdigit())
+}
+
+/// The four known theme presets. Unknown values coerce to "dusk" on read and
+/// are rejected on write (`settings:invalid-theme`).
+fn theme_is_valid(theme: &str) -> bool {
+    matches!(theme, "dusk" | "slate" | "ink" | "light")
+}
+
+/// Coerce a possibly-foreign deserialized Settings into a safe value for the
+/// read path: unknown theme/version → dusk/v1, invalid accent → preset default,
+/// allowlist entries with empty host/command dropped. Never throws.
+fn coerce_settings(mut s: Settings) -> Settings {
+    if s.version != SETTINGS_VERSION {
+        s.version = SETTINGS_VERSION;
+    }
+    if !theme_is_valid(&s.theme) {
+        s.theme = DEFAULT_THEME.to_string();
+    }
+    if !accent_is_valid(&s.accent) {
+        s.accent = DEFAULT_ACCENT.to_string();
+    }
+    s.allowlist
+        .retain(|e| !e.host.trim().is_empty() && !e.command.trim().is_empty());
+    s
+}
+
+/// Read persisted settings. NEVER throws (INV-24): a missing file, an I/O
+/// error, or unparseable JSON all yield DEFAULT_SETTINGS, and the corrupt file
+/// is left on disk untouched (no destructive self-heal on read).
+#[tauri::command]
+fn read_settings() -> Settings {
+    match std::fs::read_to_string(settings_path()) {
+        Ok(text) => match serde_json::from_str::<Settings>(&text) {
+            Ok(s) => coerce_settings(s),
+            Err(_) => default_settings(),
+        },
+        Err(_) => default_settings(),
+    }
+}
+
+/// Persist settings atomically (temp → rename, 0600-class). Re-validates theme
+/// enum, accent 6-hex, and allowlist entries (non-empty host+command) and
+/// rejects with the frozen `settings:*` strings WITHOUT writing on any failure.
+/// `added_at` is backend-stamped RFC 3339 UTC. NEVER touches ~/.ssh/config or
+/// the sidecar (INV-22).
+#[tauri::command]
+fn write_settings(settings: Settings) -> Result<(), String> {
+    if !theme_is_valid(&settings.theme) {
+        return Err("settings:invalid-theme".into());
+    }
+    if !accent_is_valid(&settings.accent) {
+        return Err("settings:invalid-accent".into());
+    }
+    let mut out = Settings {
+        version: SETTINGS_VERSION,
+        theme: settings.theme,
+        accent: settings.accent,
+        allowlist: Vec::with_capacity(settings.allowlist.len()),
+    };
+    for e in settings.allowlist {
+        if e.host.trim().is_empty() || e.command.trim().is_empty() {
+            return Err("settings:invalid-accent".into());
+        }
+        // added_at is backend-authoritative: stamp fresh entries, keep an
+        // existing RFC3339-shaped value so re-saving the list is stable.
+        let added_at = if e.added_at.trim().is_empty() {
+            now_rfc3339_utc()
+        } else {
+            e.added_at
+        };
+        out.allowlist.push(AllowEntry {
+            host: e.host,
+            command: e.command,
+            added_at,
+        });
+    }
+    let body = serde_json::to_string_pretty(&out).map_err(|_| "settings:write-failed".to_string())?;
+    write_store_atomic(&settings_path(), &body).map_err(|_| "settings:write-failed".to_string())
+}
+
+/// Return the bundled read-only default snippet set (ADR-19). NEVER throws:
+/// an unparseable bundled asset yields an empty array rather than an error.
+#[tauri::command]
+fn read_snippets() -> Vec<SnippetGroup> {
+    serde_json::from_str::<Vec<SnippetGroup>>(SNIPPETS_DEFAULT_JSON).unwrap_or_default()
+}
+
+/// Atomic whole-file write for the store (sibling temp → rename), 0600-class
+/// where the OS supports it. Same discipline as write_config_file but scoped to
+/// the app-data dir so it can never be confused with the ssh config path.
+fn write_store_atomic(path: &PathBuf, content: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = {
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("settings.json");
+        let mut t = path.clone();
+        t.set_file_name(format!(".{}.hosterm-tmp-{}", name, std::process::id()));
+        t
+    };
+    std::fs::write(&tmp, content)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+    }
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        e
+    })?;
+    Ok(())
+}
+
+/// Current time as an RFC 3339 UTC string (`YYYY-MM-DDTHH:MM:SSZ`), computed
+/// from the Unix epoch with no external date crate (NFR: zero new deps). Used
+/// only to stamp `added_at` for display/audit, so second precision is enough.
+fn now_rfc3339_utc() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0) as i64;
+    let days = secs.div_euclid(86_400);
+    let tod = secs.rem_euclid(86_400);
+    let (hh, mm, ss) = (tod / 3600, (tod % 3600) / 60, tod % 60);
+    let (year, month, day) = civil_from_days(days);
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, month, day, hh, mm, ss
+    )
+}
+
+/// Convert a count of days since 1970-01-01 into (year, month, day) using
+/// Howard Hinnant's well-known civil-from-days algorithm (public domain).
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m as u32, d as u32)
+}
+
+// ============================================================
 //  SFTP  (drives the real OS `sftp` binary, honors ssh config)
 // ============================================================
 //
@@ -2451,6 +2683,286 @@ mod forget_secret_tests {
     }
 }
 
+/// U-D3: the settings/snippet store (SDD §13.4/§13.5, INV-22/24). Every test
+/// that sets HOSTERM_DATA_DIR / HOSTERM_CONFIG serializes on the shared
+/// TEST_ENV_LOCK because those env vars are process-global.
+#[cfg(test)]
+mod store_tests {
+    use super::*;
+    use super::TEST_ENV_LOCK as ENV_LOCK;
+
+    /// A fresh, empty data dir for one test. Sets HOSTERM_DATA_DIR so
+    /// settings_path() resolves to `<dir>/hosterm/settings.json`.
+    fn data_root(tag: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!("hosterm-store-{}-{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    fn entry(host: &str, cmd: &str) -> AllowEntry {
+        AllowEntry { host: host.into(), command: cmd.into(), added_at: String::new() }
+    }
+
+    // ---- AC1: missing file → DEFAULT_SETTINGS, no panic ----
+    #[test]
+    fn read_settings_missing_file_returns_defaults() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = data_root("missing");
+        std::env::set_var("HOSTERM_DATA_DIR", &root);
+        let s = read_settings();
+        std::env::remove_var("HOSTERM_DATA_DIR");
+        assert_eq!(s.version, 1);
+        assert_eq!(s.theme, "dusk");
+        assert_eq!(s.accent, "#e2a35c");
+        assert!(s.allowlist.is_empty());
+        // no file was created by a read
+        assert!(!root.join("hosterm").join("settings.json").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ---- AC2 (INV-24): corrupt file → defaults AND bytes unchanged ----
+    #[test]
+    fn read_settings_corrupt_file_returns_defaults_and_does_not_clobber() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = data_root("corrupt");
+        std::env::set_var("HOSTERM_DATA_DIR", &root);
+        let path = root.join("hosterm").join("settings.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let garbage = "{ this is not: valid json ]]] \u{0}garbage";
+        std::fs::write(&path, garbage).unwrap();
+        let before = std::fs::read(&path).unwrap();
+
+        let s = read_settings();
+
+        let after = std::fs::read(&path).unwrap();
+        std::env::remove_var("HOSTERM_DATA_DIR");
+        assert_eq!(s.theme, "dusk", "corrupt file must read as defaults");
+        assert_eq!(s.accent, "#e2a35c");
+        assert!(s.allowlist.is_empty());
+        assert_eq!(before, after, "INV-24: corrupt file must NOT be overwritten on read");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ---- AC3: invalid accent rejected without writing ----
+    #[test]
+    fn write_settings_invalid_accent_rejects_without_writing() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = data_root("accent");
+        std::env::set_var("HOSTERM_DATA_DIR", &root);
+        let path = root.join("hosterm").join("settings.json");
+
+        for bad in ["#e2a35", "#e2a35cc", "e2a35c", "#GGGGGG", "#12 456", ""] {
+            let s = Settings {
+                version: 1,
+                theme: "dusk".into(),
+                accent: bad.into(),
+                allowlist: vec![],
+            };
+            let r = write_settings(s);
+            assert_eq!(
+                r.err().as_deref(),
+                Some("settings:invalid-accent"),
+                "accent {:?} must reject settings:invalid-accent",
+                bad
+            );
+            assert!(!path.exists(), "no file may be written on reject (accent={:?})", bad);
+        }
+        std::env::remove_var("HOSTERM_DATA_DIR");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ---- invalid theme rejected without writing ----
+    #[test]
+    fn write_settings_invalid_theme_rejects_without_writing() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = data_root("theme");
+        std::env::set_var("HOSTERM_DATA_DIR", &root);
+        let path = root.join("hosterm").join("settings.json");
+        let s = Settings {
+            version: 1,
+            theme: "neon".into(),
+            accent: "#e2a35c".into(),
+            allowlist: vec![],
+        };
+        let r = write_settings(s);
+        std::env::remove_var("HOSTERM_DATA_DIR");
+        assert_eq!(r.err().as_deref(), Some("settings:invalid-theme"));
+        assert!(!path.exists(), "no file on invalid-theme reject");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ---- empty allowlist host/command rejected without writing ----
+    #[test]
+    fn write_settings_empty_allowlist_entry_rejected() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = data_root("emptyentry");
+        std::env::set_var("HOSTERM_DATA_DIR", &root);
+        let path = root.join("hosterm").join("settings.json");
+        let s = Settings {
+            version: 1,
+            theme: "dusk".into(),
+            accent: "#e2a35c".into(),
+            allowlist: vec![entry("", "ls")],
+        };
+        let r = write_settings(s);
+        std::env::remove_var("HOSTERM_DATA_DIR");
+        assert!(r.is_err(), "empty host must reject");
+        assert!(!path.exists(), "no file on bad allowlist entry");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ---- round-trip: write then read gets the same values back ----
+    #[test]
+    fn write_then_read_roundtrips_and_stamps_added_at() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = data_root("roundtrip");
+        std::env::set_var("HOSTERM_DATA_DIR", &root);
+        let s = Settings {
+            version: 1,
+            theme: "dusk".into(),
+            accent: "#5fbfae".into(),
+            allowlist: vec![entry("prod-web", "sudo systemctl restart netdata")],
+        };
+        write_settings(s).unwrap();
+        let back = read_settings();
+        std::env::remove_var("HOSTERM_DATA_DIR");
+        assert_eq!(back.theme, "dusk");
+        assert_eq!(back.accent, "#5fbfae");
+        assert_eq!(back.allowlist.len(), 1);
+        assert_eq!(back.allowlist[0].host, "prod-web");
+        assert_eq!(back.allowlist[0].command, "sudo systemctl restart netdata");
+        // added_at was blank on input; backend stamped an RFC3339 UTC value
+        let stamped = &back.allowlist[0].added_at;
+        assert!(stamped.ends_with('Z') && stamped.contains('T') && stamped.len() == 20,
+            "added_at must be backend-stamped RFC3339 UTC, got {:?}", stamped);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ---- unknown theme/version coerced to dusk/1 on read ----
+    #[test]
+    fn read_settings_coerces_unknown_theme_and_invalid_accent() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = data_root("coerce");
+        std::env::set_var("HOSTERM_DATA_DIR", &root);
+        let path = root.join("hosterm").join("settings.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // valid JSON, but foreign theme/version + bad accent
+        std::fs::write(
+            &path,
+            r#"{"version":99,"theme":"hyperspace","accent":"nothex","allowlist":[]}"#,
+        )
+        .unwrap();
+        let s = read_settings();
+        std::env::remove_var("HOSTERM_DATA_DIR");
+        assert_eq!(s.version, 1, "unknown version coerced to 1");
+        assert_eq!(s.theme, "dusk", "unknown theme coerced to dusk");
+        assert_eq!(s.accent, "#e2a35c", "invalid accent coerced to preset default");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ---- AC4 (INV-22, CRITICAL): write_settings never touches ~/.ssh/* ----
+    #[test]
+    fn write_settings_leaves_ssh_config_and_sidecar_untouched() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        fn hash_bytes(b: &[u8]) -> u64 {
+            let mut h = DefaultHasher::new();
+            b.hash(&mut h);
+            h.finish()
+        }
+
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        // A real ssh config + sidecar in a dedicated dir, via HOSTERM_CONFIG.
+        let ssh_root = data_root("inv22-ssh");
+        let cfg = ssh_root.join("config");
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        // Create a host with a stored password so both config AND sidecar exist.
+        save_host(
+            None,
+            HostInput {
+                name: "prod-web".into(),
+                host_name: "203.0.113.10".into(),
+                user: "root".into(),
+                port: "22".into(),
+                identity_file: "".into(),
+                auth_method: "password".into(),
+                password: "sekret".into(),
+            },
+        )
+        .unwrap();
+
+        let sidecar = ssh_root.join("hosterm.secrets");
+        assert!(cfg.exists(), "test setup: config must exist");
+        assert!(sidecar.exists(), "test setup: sidecar must exist");
+
+        let cfg_bytes_before = std::fs::read(&cfg).unwrap();
+        let sc_bytes_before = std::fs::read(&sidecar).unwrap();
+        let cfg_mtime_before = std::fs::metadata(&cfg).unwrap().modified().unwrap();
+        let sc_mtime_before = std::fs::metadata(&sidecar).unwrap().modified().unwrap();
+        let cfg_hash_before = hash_bytes(&cfg_bytes_before);
+        let sc_hash_before = hash_bytes(&sc_bytes_before);
+
+        // Now point the store elsewhere and write settings including an
+        // allowlist entry that names the same host + a command — the store
+        // must NEVER route this into ~/.ssh/config or the sidecar.
+        let store_root = data_root("inv22-store");
+        std::env::set_var("HOSTERM_DATA_DIR", &store_root);
+        let s = Settings {
+            version: 1,
+            theme: "ink".into(),
+            accent: "#e07856".into(),
+            allowlist: vec![entry("prod-web", "docker system prune -af")],
+        };
+        write_settings(s).unwrap();
+
+        // store file landed in the app-data dir, NOT the ssh dir
+        assert!(store_root.join("hosterm").join("settings.json").exists());
+        assert!(!cfg.parent().unwrap().join("settings.json").exists());
+
+        let cfg_bytes_after = std::fs::read(&cfg).unwrap();
+        let sc_bytes_after = std::fs::read(&sidecar).unwrap();
+        let cfg_mtime_after = std::fs::metadata(&cfg).unwrap().modified().unwrap();
+        let sc_mtime_after = std::fs::metadata(&sidecar).unwrap().modified().unwrap();
+
+        std::env::remove_var("HOSTERM_DATA_DIR");
+        std::env::remove_var("HOSTERM_CONFIG");
+
+        // INV-22: byte-identical hash AND mtime unchanged on both files.
+        assert_eq!(hash_bytes(&cfg_bytes_after), cfg_hash_before, "config bytes changed");
+        assert_eq!(hash_bytes(&sc_bytes_after), sc_hash_before, "sidecar bytes changed");
+        assert_eq!(cfg_mtime_after, cfg_mtime_before, "config mtime changed");
+        assert_eq!(sc_mtime_after, sc_mtime_before, "sidecar mtime changed");
+        // and the secret never leaked into the store file
+        let store_body = std::fs::read_to_string(store_root.join("hosterm").join("settings.json")).unwrap();
+        assert!(!store_body.contains("sekret"), "no secret in store: {store_body}");
+
+        let _ = std::fs::remove_dir_all(&ssh_root);
+        let _ = std::fs::remove_dir_all(&store_root);
+    }
+
+    // ---- AC5: read_snippets returns the bundled set (≥3 categories), 0 network ----
+    #[test]
+    fn read_snippets_returns_bundled_categories() {
+        let groups = read_snippets();
+        assert!(groups.len() >= 3, "bundled set must have ≥3 categories, got {}", groups.len());
+        let names: Vec<&str> = groups.iter().map(|g| g.category.as_str()).collect();
+        assert!(names.contains(&"Docker"));
+        assert!(names.contains(&"Git"));
+        assert!(names.contains(&"systemd"));
+        // every group has at least one item with non-empty name+command
+        for g in &groups {
+            assert!(!g.items.is_empty(), "category {} has no items", g.category);
+            for it in &g.items {
+                assert!(!it.name.is_empty() && !it.command.is_empty());
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod sftp_tests {
     use super::*;
@@ -2681,6 +3193,9 @@ pub fn run() {
             pty_kill,
             check_binaries,
             forget_secret,
+            read_settings,
+            write_settings,
+            read_snippets,
             fleet::fleet_start,
             fleet::fleet_stop
         ])
