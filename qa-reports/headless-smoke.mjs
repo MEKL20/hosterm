@@ -608,14 +608,17 @@ const sb = await page.evaluate(() => {
   return { h: el.offsetHeight, vis: !!el.offsetParent, left: document.getElementById("sb-left").textContent, ver: document.getElementById("sb-ver").textContent };
 });
 check("U4: status bar always visible, 24px", sb.vis && sb.h === 24, `h=${sb.h} vis=${sb.vis}`);
-check("U4: status bar left format user@host · auth:key · N sesi",
-  sb.left === "admin@db-core · auth:key · 3 sesi", sb.left);
+// U-D2 FR-SH8: left = "host · user@ip:port · connected" (mono 11px bar)
+check("U-D2 FR-SH8: status bar left = host · user@ip:port · connected",
+  sb.left === "db-core · admin@203.0.113.20 · connected", sb.left);
 check("U4: status bar shows app version", /^v\d+\.\d+\.\d+$/.test(sb.ver), sb.ver);
-const cnt = (t) => Number((t.match(/(\d+) sesi/) || [])[1]);
+// U-D2 FR-SH8: live-session count now lives in #sb-live ("N live"), not #sb-left
+const liveN = async () => Number(((await page.locator("#sb-live").textContent()).match(/(\d+) live/) || [])[1]);
+const liveBefore = await liveN();
 await page.locator(".host-item", { hasText: "prod-web" }).first().locator(".h-name").click();
 await page.waitForTimeout(400);
-const sbLeft2 = await page.locator("#sb-left").textContent();
-check("U4: status bar session count increments on tab open", cnt(sbLeft2) === cnt(sb.left) + 1, `${sb.left} -> ${sbLeft2}`);
+const liveAfter = await liveN();
+check("U-D2 FR-SH8: status bar live count increments on tab open", liveAfter === liveBefore + 1, `${liveBefore} -> ${liveAfter}`);
 // activateTab restores split focus to the first .term-side (QA nit t_81aec02e:
 // query by class, not positional children[] of .term-split). Re-activate the
 // split tab first — opening prod-web above hid the split panel.
@@ -745,8 +748,13 @@ const sbIdle = await page.evaluate(() => ({
   vis: !!document.getElementById("status-bar").offsetParent,
   h: document.getElementById("status-bar").offsetHeight,
   left: document.getElementById("sb-left").textContent,
+  live: document.getElementById("sb-live").textContent,
+  shell: (document.getElementById("sb-shell") || { textContent: null }).textContent,
 }));
-check("U4: status bar visible with 0 tabs, '0 sesi'", sbIdle.vis && sbIdle.h === 24 && sbIdle.left === "0 sesi", JSON.stringify(sbIdle));
+// U-D2 FR-SH8: 0 tabs → empty host segment left, "0 live" right cluster,
+// shell field = static display-only label (never a guessed binary)
+check("U-D2 FR-SH8: status bar visible with 0 tabs ('0 live', empty host, shell 'shell')",
+  sbIdle.vis && sbIdle.h === 24 && sbIdle.left === "" && sbIdle.live === "0 live" && sbIdle.shell === "shell", JSON.stringify(sbIdle));
 // U4 teardown hygiene (SEC LOW t_fb1d18d6): every split signal aborted after closeTab
 const sigAfterClose = await page.evaluate(() => {
   const live = window.__sigList.filter((e) => !e.sig.aborted);
@@ -756,7 +764,7 @@ check("U4: split window listeners released on closeTab (no leak)",
   sigAfterClose.n >= 1 && sigAfterClose.live === 0, JSON.stringify(sigAfterClose));
 // (1) single-line 28px row; subtitle is a title tooltip, not a second element
 const rowH = await page.locator(".host-item").first().evaluate((el) => el.offsetHeight);
-check("host row is exactly 28px (single line)", rowH === 28, `h=${rowH}`);
+check("U-D2 §13.3: host row is exactly 34px (single line)", rowH === 34, `h=${rowH}`);
 check("no second-line subtitle element", (await page.locator(".host-item .h-sub").count()) === 0);
 const rowTitle = await page.locator(".host-item").first().getAttribute("title");
 check("subtitle lives in title tooltip", !!rowTitle && rowTitle.includes("deploy@203.0.113.10"), rowTitle || "");
@@ -798,7 +806,7 @@ check("loading renders 3 static skeleton rows", (await page.locator("#host-list 
 check("no spinner replace during load", (await page.locator("#host-list .spinner").count()) === 0);
 const hDuring = await page.locator("#host-list").evaluate((el) => el.offsetHeight);
 const skelH = await page.locator("#host-list .skel").first().evaluate((el) => el.offsetHeight);
-check("skeleton rows are 28px (--hover fill)", skelH === 28, `h=${skelH}`);
+check("U-D2 §13.3: skeleton rows are 34px", skelH === 34, `h=${skelH}`);
 delayRead = 0;
 await page.waitForTimeout(600);
 const hAfter = await page.locator("#host-list").evaluate((el) => el.offsetHeight);
@@ -1178,13 +1186,15 @@ const u6Mid = await page.evaluate(() => {
     spinners: list.querySelectorAll(".spinner").length,
     h: list.offsetHeight,
     anim: cs ? cs.animationName : "",
+    adur: cs ? cs.animationDuration : "",
     tdur: cs ? cs.transitionDuration : "",
   };
 });
 check("U6 AC1: loading = 3 static .skel rows (0 list rows, 0 spinner)",
   u6Mid.skels === 3 && u6Mid.rows === 0 && u6Mid.spinners === 0, JSON.stringify(u6Mid));
-check("U6 AC1: pulse-free skeletons (animationName none, zero transition)",
-  u6Mid.anim === "none" && u6Mid.tdur.split(",").every((d) => d.trim() === "0s"), `${u6Mid.anim}/${u6Mid.tdur}`);
+// U-D2 §13.3 motion: skeletons now shimmer (1.4s), replacing the Arus pulse-free rule
+check("U-D2 §13.3: skeletons shimmer (animationName 'shimmer', 1.4s)",
+  u6Mid.anim === "shimmer" && u6Mid.adur === "1.4s", `${u6Mid.anim}/${u6Mid.adur}`);
 check("U6 AC1: remote list height stable during loading (delta 0)",
   u6Mid.h === u6Heights.sftp, `before=${u6Heights.sftp} during=${u6Mid.h}`);
 // same for renderLocalPane (skeleton path was never observable before — mock now delays)
@@ -1488,9 +1498,9 @@ check("U9 (c): pasteNormalize body unchanged (CRLF/CR→LF, strip 1 trailing LF)
   pnBody === '\n  const lf = text.replace(/\\r\\n/g, "\\n").replace(/\\r/g, "\\n");\n  return lf.endsWith("\\n") ? lf.slice(0, -1) : lf;', JSON.stringify(pnBody));
 check("U9 (c): pasteNormalize wired on both PTY paste paths",
   (u3src.match(/pasteNormalize\(String\(raw\)\)/g) || []).length === 2);
-// (d) motion: only the 2 shipped keyframes (spinner + xfer sweep), both off under reduced-motion
-check("U9 (d): keyframes = spin + sweep only (no new animation)",
-  JSON.stringify((cssU4.match(/@keyframes\s+[\w-]+/g) || []).map((k) => k.split(/\s+/)[1]).sort()) === '["spin","sweep"]');
+// (d) motion: shipped keyframes = spinner + xfer sweep + U-D2 shimmer, all off under reduced-motion
+check("U-D2 §13.3: keyframes = shimmer + spin + sweep (shimmer added, no stragglers)",
+  JSON.stringify((cssU4.match(/@keyframes\s+[\w-]+/g) || []).map((k) => k.split(/\s+/)[1]).sort()) === '["shimmer","spin","sweep"]');
 await page.emulateMedia({ reducedMotion: "reduce" });
 const rmAnim = await page.evaluate(() => {
   const s = document.createElement("span");
@@ -1504,6 +1514,96 @@ await page.emulateMedia({ reducedMotion: null });
 check("U9 (d): prefers-reduced-motion stops the spinner", rmAnim === "none", rmAnim);
 check("U9: shipped skeleton class is .skel (no .skel-row) + no @font-face",
   /\.skel\b/.test(cssU4) && !/skel-row/.test(cssU4 + u3src) && !/@font-face/.test(cssU4));
+
+// ===== U-D2 Dusk shell re-skin geometry + motion (SDD §13.3 / FR-SH1..8) =====
+// (1) sidebar 248px
+const sbW = await page.locator("#sidebar").evaluate((el) => el.getBoundingClientRect().width);
+check("U-D2 §13.3: sidebar is 248px wide", Math.round(sbW) === 248, `w=${sbW}`);
+// (2) tab bar 42px tall + tab 32px tall (open one terminal tab to measure)
+// U-D2 scope correction: the shell field is display-only ("shell" literal).
+// Anti-regression: opening a terminal must never read remote files — count
+// sftp_read_file calls targeting /etc/passwd around this re-open (several
+// terminals were opened earlier in the suite); exact 0 required.
+const pwProbeBefore = calls.filter((c) => c.cmd === "sftp_read_file" && c.args.remotePath === "/etc/passwd").length;
+await page.locator(".host-item", { hasText: "prod-web" }).first().locator(".h-name").click();
+await page.waitForTimeout(300);
+const pwProbeAfter = calls.filter((c) => c.cmd === "sftp_read_file" && c.args.remotePath === "/etc/passwd").length;
+check("U-D2 FR-SH8: zero /etc/passwd probes via sftp_read_file on terminal open (anti-regression)",
+  pwProbeBefore === 0 && pwProbeAfter === 0, `before=${pwProbeBefore} after=${pwProbeAfter}`);
+const tabGeo = await page.evaluate(() => {
+  const bar = document.getElementById("tabs");
+  const tab = document.querySelector(".tab");
+  return { bar: bar.offsetHeight, tab: tab ? tab.offsetHeight : 0 };
+});
+check("U-D2 §13.3: tab bar 42px, tab 32px", tabGeo.bar === 42 && tabGeo.tab === 32, JSON.stringify(tabGeo));
+// (3) active tab underline = --accent 2px (honey amber #e2a35c)
+const tabUnderline = await page.evaluate(() => {
+  const t = document.querySelector(".tab.active");
+  if (!t) return null;
+  const cs = getComputedStyle(t);
+  return { w: cs.borderBottomWidth, c: cs.borderBottomColor };
+});
+check("U-D2 FR-SH5: active tab underline 2px --accent",
+  tabUnderline && tabUnderline.w === "2px" && tabUnderline.c === "rgb(226, 163, 92)", JSON.stringify(tabUnderline));
+// (4) status bar is mono, 11px (FR-SH8)
+const sbFont = await page.evaluate(() => {
+  const cs = getComputedStyle(document.getElementById("status-bar"));
+  return { fs: cs.fontSize, mono: /mono/i.test(cs.fontFamily) };
+});
+check("U-D2 FR-SH8: status bar mono 11px", sbFont.fs === "11px" && sbFont.mono, JSON.stringify(sbFont));
+// (5) FR-SH8 right cluster = N live · UTF-8 · LF · shell · clock — the shell
+// field is a static display-only label (real shell unknown without a remote
+// probe, which U-D2 forbids); never a guessed binary or version
+const sbRight = await page.evaluate(() => {
+  const ids = ["sb-live", "sb-enc", "sb-eol", "sb-shell", "sb-clock"];
+  const kids = [...document.querySelector(".sb-right").children].map((el) => el.id);
+  return {
+    live: document.getElementById("sb-live").textContent,
+    enc: document.getElementById("sb-enc").textContent,
+    eol: document.getElementById("sb-eol").textContent,
+    shell: (document.getElementById("sb-shell") || { textContent: null }).textContent,
+    order: ids.map((id) => kids.indexOf(id)),
+  };
+});
+check("U-D2 FR-SH8: status bar right shows N live · UTF-8 · LF · shell (static display-only label)",
+  sbRight.enc === "UTF-8" && sbRight.eol === "LF" && sbRight.shell === "shell"
+    && /^\d+ live$/.test(sbRight.live), JSON.stringify(sbRight));
+check("U-D2 FR-SH8: right cluster field order live·enc·eol·shell·clock",
+  sbRight.order.every((v, i) => v !== -1 && (i === 0 || v > sbRight.order[i - 1])),
+  JSON.stringify(sbRight.order));
+// (6) host row-actions fade = .12s (FR-SH2, row-actions motion)
+const actFade = await page.evaluate(() => {
+  const b = document.querySelector(".host-item .h-acts button");
+  return b ? getComputedStyle(b).transitionDuration : "";
+});
+check("U-D2 §13.3: row-actions fade transition 0.12s", actFade === "0.12s", actFade);
+// (7) term divider 4px + col-resize (measure if a split is live, else assert CSS source)
+const divGeoD2 = await page.evaluate(() => {
+  const d = document.querySelector(".term-divider");
+  if (!d) return null;
+  const cs = getComputedStyle(d);
+  return { w: Math.round(d.getBoundingClientRect().width), cur: cs.cursor };
+});
+// divider only exists when a split is present; if none open yet, assert CSS source
+if (divGeoD2) check("U-D2 FR-SH6: divider 4px col-resize", divGeoD2.w === 4 && divGeoD2.cur === "col-resize", JSON.stringify(divGeoD2));
+else check("U-D2 FR-SH6: divider 4px col-resize (CSS source asserts flex 4px + col-resize)",
+  /\.term-divider\s*\{[^}]*flex:\s*0 0 4px[^}]*\}/s.test(cssU4) && /\.term-divider\s*\{[^}]*col-resize/s.test(cssU4));
+// (8) reduced-motion silences the shimmer skeleton (FR-DT4 universal kill)
+await page.emulateMedia({ reducedMotion: "reduce" });
+const rmSkel = await page.evaluate(() => {
+  const s = document.createElement("div");
+  s.className = "skel";
+  document.getElementById("host-list").appendChild(s);
+  const a = getComputedStyle(s).animationName;
+  s.remove();
+  return a;
+});
+await page.emulateMedia({ reducedMotion: null });
+check("U-D2 FR-DT4: reduced-motion stops the shimmer skeleton", rmSkel === "none", rmSkel);
+// clean the probe tab(s) so teardown's 0-tab assertion holds
+await page.evaluate(() => document.querySelectorAll(".tab .x").forEach((x) => x.click()));
+await page.waitForTimeout(200);
+// ===== end U-D2 block =====
 // (b) sidebar narrative copy byte-identical (empty / error / no-match) + empty CTA formalized
 const sbState = () => page.evaluate(() => {
   const s = document.querySelector("#host-list .list-state");
@@ -1640,6 +1740,12 @@ const unitIssues = ["U3", "U4", "U5", "U6", "U7", "U8"].filter((u) => {
 const need = ["host menu", "divider", "status bar", "strip"].filter((k) => !results.some((r) => r.startsWith("PASS") && r.includes(k)));
 check("U9 audit: §8#9 (host menu/divider/status bar/strip) covered + U3–U8 all PASS",
   unitIssues.length === 0 && need.length === 0, `units=${unitIssues.join(",")} missing=${need.join(",")}`);
+
+// U-D2 scope correction, suite-wide anti-regression: the display-only shell
+// field must never have triggered a remote read anywhere in the run
+const pwProbeEnd = calls.filter((c) => c.cmd === "sftp_read_file" && c.args.remotePath === "/etc/passwd").length;
+check("U-D2 FR-SH8: /etc/passwd probe count exact 0 across the whole suite",
+  pwProbeEnd === 0, `total=${pwProbeEnd}`);
 
 check("no console/page errors", errors.length === 0, errors.slice(0, 3).join(" | "));
 

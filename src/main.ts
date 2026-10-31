@@ -21,6 +21,12 @@ interface HostDto {
 // xterm cannot read CSS custom properties; keep this identical to --font-mono in styles.css
 const FONT_MONO = '"JetBrains Mono", "Geist Mono", "Cascadia Code", "SF Mono", ui-monospace, "DejaVu Sans Mono", monospace';
 
+// §13.3 motion: the xterm cursor blink is canvas-drawn, so the CSS
+// reduced-motion kill (* { animation: none }) cannot reach it — blink is
+// opted out at Terminal construction instead. Sessions already open keep
+// their blink; the flag is re-read on every new terminal/split.
+const REDUCED_MOTION = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
 const svg = (p: string) =>
   `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
 const ICONS = {
@@ -420,9 +426,12 @@ function refreshHostDots() {
 // app version for the status bar; keep in sync with package.json / tauri.conf.json
 const APP_VERSION = "v0.10.0";
 
-// status bar updater (§4.3): kiri "user@host · auth:key|pw · N sesi" dari
-// sesi aktif, kanan indikator transfer + versi. Dipanggil dari activateTab
-// (semua jenis tab), openTerminal/splitTerminal/closeTab dan busy() SFTP.
+// status bar updater (§4.3): dipanggil dari activateTab (semua jenis tab),
+// openTerminal/splitTerminal/closeTab dan busy() SFTP.
+// FR-SH8 (Dusk U-D2): left = "host · user@ip:port · connected"; right cluster
+// = "N live · UTF-8 · LF · shell · clock" (+ pre-existing xfer/version).
+// Display-only, derived from the existing session maps — no session behavior
+// changes.
 function updateStatusBar() {
   const id = activeTab;
   const hostName =
@@ -432,11 +441,24 @@ function updateStatusBar() {
     editorSessions.get(id as number)?.host;
   const h = hostName ? hosts.find((x) => x.name === hostName) : undefined;
   const n = sessions.size + splitSessions.size;
-  const left: string[] = [];
-  if (hostName) left.push(`${h?.user ?? "user"}@${hostName} · auth:${h?.has_password ? "pw" : "key"}`);
-  left.push(`${n} sesi`);
   const el = document.getElementById("sb-left");
-  if (el) el.textContent = left.join(" · ");
+  if (el) {
+    el.textContent = "";
+    if (hostName) {
+      const addr = [h?.user && `${h.user}@`, h?.host_name || hostName, h?.port && `:${h.port}`]
+        .filter(Boolean)
+        .join("");
+      const connected = hostHasLiveSession(hostName);
+      const host = document.createElement("span");
+      host.className = "sb-host";
+      host.textContent = hostName;
+      el.append(host, document.createTextNode(` · ${addr} · ${connected ? "connected" : "idle"}`));
+    }
+  }
+  const live = document.getElementById("sb-live");
+  if (live) live.textContent = `${n} live`;
+  const clock = document.getElementById("sb-clock");
+  if (clock) clock.textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const xfer = document.getElementById("sb-xfer");
   if (xfer) xfer.innerHTML = document.querySelectorAll(".xfer-bar.on").length > 0 ? '<span class="spinner"></span>⇅ transfer' : "⇅ idle";
 }
@@ -1781,7 +1803,7 @@ async function splitTerminal(targetTabId: number, sourceTabId: number) {
   const host = srcSession.host;
 
   const term = new Terminal({
-    cursorBlink: true,
+    cursorBlink: !REDUCED_MOTION,
     fontFamily: FONT_MONO,
     fontSize: 13,
     theme: TERMINAL_THEME,
@@ -1829,7 +1851,7 @@ async function openTerminal(host: string) {
   if (binaryBlocked("ssh")) return;
   const tabId = nextTab++;
   const term = new Terminal({
-    cursorBlink: true,
+    cursorBlink: !REDUCED_MOTION,
     fontFamily: FONT_MONO,
     fontSize: 13,
     theme: TERMINAL_THEME,

@@ -37,7 +37,7 @@
 
 /* Active-state accent emphasis (§6.5, Dusk FR-DT2): fill/underline on the 3
    active selectors only (.tab.active underline, .term-side.focused border,
-   button.primary fill) — NOT hover/idle. Abyss --glow box-shadow removed;
+   button.primary fill) — NOT hover/idle. The old Abyss glow box-shadow is gone;
    elevation (--shadow-drawer) lives on drawer + settings modal only. */
 
 * { box-sizing: border-box; }
@@ -45,7 +45,7 @@ html, body { margin: 0; height: 100%; }
 body {
   font-family: var(--font-ui);
   font-size: 13px;
-  line-height: 1.4;
+  line-height: 1.5; /* U-D2 Dusk §13.3 base lh 1.5 (Arus was 1.4) */
   background: var(--bg);
   color: var(--text);
   overflow: hidden;
@@ -107,7 +107,7 @@ select {
 
 /* sidebar */
 #sidebar {
-  width: 240px;
+  width: 248px; /* U-D2 Dusk §13.3 (Arus 240px) */
   min-width: 160px;
   max-width: 560px;
   background: var(--sidebar);
@@ -146,33 +146,43 @@ body.sb-collapsed #sidebar > :not(#btn-expand) { display: none; }
   margin-top: 4px;
 }
 .h-group:first-child { border-top: 0; margin-top: 0; padding-top: 4px; }
+/* U-D2 Dusk §13.3: host row 34px (Arus 28px → lebih lapang), gap 9px, radius --r-md */
 .host-item {
-  height: 28px;
+  height: 34px;
   padding: 0 8px;
-  border-radius: 4px;
+  border-radius: var(--r-md);
   cursor: pointer;
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: 9px;
   margin-bottom: 2px;
+  color: var(--dim);
   transition: background-color 120ms ease;
 }
-.host-item:hover, .host-item:focus-within { background: var(--surface); }
-.h-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dim); flex-shrink: 0; }
-.h-dot.live { background: var(--live); }
+.host-item:hover, .host-item:focus-within { background: var(--surface); color: var(--text); }
+/* dot live = sage fill; idle = outline faint ring (FR-SH3, prototype .dot-idle) */
+.h-dot { width: 7px; height: 7px; border-radius: 50%; background: none; border: 1.5px solid var(--faint); flex-shrink: 0; }
+.h-dot.live { background: var(--live); border-color: var(--live); }
 .h-name { font-weight: 500; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .h-key { color: var(--accent); display: inline-flex; flex-shrink: 0; }
 .h-acts { display: flex; gap: 2px; }
 .h-acts button {
   width: 24px; height: 24px;
-  border: none; border-radius: 4px;
+  border: none; border-radius: var(--r-sm);
   background: transparent;
   color: var(--dim);
   display: inline-flex; align-items: center; justify-content: center;
-  opacity: 0; /* hover-only, but stays tabbable (R-32) */
-  transition: opacity 120ms ease;
+  opacity: 0; /* hover/focus-reveal, but stays tabbable (R-32) */
+  transition: opacity .12s ease; /* U-D2 row-actions fade .12s */
 }
 .host-item:hover .h-acts button, .host-item:focus-within .h-acts button { opacity: 1; }
 .h-acts button:hover { background: var(--raised); color: var(--text); }
-.skel { height: 28px; border-radius: 4px; background: var(--raised); margin-bottom: 2px; }
+/* U-D2 shimmer skeleton 1.4s (prototype .sk-bar) — reduced-motion kills it below */
+.skel {
+  height: 34px; border-radius: var(--r-md); margin-bottom: 2px;
+  background: linear-gradient(90deg, var(--surface) 25%, var(--raised) 50%, var(--surface) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 .list-state {
   padding: 10px;
   display: flex; align-items: center; gap: 8px;
@@ -189,11 +199,12 @@ body.sb-collapsed #sidebar > :not(#btn-expand) { display: none; }
 .sidebar-foot #btn-reload { width: 26px; height: 26px; }
 
 /* tabs */
+/* U-D2 Dusk §13.3: tab bar 42px (Arus 36px) */
 #tabs {
   display: flex;
   background: var(--sidebar);
   border-bottom: 1px solid var(--border);
-  min-height: 36px;
+  min-height: 42px;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: thin;
@@ -202,11 +213,14 @@ body.sb-collapsed #sidebar > :not(#btn-expand) { display: none; }
 #tabs::-webkit-scrollbar-track { background: transparent; }
 #tabs::-webkit-scrollbar-thumb { background: var(--border); }
 #tabs::-webkit-scrollbar-thumb:hover { background: var(--border); }
+/* U-D2 Dusk §13.3: tab 32px tall; active underline --accent 2px */
 .tab {
   flex: 0 0 auto;
+  height: 32px;
+  align-self: center;
   min-width: fit-content;
   max-width: 200px;
-  padding: 8px 10px;
+  padding: 0 10px;
   cursor: pointer;
   display: flex; align-items: center; gap: 8px;
   border-right: 1px solid var(--border);
@@ -251,15 +265,21 @@ body.sb-collapsed #sidebar > :not(#btn-expand) { display: none; }
 .term-side { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
 .term-side.focused { border-top: 2px solid var(--accent); } /* arus motif */
 .term-side.focused .term-host { padding-top: 6px; } /* kompensasi 2px underline */
+/* U-D2 Dusk §13.3: divider 4px col-resize + center grip (prototype) */
 .term-divider {
   flex: 0 0 4px;
   width: 4px;
   background: var(--border);
   cursor: col-resize;
+  display: grid; place-items: center;
+}
+.term-divider::after {
+  content: ""; width: 2px; height: 22px; border-radius: 2px;
+  background: repeating-linear-gradient(to bottom, var(--faint) 0 2px, transparent 2px 5px);
 }
 .term-divider:hover, .term-divider.dragging { background: var(--accent); }
 
-/* status bar global (§4.3, G1): selalu tampil, 24px --bar-h, bg --bg2 */
+/* status bar global (§4.3, G1 / FR-SH8): selalu tampil, 24px --bar-h, mono 11px */
 #status-bar {
   flex: 0 0 var(--bar-h);
   height: var(--bar-h);
@@ -268,12 +288,14 @@ body.sb-collapsed #sidebar > :not(#btn-expand) { display: none; }
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 0 12px;
-  font-size: 12px;
+  padding: 0 13px;
+  font-family: var(--font-mono);
+  font-size: 11px;
   color: var(--dim);
 }
-#status-bar .sb-right { margin-left: auto; display: inline-flex; gap: 16px; align-items: center; }
-#sb-left, #sb-xfer, #sb-ver { font-family: var(--font-mono); font-size: 11px; }
+#status-bar .sb-right { margin-left: auto; display: inline-flex; gap: 16px; align-items: center; color: var(--faint); }
+#sb-left { color: var(--dim); }
+#sb-left .sb-host { color: var(--text); }
 .tab.drop-target { outline: 2px dashed var(--accent); outline-offset: -2px; }
 .tab.dragging { opacity: 0.5; }
 /* split drop-zone: statik di ujung kanan tab bar, menyala saat tab didrag (§4.2) */
@@ -330,10 +352,10 @@ body.sb-collapsed #sidebar > :not(#btn-expand) { display: none; }
   animation: sweep 1.2s ease-in-out infinite alternate;
 }
 @keyframes sweep { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+/* U-D2 FR-DT4/NFR-DK5: reduced-motion kills ALL animation+transition
+   (shimmer skeleton, cursor blink, row-actions fade, spinner, xfer sweep) */
 @media (prefers-reduced-motion: reduce) {
-  .spinner { animation: none; }
-  .xfer-bar.on::before { animation: none; }
-  .xf-row { transition: none; }
+  *, *::before, *::after { animation: none !important; transition: none !important; }
 }
 
 /* sftp browser */
