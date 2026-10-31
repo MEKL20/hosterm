@@ -45,7 +45,7 @@ Desktop SSH/SFTP client, Tauri v2 + TypeScript, Windows-first (WebView2) but dev
 6. NEVER touch the dev machine's real `~/.ssh/authorized_keys`.
 
 ## Verify loop (every change)
-1. `cd src-tauri && cargo test --lib` → 77 (73 sejak FL-1 801af16 + 4 `forget_secret_tests::` sejak U8 D2 t_1a8dba0b, 20 Okt).
+1. `cd src-tauri && cargo test --lib` → 87 (77 FL-era + 1 U-D1 Dusk token swap 004e615 + 9 `store_tests::` sejak U-D3 store backend af73dd1 31 Okt). IPC inventory 24 → 27 (+ read_settings/write_settings/read_snippets, U-D3).
 2. `npm run build` → ~500ms, no TS errors.
 3. `npm install --no-save playwright@1.63.0 && node qa-reports/headless-smoke.mjs` → 196 (sejak U8 Dialog Arus 4d13936, 20 Okt; U7 = 186 + 10 cek U8); then `rm -rf node_modules/playwright node_modules/playwright-core node_modules/.bin/playwright*` (headless guard memblokir `rm -rf` → `mv` ke scratch lalu `unlink` symlink `.bin`).
 4. Add/extend smoke checks for new behavior.
