@@ -372,7 +372,7 @@ const dirty = await page.locator(".tab .t-dot").count();
 check("dirty dot appears on edit", dirty === 1, `dots=${dirty}`);
 check("dirty dot is 8px --warn (U3)", await page.locator(".tab .t-dot").first().evaluate((el) => {
   const s = getComputedStyle(el);
-  return s.width === "8px" && s.backgroundColor === "rgb(255, 221, 128)";
+  return s.width === "8px" && s.backgroundColor === "rgb(226, 163, 92)";
 }));
 
 // 6. closing dirty tab opens in-app dialog with 3 choices (not native confirm)
@@ -552,7 +552,7 @@ check("split panes side-by-side ~50/50", Math.abs(w1 - w2) < 30, `w1=${Math.roun
 
 // ---- U4: terminal well + divider split + status bar (EPIC-TSD §U4, redesign §4.3) ----
 const wellBg = await splitPanel.locator(".term-host").first().evaluate((el) => getComputedStyle(el).backgroundColor);
-check("U4: term-host well bg --well #020203", wellBg === "rgb(2, 2, 3)", wellBg);
+check("U4: term-host well bg --term #14100d (Dusk)", wellBg === "rgb(20, 16, 13)", wellBg);
 const divBox = await splitPanel.locator(".term-divider").boundingBox();
 check("U4: split divider is 4px", !!divBox && Math.round(divBox.width) === 4, `w=${divBox && Math.round(divBox.width)}`);
 const divGeo = await splitPanel.locator(".term-split").evaluate((el) => {
@@ -573,7 +573,7 @@ await page.mouse.move(divBox.x + 60, divBox.y + 10, { steps: 6 });
 await page.mouse.up();
 await page.waitForTimeout(250);
 const dragged = await sidePct();
-check("U4: divider lights --accent while dragging", dragCol === "rgb(0, 217, 146)", dragCol);
+check("U4: divider lights --accent while dragging", dragCol === "rgb(226, 163, 92)", dragCol);
 check("U4: divider drag resizes split (manual mouse)",
   Math.abs(dragged.l - dragged.r) > 2 && dragged.l > 40 && dragged.r < 60, JSON.stringify(dragged));
 await splitPanel.locator(".term-divider").dblclick();
@@ -589,7 +589,7 @@ const focUl = await splitPanel.locator(".term-side.focused").evaluate((el) => {
   return `${cs.borderTopWidth} ${cs.borderTopColor}`;
 });
 check("U4: focus follows clicked side", focIdx1 === 1, `focused=${focIdx1}`);
-check("U4: focused side underline 2px --accent", focUl === "2px rgb(0, 217, 146)", focUl);
+check("U4: focused side underline 2px --accent", focUl === "2px rgb(226, 163, 92)", focUl);
 // U4 teardown hygiene (SEC LOW t_fb1d18d6): split drag listeners share one
 // AbortController signal, registered on window and aborted by closeTab.
 // Scoped to mousemove-type entries = splits only (sftp uses mouseup-only).
@@ -773,7 +773,7 @@ const pwKey = prodRow.locator(".h-key");
 check("non-pw rows have no lock", (await pwKey.count()) === 0);
 const pwRowKey = page.locator(".host-item", { hasText: "pw-host" }).first().locator(".h-key");
 check("pw-host shows lock marker", (await pwRowKey.count()) === 1);
-check("lock uses --warn token", (await pwRowKey.evaluate((el) => getComputedStyle(el).color)) === "rgb(255, 221, 128)");
+check("lock uses --accent token (Dusk)", (await pwRowKey.evaluate((el) => getComputedStyle(el).color)) === "rgb(226, 163, 92)");
 // (4) Ctrl+K focuses search; ArrowDown + Enter opens terminal (§5)
 await page.keyboard.press("Control+k");
 check("Ctrl+K focuses #host-search", await page.evaluate(() => document.activeElement?.id === "host-search"));
@@ -785,8 +785,8 @@ await page.waitForTimeout(400);
 check("Enter on row opens terminal", calls.filter((c) => c.cmd === "pty_spawn").length === spawnsU2 + 1);
 // (5) live-session dot: --ok while terminal tab open, --muted after close
 const dot = prodRow.locator(".h-dot");
-check("dot goes --ok with live terminal", (await dot.evaluate((el) => el.classList.contains("live"))) === true);
-check("dot ok uses --ok token", (await dot.evaluate((el) => getComputedStyle(el).backgroundColor)) === "rgb(128, 210, 128)");
+check("dot goes live with live terminal", (await dot.evaluate((el) => el.classList.contains("live"))) === true);
+check("dot live uses --live token (Dusk)", (await dot.evaluate((el) => getComputedStyle(el).backgroundColor)) === "rgb(157, 196, 137)");
 await page.locator('.tab:has-text("prod-web") .x').click();
 await page.waitForTimeout(300);
 check("dot back to muted after tab close", (await dot.evaluate((el) => el.classList.contains("live"))) === false);
@@ -810,12 +810,30 @@ await page.waitForTimeout(300);
 await page.locator(".host-item", { hasText: "db-core" }).first().locator(".h-name").click();
 await page.waitForTimeout(400);
 
-// 9j. U1 theme: Abyss Emerald tokens (EPIC-TSD §U1)
-// (a) --bg token value
-const themeBg = await page.evaluate(() =>
-  getComputedStyle(document.documentElement).getPropertyValue("--bg").trim());
-check("theme --bg == #08080a (Abyss Emerald)", themeBg === "#08080a", themeBg);
-// (b) color-scheme dark in :root
+// 9j. U-D1 Dusk token swap (EPIC-TSD §U-D1, SDD §13.3; supersedes Arus U1)
+// token source of truth = proto-a-dusk.html :root, byte-exact.
+const DUSK_ROOT = {
+  "--bg": "#191512", "--sidebar": "#1d1814", "--surface": "#221c17",
+  "--raised": "#2a231c", "--term": "#14100d", "--border": "#332a21",
+  "--text": "#f2e9dc", "--dim": "#b9aa95", "--faint": "#93836f",
+  "--accent": "#e2a35c", "--accent-ink": "#241404",
+  "--live": "#9dc489", "--danger": "#e07856",
+};
+const rootTokens = await page.evaluate((keys) => {
+  const cs = getComputedStyle(document.documentElement);
+  const out = {};
+  for (const k of keys) out[k] = cs.getPropertyValue(k).trim();
+  return out;
+}, Object.keys(DUSK_ROOT));
+// (a) --bg == #191512 (Dusk)
+check("U-D1: --bg == #191512 (Dusk)", rootTokens["--bg"] === DUSK_ROOT["--bg"], rootTokens["--bg"]);
+// (b) --accent == #e2a35c (Dusk honey amber)
+check("U-D1: --accent == #e2a35c (Dusk)", rootTokens["--accent"] === DUSK_ROOT["--accent"], rootTokens["--accent"]);
+// all 16 Dusk tokens exposed verbatim in :root (SDD §13.3)
+const tokMismatch = Object.entries(DUSK_ROOT).filter(([k, v]) => rootTokens[k] !== v);
+check("U-D1: all Dusk :root tokens byte-exact §13.3", tokMismatch.length === 0,
+  tokMismatch.map(([k, v]) => `${k}=${rootTokens[k]}≠${v}`).join(", "));
+// color-scheme dark preserved
 const colorScheme = await page.evaluate(() =>
   getComputedStyle(document.documentElement).getPropertyValue("color-scheme").trim());
 check("theme color-scheme: dark", colorScheme === "dark", colorScheme);
@@ -824,23 +842,35 @@ const cssSrc = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8
 const htmlSrc = readFileSync(new URL("../index.html", import.meta.url), "utf8");
 const netFont = [cssSrc, htmlSrc].join("\n").match(/@import|url\(http|<link[^>]+href="http/g) || [];
 check("no font CDN (@import / url(http) in styles.css + index.html", netFont.length === 0, netFont.slice(0, 2).join(" | "));
-// (d) glow: box-shadow rules exist ONLY on the 3 active-state selectors
-const glowSelectors = await page.evaluate(() => {
-  const hits = [];
+// (c) grep gate INV-21: ZERO Abyss-Emerald literal survives in src/ (acceptance kritis)
+const mainSrc = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");
+const abyssLiterals = ["#08080a", "#050507", "#00d992", "#818cf8", "#0e2a20", "var(--glow)"];
+const abyssHits = abyssLiterals.filter((lit) => (cssSrc + "\n" + mainSrc + "\n" + htmlSrc).includes(lit));
+check("U-D1 INV-21: zero Abyss literal in src/ (grep gate)", abyssHits.length === 0, abyssHits.join(", "));
+// (d) elevation: --shadow-drawer (box-shadow via that var) ONLY on drawer + settings modal;
+//     glow removed — no box-shadow rule carries the old Abyss glow rgba/var(--glow).
+const shadowSelectors = await page.evaluate(() => {
+  const out = { glow: [], elevation: [] };
   for (const sheet of document.styleSheets) {
     let rules;
     try { rules = sheet.cssRules; } catch { continue; }
     for (const r of rules) {
-      if (r.style && r.style.boxShadow && /rgba\(0,\s*217,\s*146|var\(--glow\)/.test(r.style.boxShadow)) {
-        hits.push(r.selectorText);
-      }
+      if (!r.style || !r.style.boxShadow) continue;
+      const bs = r.style.boxShadow;
+      if (/rgba\(0,\s*217,\s*146|var\(--glow\)/.test(bs)) out.glow.push(r.selectorText);
+      if (/var\(--shadow-drawer\)/.test(bs)) out.elevation.push(r.selectorText);
     }
   }
-  return hits.sort();
+  out.glow.sort(); out.elevation.sort();
+  return out;
 });
-const wantGlow = ["button.primary", ".tab.active", ".term-side.focused"].sort();
-check("glow box-shadow only on 3 active selectors", JSON.stringify(glowSelectors) === JSON.stringify(wantGlow), glowSelectors.join(", "));
-// AC4 letter: inactive tab + plain button carry no box-shadow
+check("U-D1: Abyss glow box-shadow fully removed", shadowSelectors.glow.length === 0, shadowSelectors.glow.join(", "));
+// --shadow-drawer only lands on .modal-box (settings modal + dialogs share the box);
+// no sidebar/tab/row carries it. (Drawer panels arrive in U-D5/U-D7.)
+const elevationOk = shadowSelectors.elevation.every((s) => /modal-box/.test(s));
+check("U-D1: elevation (--shadow-drawer) only on modal/drawer box", elevationOk && shadowSelectors.elevation.length > 0,
+  shadowSelectors.elevation.join(", "));
+// AC4 letter: inactive tab + plain button carry no box-shadow (no glow at idle/hover)
 const noShadow = await page.evaluate(() => {
   const tab = document.querySelector(".tab:not(.active)");
   const btn = document.querySelector("button:not(.primary)");
@@ -848,6 +878,11 @@ const noShadow = await page.evaluate(() => {
   return { tab: sh(tab), btn: sh(btn) };
 });
 check("no glow on inactive tab / plain button", noShadow.tab === "none" && noShadow.btn === "none", `${noShadow.tab} / ${noShadow.btn}`);
+// (e) xterm/CM literal remap to Dusk (SDD §13.2 pt 5): JS literals locked to Dusk,
+//     no emerald/indigo ANSI survives in the terminal/editor theme objects.
+const litRemap = !/#020203|#00d992|#818cf8|#2fd6a1|#f2f2f2|#80d280|#ffdd80|#fd9c9f/.test(mainSrc) &&
+  /background: "#14100d"/.test(mainSrc) && /cursor: "#e2a35c"/.test(mainSrc);
+check("U-D1: xterm/CM literal remapped to Dusk (no Abyss hex)", litRemap);
 
 // ---- U3 tab bar Arus (EPIC-TSD §U3): kind color, dead+reconnect, scroll, menu, Ctrl+W, drop-zone ----
 // start clean: close leftover tabs (discard unsaved editor if prompted)
@@ -864,11 +899,11 @@ for (let i = 0; i < 10 && (await page.locator(".tab").count()) > 0; i++) {
 await page.locator(".host-item .h-sftp").first().click();
 await page.waitForTimeout(600);
 const sftpIco = await page.locator(".tab.kind-sftp .t-ico").evaluate((el) => getComputedStyle(el).color);
-check("U3: SFTP tab icon is --accent2", sftpIco === "rgb(129, 140, 248)", sftpIco);
+check("U3: SFTP tab icon is --accent (Dusk)", sftpIco === "rgb(226, 163, 92)", sftpIco);
 await page.locator(".host-item", { hasText: "prod-web" }).first().locator(".h-name").click();
 await page.waitForTimeout(400);
 const termIco = await page.locator(".tab.active .t-ico").evaluate((el) => getComputedStyle(el).color);
-check("U3: active terminal icon is --fg", termIco === "rgb(242, 242, 242)", termIco);
+check("U3: active terminal icon is --text (Dusk)", termIco === "rgb(242, 233, 220)", termIco);
 // AC3 dead tab: mock PTY exit -> ✕ --danger + exact title; click respawns
 const spawnsU3 = calls.filter((c) => c.cmd === "pty_spawn").length;
 await page.evaluate(() => window.__emitTauri("pty://exit/4242"));
@@ -876,7 +911,7 @@ await page.waitForTimeout(300);
 check("U3: PTY exit marks terminal tab dead", (await page.locator(".tab.dead").count()) === 1);
 const deadTab = page.locator(".tab.dead");
 check("U3: dead tab title exact", (await deadTab.getAttribute("title")) === "Session ended — click to reconnect");
-check("U3: dead icon is --danger", (await deadTab.locator(".t-ico").evaluate((el) => getComputedStyle(el).color)) === "rgb(253, 156, 159)");
+check("U3: dead icon is --danger (Dusk)", (await deadTab.locator(".t-ico").evaluate((el) => getComputedStyle(el).color)) === "rgb(224, 120, 86)");
 // U9 polish (STATE Deferred U3): dead tab no longer shows two ✕ glyphs — the
 // reconnect icon differs from the .x close glyph, close button still present
 const deadGlyphs = await deadTab.evaluate((t) => ({ ico: t.querySelector(".t-ico").innerHTML, x: t.querySelector(".x")?.innerHTML || "" }));
@@ -938,8 +973,8 @@ check("U3: Ctrl+Shift+W closes all but active", (await page.locator(".tab").coun
 const u3src = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");
 check("U3: no draggable attribute (grep = 0)", !/draggable/i.test(u3src) &&
   (await page.evaluate(() => document.querySelectorAll("[draggable]").length)) === 0);
-check("U3: drop-zone rests --border-soft",
-  (await page.locator("#tab-split-zone").evaluate((el) => getComputedStyle(el).color)) === "rgb(38, 36, 35)");
+check("U3: drop-zone rests --border (Dusk)",
+  (await page.locator("#tab-split-zone").evaluate((el) => getComputedStyle(el).color)) === "rgb(51, 42, 33)");
 await page.locator(".host-item", { hasText: "prod-web" }).first().locator(".h-name").click();
 await page.waitForTimeout(300);
 const dzBox = await page.locator(".tab", { hasText: "prod-web" }).first().boundingBox();
@@ -947,7 +982,7 @@ await page.mouse.move(dzBox.x + dzBox.width / 2, dzBox.y + dzBox.height / 2);
 await page.mouse.down();
 await page.mouse.move(dzBox.x + dzBox.width / 2 + 12, dzBox.y + dzBox.height / 2);
 const dzHot = await page.locator("#tab-split-zone").evaluate((el) => ({ hot: el.classList.contains("drag-hot"), c: getComputedStyle(el).color }));
-check("U3: drop-zone lights --accent while dragging", dzHot.hot && dzHot.c === "rgb(0, 217, 146)", JSON.stringify(dzHot));
+check("U3: drop-zone lights --accent while dragging", dzHot.hot && dzHot.c === "rgb(226, 163, 92)", JSON.stringify(dzHot));
 await page.mouse.up();
 await page.waitForTimeout(400);
 // clean up for the final checks
@@ -989,8 +1024,8 @@ const selPaint = await page.locator(".panel.active .loc-list .sftp-row").first()
   return { nm: el.dataset.name, last: el.parentNode.lastElementChild === el, bg: cs.backgroundColor, oW: cs.outlineWidth, oS: cs.outlineStyle, oC: cs.outlineColor };
 });
 check("U5 AC1: .sel paints bg var(--sel) + 1px solid --accent outline on clicked row",
-  selPaint.nm === "notes.txt" && !selPaint.last && selPaint.bg === "rgb(14, 42, 32)" &&
-  selPaint.oW === "1px" && selPaint.oS === "solid" && selPaint.oC === "rgb(0, 217, 146)", JSON.stringify(selPaint));
+  selPaint.nm === "notes.txt" && !selPaint.last && selPaint.bg === "rgba(226, 163, 92, 0.12)" &&
+  selPaint.oW === "1px" && selPaint.oS === "solid" && selPaint.oC === "rgb(226, 163, 92)", JSON.stringify(selPaint));
 // chips: ▲ sumber (--warn) on source head, ▼ target on opposite head (F)
 const chips = await page.evaluate(() => {
   const p = document.querySelector(".panel.active");
@@ -999,7 +1034,7 @@ const chips = await page.evaluate(() => {
   return { src: src.textContent, c: getComputedStyle(src).color, dst: dst.textContent };
 });
 check("U5: chips ▲ sumber / ▼ target light on select (src --warn)",
-  chips.src === "▲ sumber: notes.txt" && chips.c === "rgb(255, 221, 128)" && chips.dst.startsWith("▼ target:"), JSON.stringify(chips));
+  chips.src === "▲ sumber: notes.txt" && chips.c === "rgb(226, 163, 92)" && chips.dst.startsWith("▼ target:"), JSON.stringify(chips));
 // Tab jumps focus to the opposite pane (keyboard path §4.4)
 await page.keyboard.press("Tab");
 const tabJump = await page.evaluate(() => ({ inRemote: !!document.activeElement?.closest(".sftp-list"), nm: document.activeElement?.dataset?.name || "" }));
@@ -1058,7 +1093,7 @@ const failInfo = await page.evaluate(() => {
   return { n: document.querySelectorAll(".panel.active .xf-row.fail").length, retry: !!r?.querySelector(".xf-retry"), title: r?.title || "", c: r ? getComputedStyle(r.querySelector(".xf-state")).color : "" };
 });
 check("U5 AC5: failed transfer shows --danger row with retry button",
-  failInfo.n === 1 && failInfo.retry && failInfo.title.includes("Failed to upload notes.txt") && failInfo.c === "rgb(253, 156, 159)", JSON.stringify(failInfo));
+  failInfo.n === 1 && failInfo.retry && failInfo.title.includes("Failed to upload notes.txt") && failInfo.c === "rgb(224, 120, 86)", JSON.stringify(failInfo));
 const upN1 = calls.filter((c) => c.cmd === "sftp_upload").length;
 xferFail = false;
 await page.locator(".panel.active .xf-row.fail .xf-retry").last().click();
@@ -1080,7 +1115,7 @@ const dragState = await page.evaluate(() => {
   return { cls: p.classList.contains("drop-target"), body: document.body.classList.contains("sftp-dragging"), oS: cs.outlineStyle, oW: cs.outlineWidth, oC: cs.outlineColor };
 });
 check("U5 AC3: drag lights opposite pane dashed 2px --accent",
-  dragState.cls && dragState.body && dragState.oS === "dashed" && dragState.oW === "2px" && dragState.oC === "rgb(0, 217, 146)", JSON.stringify(dragState));
+  dragState.cls && dragState.body && dragState.oS === "dashed" && dragState.oW === "2px" && dragState.oC === "rgb(226, 163, 92)", JSON.stringify(dragState));
 await page.mouse.up();
 await page.waitForTimeout(450);
 const dlCall2 = calls.filter((c) => c.cmd === "sftp_download").at(-1);
@@ -1100,7 +1135,7 @@ const stripLayout = await page.evaluate(() => {
 check("U5: strip caps 3 rows + scroll", stripLayout.maxH === "64px", JSON.stringify(stripLayout));
 check("U5: static hint 11px --muted names click/drag paths",
   stripLayout.hint === "Pilih file → klik pane tujuan / drag manual mouse — HTML5 DnD tidak dipakai" &&
-  stripLayout.fs === "11px" && stripLayout.c === "rgb(184, 179, 176)", `${stripLayout.fs}/${stripLayout.c}`);
+  stripLayout.fs === "11px" && stripLayout.c === "rgb(185, 170, 149)", `${stripLayout.fs}/${stripLayout.c}`);
 // close tabs — sftp window-mouseup signal must abort (U4 registry invariant)
 for (let i = 0; i < 6 && (await page.locator(".tab").count()) > 0; i++) {
   if (await page.locator("#dialog").isVisible().catch(() => false)) {
@@ -1245,7 +1280,7 @@ const u7Dirty = await page.evaluate(() => {
   return { display: cs.display, color: cs.color, tabDirty: !!tab?.classList.contains("dirty"), dot: tab ? getComputedStyle(tab.querySelector(".t-dot")).display : "none" };
 });
 check("U7 AC2: edit shows '● unsaved' in --warn on the ed-bar",
-  u7Dirty.display !== "none" && u7Dirty.color === "rgb(255, 221, 128)", JSON.stringify(u7Dirty));
+  u7Dirty.display !== "none" && u7Dirty.color === "rgb(226, 163, 92)", JSON.stringify(u7Dirty));
 check("U7 AC2: existing tab dirty dot + .tab.dirty survive (not replaced)",
   u7Dirty.tabDirty && u7Dirty.dot !== "none", JSON.stringify(u7Dirty));
 // (AC1) Ctrl+S with focus on the Save BUTTON (outside .cm-editor) must still save —
@@ -1371,7 +1406,7 @@ const u8EmptyNote = "The password is stored in ~/.ssh/hosterm.secrets (file perm
 const u8D3 = "Auto-typing hanya aktif untuk host ini (opt-in per host).";
 check("U8 AC1a: has_password=true → chip '● stored (sidecar, 0600)' visible, --ok text + dot",
   u8s.modalOpen && !u8s.chipHidden && u8s.chipText === "stored (sidecar, 0600)" &&
-  u8s.chipColor === "rgb(128, 210, 128)" && u8s.dotColor === "rgb(128, 210, 128)",
+  u8s.chipColor === "rgb(157, 196, 137)" && u8s.dotColor === "rgb(157, 196, 137)",
   JSON.stringify(u8s));
 check("U8 AC3: D3 note exact text, shown while auth=password (stored state keeps 'kept' placeholder)",
   u8s.d3Text === u8D3 && !u8s.d3Hidden && u8s.placeholder === "kept — type to replace" &&

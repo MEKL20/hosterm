@@ -40,33 +40,37 @@ const ICONS = {
   dots: svg('<circle cx="3.5" cy="8" r="1"/><circle cx="8" cy="8" r="1"/><circle cx="12.5" cy="8" r="1"/>'),
 };
 
+// CodeMirror theme — structural rules read Dusk CSS vars; cmHighlight token
+// colors are JS-literal hex (CSS vars can't reach them), locked to Dusk values
+// (SDD §13.2 pt 5): keyword/function=--accent, string=--live, comment=--faint,
+// text=--text, type/property=cyan accent, number/operator warm neutrals.
 const cmTheme = EditorView.theme({
-  "&": { color: "var(--fg)", backgroundColor: "var(--bg)" },
-  ".cm-content": { fontFamily: FONT_MONO, fontSize: "13px", caretColor: "var(--accent2)" },
+  "&": { color: "var(--text)", backgroundColor: "var(--bg)" },
+  ".cm-content": { fontFamily: FONT_MONO, fontSize: "13px", caretColor: "var(--accent)" },
   "&.cm-focused": { outline: "none" },
-  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--accent2)" },
+  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--accent)" },
   ".cm-gutters": {
-    backgroundColor: "var(--bg2)",
-    color: "var(--muted)",
-    borderRight: "1px solid var(--border-soft)",
+    backgroundColor: "var(--sidebar)",
+    color: "var(--dim)",
+    borderRight: "1px solid var(--border)",
   },
-  ".cm-activeLine": { backgroundColor: "var(--panel)" },
-  ".cm-activeLineGutter": { backgroundColor: "var(--panel)", color: "var(--fg)" },
-  ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": { backgroundColor: "var(--sel)" },
-  ".cm-matchingBracket": { outline: "1px solid var(--accent2)", backgroundColor: "transparent" },
+  ".cm-activeLine": { backgroundColor: "var(--surface)" },
+  ".cm-activeLineGutter": { backgroundColor: "var(--surface)", color: "var(--text)" },
+  ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": { backgroundColor: "var(--accent-soft)" },
+  ".cm-matchingBracket": { outline: "1px solid var(--accent)", backgroundColor: "transparent" },
 }, { dark: true });
 
 const cmHighlight = HighlightStyle.define([
-  { tag: t.keyword, color: "#818cf8" },
-  { tag: t.string, color: "#80d280" },
-  { tag: t.number, color: "#ffb86c" },
-  { tag: t.comment, color: "#7d7873" },
-  { tag: t.variableName, color: "#f2f2f2" },
-  { tag: [t.function(t.variableName)], color: "#818cf8" },
-  { tag: t.typeName, color: "#2fd6a1" },
-  { tag: t.propertyName, color: "#2fd6a1" },
-  { tag: t.operator, color: "#b8b3b0" },
-  { tag: t.punctuation, color: "#b8b3b0" },
+  { tag: t.keyword, color: "#e2a35c" },
+  { tag: t.string, color: "#9dc489" },
+  { tag: t.number, color: "#e0a96d" },
+  { tag: t.comment, color: "#93836f" },
+  { tag: t.variableName, color: "#f2e9dc" },
+  { tag: [t.function(t.variableName)], color: "#e2a35c" },
+  { tag: t.typeName, color: "#8fc4b8" },
+  { tag: t.propertyName, color: "#8fc4b8" },
+  { tag: t.operator, color: "#b9aa95" },
+  { tag: t.punctuation, color: "#b9aa95" },
 ]);
 
 // ---------- state ----------
@@ -1653,33 +1657,37 @@ function openTabIds(): number[] {
 
 // ---------- terminals ----------
 // shared xterm theme (primary + split terminals)
-// Abyss Emerald ANSI remap (redesign §6.5); literals — xterm canvas can't read CSS vars
+// Dusk ANSI remap (SDD §13.2 pt 5 / §13.3) — these are JS literals the xterm
+// canvas can't read from CSS vars, so they are LOCKED to Dusk values only;
+// presets do NOT repaint the terminal (documented limitation, not a bug).
+// bg=--term, fg=--text, cursor=--accent; ANSI derived from the Dusk palette
+// (green=--live sage, red=--danger terracotta, yellow=--accent honey).
 const TERMINAL_THEME = {
-  background: "#020203",
-  foreground: "#f2f2f2",
-  cursor: "#00d992",
-  cursorAccent: "#020203",
-  selectionBackground: "#0e2a20",
-  selectionForeground: "#f2f2f2",
-  selectionInactiveBackground: "#0e2a20",
-  // scrollbar sliders are not settable in xterm 5.5's ITheme; --border-soft /
-  // --border / --accent apply when the addon support lands
-  black: "#262423",
-  red: "#fd9c9f",
-  green: "#80d280",
-  yellow: "#ffdd80",
-  blue: "#818cf8",
-  magenta: "#2fd6a1",
-  cyan: "#00d992",
-  white: "#b8b3b0",
-  brightBlack: "#7d7873",
-  brightRed: "#fd9c9f",
-  brightGreen: "#80d280",
-  brightYellow: "#ffdd80",
-  brightBlue: "#818cf8",
-  brightMagenta: "#2fd6a1",
-  brightCyan: "#00d992",
-  brightWhite: "#f2f2f2",
+  background: "#14100d",
+  foreground: "#f2e9dc",
+  cursor: "#e2a35c",
+  cursorAccent: "#14100d",
+  selectionBackground: "rgba(226,163,92,.18)",
+  selectionForeground: "#f2e9dc",
+  selectionInactiveBackground: "rgba(226,163,92,.12)",
+  // scrollbar sliders are not settable in xterm 5.5's ITheme; --border /
+  // --accent apply when the addon support lands
+  black: "#2a231c",
+  red: "#e07856",
+  green: "#9dc489",
+  yellow: "#e2a35c",
+  blue: "#8fb3c9",
+  magenta: "#c99bb3",
+  cyan: "#8fc4b8",
+  white: "#b9aa95",
+  brightBlack: "#93836f",
+  brightRed: "#e07856",
+  brightGreen: "#9dc489",
+  brightYellow: "#e2a35c",
+  brightBlue: "#8fb3c9",
+  brightMagenta: "#c99bb3",
+  brightCyan: "#8fc4b8",
+  brightWhite: "#f2e9dc",
 };
 
 
