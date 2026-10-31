@@ -38,13 +38,45 @@
       </aside>
 
       <main id="main">
-        <div id="tabs" role="tablist">
-          <div id="tab-split-zone" title="Split terminal — tarik tab ke tab lain (drag manual mouse)" aria-hidden="true">
-            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><line x1="8" y1="2.5" x2="8" y2="13.5"/></svg>
-            split
+        <div id="tabbar">
+          <div id="tabs" role="tablist">
+            <div id="tab-split-zone" title="Split terminal — tarik tab ke tab lain (drag manual mouse)" aria-hidden="true">
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><line x1="8" y1="2.5" x2="8" y2="13.5"/></svg>
+              split
+            </div>
+          </div>
+          <div class="mode-switch" role="group" aria-label="Side panels">
+            <button id="mode-terminal" class="mode-btn" data-panel="terminal" aria-pressed="true">
+              <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><polyline points="4,6 6,8 4,10"/><line x1="8" y1="10" x2="11" y2="10"/></svg>
+              Terminal
+            </button>
+            <button id="mode-snippets" class="mode-btn" data-panel="snippets" aria-pressed="false" aria-controls="snippet-drawer" aria-expanded="false">
+              <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M5.5 2.5c-1.5 0-2 1-2 2.25S3.25 7 2 8c1.25 1 1.5 2 1.5 3.25s.5 2.25 2 2.25"/><path d="M10.5 2.5c1.5 0 2 1 2 2.25S12.75 7 14 8c-1.25 1-1.5 2-1.5 3.25s-.5 2.25-2 2.25"/></svg>
+              Snippets
+            </button>
           </div>
         </div>
-        <div id="panels"></div>
+        <div id="workbench">
+          <div id="panels"></div>
+          <aside id="snippet-drawer" class="drawer drawer-snippets" aria-label="Command snippets" hidden>
+            <header class="drawer-head">
+              <h2>Snippets</h2>
+              <span id="snippet-count" class="head-count" aria-live="polite">0</span>
+              <button id="snippet-close" class="icon drawer-close" aria-label="Close snippets panel" title="Close panel">
+                <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M3 3l10 10M13 3 3 13"/></svg>
+              </button>
+            </header>
+            <div class="snip-filter">
+              <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/></svg>
+              <input id="snippet-filter" type="search" placeholder="Filter snippets" aria-label="Filter snippets" />
+              <kbd>/</kbd>
+            </div>
+            <div class="snip-groups">
+              <div id="snippet-list"></div>
+              <div id="snippet-empty" class="snip-empty" role="status" aria-live="polite" hidden></div>
+            </div>
+          </aside>
+        </div>
         <div id="status-bar" aria-live="off">
           <span id="sb-left"></span>
           <span class="sb-right">

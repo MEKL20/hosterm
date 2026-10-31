@@ -64,6 +64,14 @@ const HOSTILE_ENTRIES = [
   { name: "\"><svg onload=window.__pwn=2>", is_dir: true, is_link: false, size: 0 },
   { name: "&amp;<b>x</b>", is_dir: false, is_link: true, size: 2 },
 ];
+const sampleSnippets = [
+  { category: "Docker", items: [
+    { name: "Prune everything", command: "docker system prune -af" },
+    { name: "Tail container logs", command: "docker logs -f --tail 100 api" },
+  ] },
+  { category: "Git", items: [{ name: "Status (short)", command: "git status -sb" }] },
+  { category: "systemd", items: [{ name: HOSTILE, command: HOSTILE }] },
+];
 // W2-A startup ssh/sftp check state (AC-A1.5); read by the check_binaries case
 let binCheckState = { ssh_missing: false, sftp_missing: false };
 let storedSettings = {
@@ -85,6 +93,7 @@ const invoke = (cmd, args = {}) => {
     }
     case "check_binaries": return Promise.resolve({ ...binCheckState });
     case "read_settings": return Promise.resolve(JSON.parse(JSON.stringify(storedSettings)));
+    case "read_snippets": return Promise.resolve(JSON.parse(JSON.stringify(sampleSnippets)));
     case "write_settings": {
       storedSettings = JSON.parse(JSON.stringify(args.settings));
       return Promise.resolve(null);
@@ -885,7 +894,7 @@ const shadowSelectors = await page.evaluate(() => {
 });
 check("U-D1: Abyss glow box-shadow fully removed", shadowSelectors.glow.length === 0, shadowSelectors.glow.join(", "));
 // --shadow-drawer only lands on modal/drawer surfaces; no sidebar/tab/row carries it.
-const elevationOk = shadowSelectors.elevation.every((s) => /modal-box|\.settings\b/.test(s));
+const elevationOk = shadowSelectors.elevation.every((s) => /modal-box|\.settings\b|\.drawer\b/.test(s));
 check("U-D1: elevation (--shadow-drawer) only on modal/drawer box", elevationOk && shadowSelectors.elevation.length > 0,
   shadowSelectors.elevation.join(", "));
 // AC4 letter: inactive tab + plain button carry no box-shadow (no glow at idle/hover)
@@ -1840,6 +1849,121 @@ await page.locator("#accent-reset").click();
 await page.locator("#settings-done").click();
 await page.waitForTimeout(150);
 // End U-D4 checks.
+
+// U-D5 Snippet panel (FR-SN1..6).
+const snippetReadsBefore = calls.filter((c) => c.cmd === "read_snippets").length;
+await page.locator("#mode-snippets").click();
+await page.locator(".snippet-item").first().waitFor({ timeout: 3000 });
+const snippetMeta = await page.evaluate(() => {
+  const drawer = document.getElementById("snippet-drawer");
+  const command = document.querySelector(".snip-cmd");
+  return {
+    width: Math.round(drawer.getBoundingClientRect().width),
+    label: drawer.getAttribute("aria-label"),
+    open: drawer.classList.contains("open") && !drawer.hidden,
+    snippetsPressed: document.getElementById("mode-snippets").getAttribute("aria-pressed"),
+    terminalPressed: document.getElementById("mode-terminal").getAttribute("aria-pressed"),
+    count: document.getElementById("snippet-count").textContent,
+    groups: [...document.querySelectorAll(".snip-group-label")].map((el) => el.textContent),
+    itemCount: document.querySelectorAll(".snippet-item").length,
+    mono: /mono/i.test(getComputedStyle(command).fontFamily),
+  };
+});
+check("U-D5 FR-SN1: opening 340px Command snippets drawer invokes read_snippets",
+  calls.filter((c) => c.cmd === "read_snippets").length === snippetReadsBefore + 1 &&
+  snippetMeta.width === 340 && snippetMeta.label === "Command snippets" && snippetMeta.open &&
+  snippetMeta.snippetsPressed === "true" && snippetMeta.terminalPressed === "false",
+  JSON.stringify(snippetMeta));
+check("U-D5 FR-SN1/4: grouped uppercase mono items render + head-count tracks visible items",
+  snippetMeta.itemCount === 4 && snippetMeta.count === "4" && snippetMeta.mono &&
+  JSON.stringify(snippetMeta.groups) === JSON.stringify(["DOCKER", "GIT", "SYSTEMD"]),
+  JSON.stringify(snippetMeta));
+
+await page.locator("#snippet-filter").fill("Prune");
+const nameFilter = await page.evaluate(() => ({
+  count: document.getElementById("snippet-count").textContent,
+  names: [...document.querySelectorAll(".snip-name")].map((el) => el.textContent),
+  groups: [...document.querySelectorAll(".snip-group-label")].map((el) => el.textContent),
+}));
+check("U-D5 FR-SN2/4: filter matches snippet name and updates groups/count",
+  nameFilter.count === "1" && JSON.stringify(nameFilter.names) === JSON.stringify(["Prune everything"]) &&
+  JSON.stringify(nameFilter.groups) === JSON.stringify(["DOCKER"]), JSON.stringify(nameFilter));
+
+await page.locator("#snippet-filter").fill("status -sb");
+const commandFilter = await page.evaluate(() => ({
+  count: document.getElementById("snippet-count").textContent,
+  commands: [...document.querySelectorAll(".snip-cmd")].map((el) => el.textContent),
+}));
+check("U-D5 FR-SN2: filter also matches command substring",
+  commandFilter.count === "1" && JSON.stringify(commandFilter.commands) === JSON.stringify(["git status -sb"]),
+  JSON.stringify(commandFilter));
+
+await page.locator("#snippet-filter").fill("no-such-snippet");
+const noSnippet = await page.evaluate(() => ({
+  count: document.getElementById("snippet-count").textContent,
+  items: document.querySelectorAll(".snippet-item").length,
+  groups: document.querySelectorAll(".snip-group-label").length,
+  text: document.getElementById("snippet-empty").textContent,
+  hidden: document.getElementById("snippet-empty").hidden,
+}));
+check("U-D5 FR-SN2: zero match shows exact empty-state copy",
+  noSnippet.count === "0" && noSnippet.items === 0 && noSnippet.groups === 0 && !noSnippet.hidden &&
+  noSnippet.text === 'No snippets match "no-such-snippet"', JSON.stringify(noSnippet));
+
+await page.locator("#snippet-filter").fill("");
+const hostileSnippet = await page.evaluate((hostile) => {
+  const item = [...document.querySelectorAll(".snippet-item")]
+    .find((row) => row.querySelector(".snip-name")?.textContent === hostile);
+  const name = item?.querySelector(".snip-name");
+  const command = item?.querySelector(".snip-cmd");
+  return {
+    nameKids: name?.childElementCount,
+    nameText: name?.textContent,
+    commandKids: command?.childElementCount,
+    commandText: command?.textContent,
+    pwn: typeof window.__pwn,
+    csp: (window.__cspViolations || []).length,
+  };
+}, HOSTILE);
+check("U-D5 FR-SN5: hostile name/command are inert escaped text with CSP 0",
+  hostileSnippet.nameKids === 0 && hostileSnippet.nameText === HOSTILE &&
+  hostileSnippet.commandKids === 0 && hostileSnippet.commandText === HOSTILE &&
+  hostileSnippet.pwn === "undefined" && hostileSnippet.csp === 0,
+  JSON.stringify(hostileSnippet));
+
+await page.locator("#snippet-filter").fill("Prune");
+const copiesBefore = calls.filter((c) => c.cmd === "clipboard_write").length;
+await page.locator(".copy-btn").click();
+await page.waitForFunction(() => document.querySelector(".copy-btn")?.classList.contains("done"));
+const snippetCopyCall = calls.filter((c) => c.cmd === "clipboard_write").at(-1);
+const copiedState = await page.locator(".copy-btn").evaluate((button) => ({
+  done: button.classList.contains("done"),
+  label: button.getAttribute("aria-label"),
+}));
+check("U-D5 FR-SN3: copy invokes clipboard_write and enters done state",
+  calls.filter((c) => c.cmd === "clipboard_write").length === copiesBefore + 1 &&
+  snippetCopyCall?.args?.text === "docker system prune -af" && copiedState.done && copiedState.label === "Copied",
+  JSON.stringify({ snippetCopyCall, copiedState }));
+await page.waitForTimeout(650);
+check("U-D5 FR-SN3: done state remains visible before 900ms reset",
+  await page.locator(".copy-btn").evaluate((button) => button.classList.contains("done")));
+await page.waitForTimeout(350);
+const copyReset = await page.locator(".copy-btn").evaluate((button) => ({
+  done: button.classList.contains("done"),
+  label: button.getAttribute("aria-label"),
+}));
+check("U-D5 FR-SN3: done state resets after about 900ms",
+  !copyReset.done && copyReset.label === "Copy command", JSON.stringify(copyReset));
+
+await page.locator("#snippet-close").click();
+check("U-D5: close returns Terminal mode and restores trigger focus",
+  await page.evaluate(() => {
+    const drawer = document.getElementById("snippet-drawer");
+    return drawer.hidden && !drawer.classList.contains("open") &&
+      document.getElementById("mode-terminal").getAttribute("aria-pressed") === "true" &&
+      document.activeElement?.id === "mode-snippets";
+  }));
+// End U-D5 checks.
 
 // (b) sidebar narrative copy byte-identical (empty / error / no-match) + empty CTA formalized
 const sbState = () => page.evaluate(() => {

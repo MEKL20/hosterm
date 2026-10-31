@@ -33,6 +33,16 @@ interface AppSettings {
   allowlist: AllowEntry[];
 }
 
+interface Snippet {
+  name: string;
+  command: string;
+}
+
+interface SnippetGroup {
+  category: string;
+  items: Snippet[];
+}
+
 // xterm cannot read CSS custom properties; keep this identical to --font-mono in styles.css
 const FONT_MONO = '"JetBrains Mono", "Geist Mono", "Cascadia Code", "SF Mono", ui-monospace, "DejaVu Sans Mono", monospace';
 
@@ -59,6 +69,8 @@ const ICONS = {
   up: svg('<line x1="8" y1="13" x2="8" y2="4"/><polyline points="4.5,7.5 8,4 11.5,7.5"/>'),
   lock: svg('<rect x="3.5" y="7" width="9" height="6.5" rx="1"/><path d="M5.5 7V5.5a2.5 2.5 0 0 1 5 0V7"/>'),
   dots: svg('<circle cx="3.5" cy="8" r="1"/><circle cx="8" cy="8" r="1"/><circle cx="12.5" cy="8" r="1"/>'),
+  copy: svg('<rect x="6" y="6" width="7.5" height="7.5" rx="1"/><path d="M3 10V3.5a1 1 0 0 1 1-1h6.5"/>'),
+  check: svg('<polyline points="3,8 6.5,11.5 13,4.5"/>'),
 };
 
 // CodeMirror theme — structural rules read Dusk CSS vars; cmHighlight token
@@ -113,6 +125,8 @@ let appSettings: AppSettings = { ...DEFAULT_SETTINGS, allowlist: [] };
 let settingsDirty = false;
 let settingsClosing = false;
 let settingsReady: Promise<void> = Promise.resolve();
+let snippetGroups: SnippetGroup[] = [];
+const snippetCopyTimers = new WeakMap<HTMLButtonElement, number>();
 
 interface Session {
   id: number;
@@ -419,6 +433,129 @@ function initSettings() {
     applyAccent(DEFAULT_SETTINGS.accent, true);
   });
   settingsReady = readAndApplySettings();
+}
+
+function fitActiveSessions() {
+  if (activeTab == null) return;
+  for (const session of [sessions.get(activeTab), splitSessions.get(activeTab)]) {
+    if (!session) continue;
+    session.fit.fit();
+    if (session.ptyId != null) {
+      invoke("pty_resize", { id: session.ptyId, cols: session.term.cols, rows: session.term.rows });
+    }
+  }
+}
+
+function setSnippetDrawer(open: boolean) {
+  const drawer = $("#snippet-drawer");
+  drawer.hidden = !open;
+  drawer.classList.toggle("open", open);
+  $("#mode-terminal").setAttribute("aria-pressed", String(!open));
+  $("#mode-snippets").setAttribute("aria-pressed", String(open));
+  $("#mode-snippets").setAttribute("aria-expanded", String(open));
+  setTimeout(fitActiveSessions, 0);
+}
+
+async function copySnippet(button: HTMLButtonElement, command: string) {
+  button.disabled = true;
+  try {
+    await invoke("clipboard_write", { text: command });
+  } catch {
+    button.disabled = false;
+    return;
+  }
+  button.disabled = false;
+  const previous = snippetCopyTimers.get(button);
+  if (previous !== undefined) clearTimeout(previous);
+  button.classList.add("done");
+  button.innerHTML = ICONS.check;
+  button.title = "Copied";
+  button.setAttribute("aria-label", "Copied");
+  const timer = window.setTimeout(() => {
+    button.classList.remove("done");
+    button.innerHTML = ICONS.copy;
+    button.title = "Copy command";
+    button.setAttribute("aria-label", "Copy command");
+    snippetCopyTimers.delete(button);
+  }, 900);
+  snippetCopyTimers.set(button, timer);
+}
+
+function renderSnippets() {
+  const query = ($("#snippet-filter") as HTMLInputElement).value;
+  const needle = query.toLowerCase();
+  const commands: string[] = [];
+  let visibleCount = 0;
+  const markup = snippetGroups.map((group) => {
+    const items = group.items.filter((item) =>
+      item.name.toLowerCase().includes(needle) || item.command.toLowerCase().includes(needle)
+    );
+    if (items.length === 0) return "";
+    visibleCount += items.length;
+    const rows = items.map((item) => {
+      commands.push(item.command);
+      return `<div class="snippet-item">` +
+        `<div class="snip-top"><span class="snip-name">${esc(item.name)}</span>` +
+        `<button class="copy-btn" title="Copy command" aria-label="Copy command">${ICONS.copy}</button></div>` +
+        `<code class="snip-cmd">${esc(item.command)}</code>` +
+        `</div>`;
+    }).join("");
+    return `<div class="snip-group-label">${esc(group.category.toUpperCase())}</div>${rows}`;
+  }).join("");
+
+  $("#snippet-list").innerHTML = markup;
+  $("#snippet-count").textContent = String(visibleCount);
+  const empty = $("#snippet-empty");
+  empty.hidden = visibleCount !== 0;
+  empty.innerHTML = visibleCount !== 0
+    ? ""
+    : query
+      ? `No snippets match "${esc(query)}"`
+      : "No snippets available.";
+  document.querySelectorAll<HTMLButtonElement>("#snippet-list .copy-btn").forEach((button, index) => {
+    const command = commands[index];
+    if (command !== undefined) button.addEventListener("click", () => void copySnippet(button, command));
+  });
+}
+
+async function openSnippetDrawer() {
+  setSnippetDrawer(true);
+  const drawer = $("#snippet-drawer");
+  drawer.setAttribute("aria-busy", "true");
+  $("#snippet-list").innerHTML = "";
+  $("#snippet-count").textContent = "0";
+  const empty = $("#snippet-empty");
+  empty.hidden = false;
+  empty.textContent = "Loading snippets…";
+  ($("#snippet-filter") as HTMLInputElement).focus();
+  try {
+    const loaded = await invoke<SnippetGroup[]>("read_snippets");
+    snippetGroups = Array.isArray(loaded) ? loaded : [];
+    renderSnippets();
+  } catch {
+    snippetGroups = [];
+    empty.hidden = false;
+    empty.textContent = "Could not load snippets. Close the panel and try again.";
+  } finally {
+    drawer.removeAttribute("aria-busy");
+  }
+}
+
+function initSnippets() {
+  $("#mode-snippets").addEventListener("click", () => void openSnippetDrawer());
+  $("#mode-terminal").addEventListener("click", () => setSnippetDrawer(false));
+  $("#snippet-close").addEventListener("click", () => {
+    setSnippetDrawer(false);
+    $("#mode-snippets").focus();
+  });
+  ($("#snippet-filter") as HTMLInputElement).addEventListener("input", renderSnippets);
+  window.addEventListener("keydown", (event) => {
+    if (event.key !== "/" || !$("#snippet-drawer").classList.contains("open")) return;
+    const target = event.target as HTMLElement;
+    if (target.matches("input, textarea, select") || target.isContentEditable) return;
+    event.preventDefault();
+    ($("#snippet-filter") as HTMLInputElement).focus();
+  });
 }
 
 // ---------- startup ssh/sftp check + install guide (FR-W2-1..4) ----------
@@ -2215,16 +2352,7 @@ async function closeTab(tabId: number) {
 }
 
 // resize active terminal with the window
-window.addEventListener("resize", () => {
-  if (activeTab != null) {
-    for (const s of [sessions.get(activeTab), splitSessions.get(activeTab)]) {
-      if (s) {
-        s.fit.fit();
-        if (s.ptyId != null) invoke("pty_resize", { id: s.ptyId, cols: s.term.cols, rows: s.term.rows });
-      }
-    }
-  }
-});
+window.addEventListener("resize", fitActiveSessions);
 
 // ---------- wire up ----------
 window.addEventListener("DOMContentLoaded", () => {
@@ -2268,6 +2396,7 @@ window.addEventListener("DOMContentLoaded", () => {
   $("#btn-reload").addEventListener("click", loadHosts);
   $("#btn-raw").addEventListener("click", openRaw);
   initSettings();
+  initSnippets();
   ($("#host-search") as HTMLInputElement).addEventListener("input", renderHostList);
   // Ctrl+K focuses host search (redesign §5); overlays keep their focus trap
   window.addEventListener("keydown", (ev) => {
