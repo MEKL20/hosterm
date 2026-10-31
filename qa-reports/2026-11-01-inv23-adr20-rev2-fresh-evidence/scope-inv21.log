@@ -1,0 +1,1 @@
+{"output": "/home/mekl/src/hosterm/qa-reports/2026-11-01-inv23-adr20-rev2-fresh-evidence/scope-inv21.json", "pass": true, "checks": {"head_is_target": true, "commit_files_frontend_and_smoke_only": true, "committed_backend_diff_zero": true, "working_backend_diff_zero": true, "inv21_forbidden_hits_zero": true}}

@@ -1,0 +1,12 @@
+COMMAND: git diff --quiet 876d32d..ca3e86b -- src-tauri
+COMMAND: git diff --name-status 876d32d..ca3e86b
+SRC_TAURI_DIFF_EXIT: 0 (0 means no backend/config/sidecar implementation changes)
+TRACKED_TARGET_DIFF:
+M	index.html
+M	qa-reports/headless-smoke.mjs
+M	src/main.ts
+M	src/styles.css
+STATE_BASELINE_SMOKE: 241
+OBSERVED_SMOKE: 255
+NEW_U_D4_CHECKS_BY_DELTA: 14
+EXIT_CODE: 0

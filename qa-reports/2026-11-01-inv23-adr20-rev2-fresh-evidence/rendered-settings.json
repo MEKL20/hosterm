@@ -1,0 +1,956 @@
+{
+  "target_sha": "f56e2ed04a2d744267fbd025afda999a34b46b78",
+  "source": "rendered dist/ Settings <input type=color>; production helper not imported",
+  "vector_runs": [
+    {
+      "class": "curated",
+      "accent": "#e2a35c",
+      "expectedInk": "#241404",
+      "actual": {
+        "source": "free-input",
+        "entered": "#e2a35c",
+        "input_type": "color",
+        "input_value": "#e2a35c",
+        "inline_accent": "#e2a35c",
+        "inline_ink": "#241404",
+        "computed_accent": "#e2a35c",
+        "computed_ink": "#241404",
+        "preview_accent": "#e2a35c",
+        "preview_ink": "#241404",
+        "pressed_chips": [
+          "#e2a35c"
+        ]
+      }
+    },
+    {
+      "class": "curated",
+      "accent": "#5fbfae",
+      "expectedInk": "#241404",
+      "actual": {
+        "source": "free-input",
+        "entered": "#5fbfae",
+        "input_type": "color",
+        "input_value": "#5fbfae",
+        "inline_accent": "#5fbfae",
+        "inline_ink": "#241404",
+        "computed_accent": "#5fbfae",
+        "computed_ink": "#241404",
+        "preview_accent": "#5fbfae",
+        "preview_ink": "#241404",
+        "pressed_chips": [
+          "#5fbfae"
+        ]
+      }
+    },
+    {
+      "class": "curated",
+      "accent": "#e0869b",
+      "expectedInk": "#241404",
+      "actual": {
+        "source": "free-input",
+        "entered": "#e0869b",
+        "input_type": "color",
+        "input_value": "#e0869b",
+        "inline_accent": "#e0869b",
+        "inline_ink": "#241404",
+        "computed_accent": "#e0869b",
+        "computed_ink": "#241404",
+        "preview_accent": "#e0869b",
+        "preview_ink": "#241404",
+        "pressed_chips": [
+          "#e0869b"
+        ]
+      }
+    },
+    {
+      "class": "curated",
+      "accent": "#aec267",
+      "expectedInk": "#241404",
+      "actual": {
+        "source": "free-input",
+        "entered": "#aec267",
+        "input_type": "color",
+        "input_value": "#aec267",
+        "inline_accent": "#aec267",
+        "inline_ink": "#241404",
+        "computed_accent": "#aec267",
+        "computed_ink": "#241404",
+        "preview_accent": "#aec267",
+        "preview_ink": "#241404",
+        "pressed_chips": [
+          "#aec267"
+        ]
+      }
+    },
+    {
+      "class": "curated",
+      "accent": "#b99be3",
+      "expectedInk": "#241404",
+      "actual": {
+        "source": "free-input",
+        "entered": "#b99be3",
+        "input_type": "color",
+        "input_value": "#b99be3",
+        "inline_accent": "#b99be3",
+        "inline_ink": "#241404",
+        "computed_accent": "#b99be3",
+        "computed_ink": "#241404",
+        "preview_accent": "#b99be3",
+        "preview_ink": "#241404",
+        "pressed_chips": [
+          "#b99be3"
+        ]
+      }
+    },
+    {
+      "class": "free extreme",
+      "accent": "#000000",
+      "expectedInk": "#ffffff",
+      "actual": {
+        "source": "free-input",
+        "entered": "#000000",
+        "input_type": "color",
+        "input_value": "#000000",
+        "inline_accent": "#000000",
+        "inline_ink": "#ffffff",
+        "computed_accent": "#000000",
+        "computed_ink": "#ffffff",
+        "preview_accent": "#000000",
+        "preview_ink": "#ffffff",
+        "pressed_chips": []
+      }
+    },
+    {
+      "class": "free existing dark sentinel",
+      "accent": "#101010",
+      "expectedInk": "#ffffff",
+      "actual": {
+        "source": "free-input",
+        "entered": "#101010",
+        "input_type": "color",
+        "input_value": "#101010",
+        "inline_accent": "#101010",
+        "inline_ink": "#ffffff",
+        "computed_accent": "#101010",
+        "computed_ink": "#ffffff",
+        "preview_accent": "#101010",
+        "preview_ink": "#ffffff",
+        "pressed_chips": []
+      }
+    },
+    {
+      "class": "free former failure",
+      "accent": "#6f6f6f",
+      "expectedInk": "#ffffff",
+      "actual": {
+        "source": "free-input",
+        "entered": "#6f6f6f",
+        "input_type": "color",
+        "input_value": "#6f6f6f",
+        "inline_accent": "#6f6f6f",
+        "inline_ink": "#ffffff",
+        "computed_accent": "#6f6f6f",
+        "computed_ink": "#ffffff",
+        "preview_accent": "#6f6f6f",
+        "preview_ink": "#ffffff",
+        "pressed_chips": []
+      }
+    },
+    {
+      "class": "free grayscale below switch",
+      "accent": "#757575",
+      "expectedInk": "#ffffff",
+      "actual": {
+        "source": "free-input",
+        "entered": "#757575",
+        "input_type": "color",
+        "input_value": "#757575",
+        "inline_accent": "#757575",
+        "inline_ink": "#ffffff",
+        "computed_accent": "#757575",
+        "computed_ink": "#ffffff",
+        "preview_accent": "#757575",
+        "preview_ink": "#ffffff",
+        "pressed_chips": []
+      }
+    },
+    {
+      "class": "free closest 24-bit below switch",
+      "accent": "#766cb5",
+      "expectedInk": "#ffffff",
+      "actual": {
+        "source": "free-input",
+        "entered": "#766cb5",
+        "input_type": "color",
+        "input_value": "#766cb5",
+        "inline_accent": "#766cb5",
+        "inline_ink": "#ffffff",
+        "computed_accent": "#766cb5",
+        "computed_ink": "#ffffff",
+        "preview_accent": "#766cb5",
+        "preview_ink": "#ffffff",
+        "pressed_chips": []
+      }
+    },
+    {
+      "class": "free closest 24-bit above switch",
+      "accent": "#cf0dcc",
+      "expectedInk": "#000000",
+      "actual": {
+        "source": "free-input",
+        "entered": "#cf0dcc",
+        "input_type": "color",
+        "input_value": "#cf0dcc",
+        "inline_accent": "#cf0dcc",
+        "inline_ink": "#000000",
+        "computed_accent": "#cf0dcc",
+        "computed_ink": "#000000",
+        "preview_accent": "#cf0dcc",
+        "preview_ink": "#000000",
+        "pressed_chips": []
+      }
+    },
+    {
+      "class": "free grayscale above switch",
+      "accent": "#767676",
+      "expectedInk": "#000000",
+      "actual": {
+        "source": "free-input",
+        "entered": "#767676",
+        "input_type": "color",
+        "input_value": "#767676",
+        "inline_accent": "#767676",
+        "inline_ink": "#000000",
+        "computed_accent": "#767676",
+        "computed_ink": "#000000",
+        "preview_accent": "#767676",
+        "preview_ink": "#000000",
+        "pressed_chips": []
+      }
+    },
+    {
+      "class": "free former failure",
+      "accent": "#777777",
+      "expectedInk": "#000000",
+      "actual": {
+        "source": "free-input",
+        "entered": "#777777",
+        "input_type": "color",
+        "input_value": "#777777",
+        "inline_accent": "#777777",
+        "inline_ink": "#000000",
+        "computed_accent": "#777777",
+        "computed_ink": "#000000",
+        "preview_accent": "#777777",
+        "preview_ink": "#000000",
+        "pressed_chips": []
+      }
+    },
+    {
+      "class": "free extreme",
+      "accent": "#ffffff",
+      "expectedInk": "#000000",
+      "actual": {
+        "source": "free-input",
+        "entered": "#ffffff",
+        "input_type": "color",
+        "input_value": "#ffffff",
+        "inline_accent": "#ffffff",
+        "inline_ink": "#000000",
+        "computed_accent": "#ffffff",
+        "computed_ink": "#000000",
+        "preview_accent": "#ffffff",
+        "preview_ink": "#000000",
+        "pressed_chips": []
+      }
+    }
+  ],
+  "former_failure_repeats": [
+    {
+      "pass": 1,
+      "accent": "#6f6f6f",
+      "expectedInk": "#ffffff",
+      "actual": {
+        "source": "free-input",
+        "entered": "#6f6f6f",
+        "input_type": "color",
+        "input_value": "#6f6f6f",
+        "inline_accent": "#6f6f6f",
+        "inline_ink": "#ffffff",
+        "computed_accent": "#6f6f6f",
+        "computed_ink": "#ffffff",
+        "preview_accent": "#6f6f6f",
+        "preview_ink": "#ffffff",
+        "pressed_chips": []
+      }
+    },
+    {
+      "pass": 1,
+      "accent": "#777777",
+      "expectedInk": "#000000",
+      "actual": {
+        "source": "free-input",
+        "entered": "#777777",
+        "input_type": "color",
+        "input_value": "#777777",
+        "inline_accent": "#777777",
+        "inline_ink": "#000000",
+        "computed_accent": "#777777",
+        "computed_ink": "#000000",
+        "preview_accent": "#777777",
+        "preview_ink": "#000000",
+        "pressed_chips": []
+      }
+    },
+    {
+      "pass": 2,
+      "accent": "#6f6f6f",
+      "expectedInk": "#ffffff",
+      "actual": {
+        "source": "free-input",
+        "entered": "#6f6f6f",
+        "input_type": "color",
+        "input_value": "#6f6f6f",
+        "inline_accent": "#6f6f6f",
+        "inline_ink": "#ffffff",
+        "computed_accent": "#6f6f6f",
+        "computed_ink": "#ffffff",
+        "preview_accent": "#6f6f6f",
+        "preview_ink": "#ffffff",
+        "pressed_chips": []
+      }
+    },
+    {
+      "pass": 2,
+      "accent": "#777777",
+      "expectedInk": "#000000",
+      "actual": {
+        "source": "free-input",
+        "entered": "#777777",
+        "input_type": "color",
+        "input_value": "#777777",
+        "inline_accent": "#777777",
+        "inline_ink": "#000000",
+        "computed_accent": "#777777",
+        "computed_ink": "#000000",
+        "preview_accent": "#777777",
+        "preview_ink": "#000000",
+        "pressed_chips": []
+      }
+    }
+  ],
+  "determinism": {
+    "curated": {
+      "accent": "#5fbfae",
+      "input": {
+        "source": "free-input",
+        "entered": "#5fbfae",
+        "input_type": "color",
+        "input_value": "#5fbfae",
+        "inline_accent": "#5fbfae",
+        "inline_ink": "#241404",
+        "computed_accent": "#5fbfae",
+        "computed_ink": "#241404",
+        "preview_accent": "#5fbfae",
+        "preview_ink": "#241404",
+        "pressed_chips": [
+          "#5fbfae"
+        ]
+      },
+      "chip": {
+        "source": "quick-chip",
+        "entered": "#5fbfae",
+        "input_type": "color",
+        "input_value": "#5fbfae",
+        "inline_accent": "#5fbfae",
+        "inline_ink": "#241404",
+        "computed_accent": "#5fbfae",
+        "computed_ink": "#241404",
+        "preview_accent": "#5fbfae",
+        "preview_ink": "#241404",
+        "pressed_chips": [
+          "#5fbfae"
+        ]
+      },
+      "input_before_persist": {
+        "source": "free-input",
+        "entered": "#5fbfae",
+        "input_type": "color",
+        "input_value": "#5fbfae",
+        "inline_accent": "#5fbfae",
+        "inline_ink": "#241404",
+        "computed_accent": "#5fbfae",
+        "computed_ink": "#241404",
+        "preview_accent": "#5fbfae",
+        "preview_ink": "#241404",
+        "pressed_chips": [
+          "#5fbfae"
+        ]
+      },
+      "persisted": {
+        "version": 1,
+        "theme": "dusk",
+        "accent": "#5fbfae",
+        "allowlist": []
+      },
+      "boot": {
+        "source": "persist-reload",
+        "entered": "#5fbfae",
+        "input_type": "color",
+        "input_value": "#5fbfae",
+        "inline_accent": "#5fbfae",
+        "inline_ink": "#241404",
+        "computed_accent": "#5fbfae",
+        "computed_ink": "#241404",
+        "preview_accent": "#5fbfae",
+        "preview_ink": "#241404",
+        "pressed_chips": [
+          "#5fbfae"
+        ]
+      },
+      "read_delta": 1
+    },
+    "non_curated": {
+      "accent": "#777777",
+      "input": {
+        "source": "free-input",
+        "entered": "#777777",
+        "input_type": "color",
+        "input_value": "#777777",
+        "inline_accent": "#777777",
+        "inline_ink": "#000000",
+        "computed_accent": "#777777",
+        "computed_ink": "#000000",
+        "preview_accent": "#777777",
+        "preview_ink": "#000000",
+        "pressed_chips": []
+      },
+      "persisted": {
+        "version": 1,
+        "theme": "dusk",
+        "accent": "#777777",
+        "allowlist": []
+      },
+      "boot": {
+        "source": "persist-reload",
+        "entered": "#777777",
+        "input_type": "color",
+        "input_value": "#777777",
+        "inline_accent": "#777777",
+        "inline_ink": "#000000",
+        "computed_accent": "#777777",
+        "computed_ink": "#000000",
+        "preview_accent": "#777777",
+        "preview_ink": "#000000",
+        "pressed_chips": []
+      },
+      "read_delta": 1
+    }
+  },
+  "normalization": {
+    "uppercase_curated": {
+      "source": "free-input",
+      "entered": "#E0869B",
+      "input_type": "color",
+      "input_value": "#e0869b",
+      "inline_accent": "#e0869b",
+      "inline_ink": "#241404",
+      "computed_accent": "#e0869b",
+      "computed_ink": "#241404",
+      "preview_accent": "#e0869b",
+      "preview_ink": "#241404",
+      "pressed_chips": [
+        "#e0869b"
+      ]
+    }
+  },
+  "invoke_summary": {
+    "read_settings": 3,
+    "write_settings": 2,
+    "commands": [
+      "check_binaries",
+      "read_settings",
+      "read_ssh_config",
+      "write_settings"
+    ]
+  },
+  "console_errors": [],
+  "csp_violations": [],
+  "checks": [
+    {
+      "name": "dist served",
+      "pass": true,
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "name": "rendered control is input[type=color]",
+      "pass": true
+    },
+    {
+      "name": "vector #e2a35c endpoint and no remap",
+      "pass": true,
+      "detail": {
+        "source": "free-input",
+        "entered": "#e2a35c",
+        "input_type": "color",
+        "input_value": "#e2a35c",
+        "inline_accent": "#e2a35c",
+        "inline_ink": "#241404",
+        "computed_accent": "#e2a35c",
+        "computed_ink": "#241404",
+        "preview_accent": "#e2a35c",
+        "preview_ink": "#241404",
+        "pressed_chips": [
+          "#e2a35c"
+        ]
+      }
+    },
+    {
+      "name": "vector #5fbfae endpoint and no remap",
+      "pass": true,
+      "detail": {
+        "source": "free-input",
+        "entered": "#5fbfae",
+        "input_type": "color",
+        "input_value": "#5fbfae",
+        "inline_accent": "#5fbfae",
+        "inline_ink": "#241404",
+        "computed_accent": "#5fbfae",
+        "computed_ink": "#241404",
+        "preview_accent": "#5fbfae",
+        "preview_ink": "#241404",
+        "pressed_chips": [
+          "#5fbfae"
+        ]
+      }
+    },
+    {
+      "name": "vector #e0869b endpoint and no remap",
+      "pass": true,
+      "detail": {
+        "source": "free-input",
+        "entered": "#e0869b",
+        "input_type": "color",
+        "input_value": "#e0869b",
+        "inline_accent": "#e0869b",
+        "inline_ink": "#241404",
+        "computed_accent": "#e0869b",
+        "computed_ink": "#241404",
+        "preview_accent": "#e0869b",
+        "preview_ink": "#241404",
+        "pressed_chips": [
+          "#e0869b"
+        ]
+      }
+    },
+    {
+      "name": "vector #aec267 endpoint and no remap",
+      "pass": true,
+      "detail": {
+        "source": "free-input",
+        "entered": "#aec267",
+        "input_type": "color",
+        "input_value": "#aec267",
+        "inline_accent": "#aec267",
+        "inline_ink": "#241404",
+        "computed_accent": "#aec267",
+        "computed_ink": "#241404",
+        "preview_accent": "#aec267",
+        "preview_ink": "#241404",
+        "pressed_chips": [
+          "#aec267"
+        ]
+      }
+    },
+    {
+      "name": "vector #b99be3 endpoint and no remap",
+      "pass": true,
+      "detail": {
+        "source": "free-input",
+        "entered": "#b99be3",
+        "input_type": "color",
+        "input_value": "#b99be3",
+        "inline_accent": "#b99be3",
+        "inline_ink": "#241404",
+        "computed_accent": "#b99be3",
+        "computed_ink": "#241404",
+        "preview_accent": "#b99be3",
+        "preview_ink": "#241404",
+        "pressed_chips": [
+          "#b99be3"
+        ]
+      }
+    },
+    {
+      "name": "vector #000000 endpoint and no remap",
+      "pass": true,
+      "detail": {
+        "source": "free-input",
+        "entered": "#000000",
+        "input_type": "color",
+        "input_value": "#000000",
+        "inline_accent": "#000000",
+        "inline_ink": "#ffffff",
+        "computed_accent": "#000000",
+        "computed_ink": "#ffffff",
+        "preview_accent": "#000000",
+        "preview_ink": "#ffffff",
+        "pressed_chips": []
+      }
+    },
+    {
+      "name": "vector #101010 endpoint and no remap",
+      "pass": true,
+      "detail": {
+        "source": "free-input",
+        "entered": "#101010",
+        "input_type": "color",
+        "input_value": "#101010",
+        "inline_accent": "#101010",
+        "inline_ink": "#ffffff",
+        "computed_accent": "#101010",
+        "computed_ink": "#ffffff",
+        "preview_accent": "#101010",
+        "preview_ink": "#ffffff",
+        "pressed_chips": []
+      }
+    },
+    {
+      "name": "vector #6f6f6f endpoint and no remap",
+      "pass": true,
+      "detail": {
+        "source": "free-input",
+        "entered": "#6f6f6f",
+        "input_type": "color",
+        "input_value": "#6f6f6f",
+        "inline_accent": "#6f6f6f",
+        "inline_ink": "#ffffff",
+        "computed_accent": "#6f6f6f",
+        "computed_ink": "#ffffff",
+        "preview_accent": "#6f6f6f",
+        "preview_ink": "#ffffff",
+        "pressed_chips": []
+      }
+    },
+    {
+      "name": "vector #757575 endpoint and no remap",
+      "pass": true,
+      "detail": {
+        "source": "free-input",
+        "entered": "#757575",
+        "input_type": "color",
+        "input_value": "#757575",
+        "inline_accent": "#757575",
+        "inline_ink": "#ffffff",
+        "computed_accent": "#757575",
+        "computed_ink": "#ffffff",
+        "preview_accent": "#757575",
+        "preview_ink": "#ffffff",
+        "pressed_chips": []
+      }
+    },
+    {
+      "name": "vector #766cb5 endpoint and no remap",
+      "pass": true,
+      "detail": {
+        "source": "free-input",
+        "entered": "#766cb5",
+        "input_type": "color",
+        "input_value": "#766cb5",
+        "inline_accent": "#766cb5",
+        "inline_ink": "#ffffff",
+        "computed_accent": "#766cb5",
+        "computed_ink": "#ffffff",
+        "preview_accent": "#766cb5",
+        "preview_ink": "#ffffff",
+        "pressed_chips": []
+      }
+    },
+    {
+      "name": "vector #cf0dcc endpoint and no remap",
+      "pass": true,
+      "detail": {
+        "source": "free-input",
+        "entered": "#cf0dcc",
+        "input_type": "color",
+        "input_value": "#cf0dcc",
+        "inline_accent": "#cf0dcc",
+        "inline_ink": "#000000",
+        "computed_accent": "#cf0dcc",
+        "computed_ink": "#000000",
+        "preview_accent": "#cf0dcc",
+        "preview_ink": "#000000",
+        "pressed_chips": []
+      }
+    },
+    {
+      "name": "vector #767676 endpoint and no remap",
+      "pass": true,
+      "detail": {
+        "source": "free-input",
+        "entered": "#767676",
+        "input_type": "color",
+        "input_value": "#767676",
+        "inline_accent": "#767676",
+        "inline_ink": "#000000",
+        "computed_accent": "#767676",
+        "computed_ink": "#000000",
+        "preview_accent": "#767676",
+        "preview_ink": "#000000",
+        "pressed_chips": []
+      }
+    },
+    {
+      "name": "vector #777777 endpoint and no remap",
+      "pass": true,
+      "detail": {
+        "source": "free-input",
+        "entered": "#777777",
+        "input_type": "color",
+        "input_value": "#777777",
+        "inline_accent": "#777777",
+        "inline_ink": "#000000",
+        "computed_accent": "#777777",
+        "computed_ink": "#000000",
+        "preview_accent": "#777777",
+        "preview_ink": "#000000",
+        "pressed_chips": []
+      }
+    },
+    {
+      "name": "vector #ffffff endpoint and no remap",
+      "pass": true,
+      "detail": {
+        "source": "free-input",
+        "entered": "#ffffff",
+        "input_type": "color",
+        "input_value": "#ffffff",
+        "inline_accent": "#ffffff",
+        "inline_ink": "#000000",
+        "computed_accent": "#ffffff",
+        "computed_ink": "#000000",
+        "preview_accent": "#ffffff",
+        "preview_ink": "#000000",
+        "pressed_chips": []
+      }
+    },
+    {
+      "name": "former failure #6f6f6f repetition 1",
+      "pass": true,
+      "detail": {
+        "source": "free-input",
+        "entered": "#6f6f6f",
+        "input_type": "color",
+        "input_value": "#6f6f6f",
+        "inline_accent": "#6f6f6f",
+        "inline_ink": "#ffffff",
+        "computed_accent": "#6f6f6f",
+        "computed_ink": "#ffffff",
+        "preview_accent": "#6f6f6f",
+        "preview_ink": "#ffffff",
+        "pressed_chips": []
+      }
+    },
+    {
+      "name": "former failure #777777 repetition 1",
+      "pass": true,
+      "detail": {
+        "source": "free-input",
+        "entered": "#777777",
+        "input_type": "color",
+        "input_value": "#777777",
+        "inline_accent": "#777777",
+        "inline_ink": "#000000",
+        "computed_accent": "#777777",
+        "computed_ink": "#000000",
+        "preview_accent": "#777777",
+        "preview_ink": "#000000",
+        "pressed_chips": []
+      }
+    },
+    {
+      "name": "former failure #6f6f6f repetition 2",
+      "pass": true,
+      "detail": {
+        "source": "free-input",
+        "entered": "#6f6f6f",
+        "input_type": "color",
+        "input_value": "#6f6f6f",
+        "inline_accent": "#6f6f6f",
+        "inline_ink": "#ffffff",
+        "computed_accent": "#6f6f6f",
+        "computed_ink": "#ffffff",
+        "preview_accent": "#6f6f6f",
+        "preview_ink": "#ffffff",
+        "pressed_chips": []
+      }
+    },
+    {
+      "name": "former failure #777777 repetition 2",
+      "pass": true,
+      "detail": {
+        "source": "free-input",
+        "entered": "#777777",
+        "input_type": "color",
+        "input_value": "#777777",
+        "inline_accent": "#777777",
+        "inline_ink": "#000000",
+        "computed_accent": "#777777",
+        "computed_ink": "#000000",
+        "preview_accent": "#777777",
+        "preview_ink": "#000000",
+        "pressed_chips": []
+      }
+    },
+    {
+      "name": "uppercase valid value normalizes before mapping",
+      "pass": true,
+      "detail": {
+        "source": "free-input",
+        "entered": "#E0869B",
+        "input_type": "color",
+        "input_value": "#e0869b",
+        "inline_accent": "#e0869b",
+        "inline_ink": "#241404",
+        "computed_accent": "#e0869b",
+        "computed_ink": "#241404",
+        "preview_accent": "#e0869b",
+        "preview_ink": "#241404",
+        "pressed_chips": [
+          "#e0869b"
+        ]
+      }
+    },
+    {
+      "name": "curated input/chip/persist/reload deterministic",
+      "pass": true,
+      "detail": {
+        "accent": "#5fbfae",
+        "input": {
+          "source": "free-input",
+          "entered": "#5fbfae",
+          "input_type": "color",
+          "input_value": "#5fbfae",
+          "inline_accent": "#5fbfae",
+          "inline_ink": "#241404",
+          "computed_accent": "#5fbfae",
+          "computed_ink": "#241404",
+          "preview_accent": "#5fbfae",
+          "preview_ink": "#241404",
+          "pressed_chips": [
+            "#5fbfae"
+          ]
+        },
+        "chip": {
+          "source": "quick-chip",
+          "entered": "#5fbfae",
+          "input_type": "color",
+          "input_value": "#5fbfae",
+          "inline_accent": "#5fbfae",
+          "inline_ink": "#241404",
+          "computed_accent": "#5fbfae",
+          "computed_ink": "#241404",
+          "preview_accent": "#5fbfae",
+          "preview_ink": "#241404",
+          "pressed_chips": [
+            "#5fbfae"
+          ]
+        },
+        "input_before_persist": {
+          "source": "free-input",
+          "entered": "#5fbfae",
+          "input_type": "color",
+          "input_value": "#5fbfae",
+          "inline_accent": "#5fbfae",
+          "inline_ink": "#241404",
+          "computed_accent": "#5fbfae",
+          "computed_ink": "#241404",
+          "preview_accent": "#5fbfae",
+          "preview_ink": "#241404",
+          "pressed_chips": [
+            "#5fbfae"
+          ]
+        },
+        "persisted": {
+          "version": 1,
+          "theme": "dusk",
+          "accent": "#5fbfae",
+          "allowlist": []
+        },
+        "boot": {
+          "source": "persist-reload",
+          "entered": "#5fbfae",
+          "input_type": "color",
+          "input_value": "#5fbfae",
+          "inline_accent": "#5fbfae",
+          "inline_ink": "#241404",
+          "computed_accent": "#5fbfae",
+          "computed_ink": "#241404",
+          "preview_accent": "#5fbfae",
+          "preview_ink": "#241404",
+          "pressed_chips": [
+            "#5fbfae"
+          ]
+        },
+        "read_delta": 1
+      }
+    },
+    {
+      "name": "non-curated input/persist/reload deterministic and unmodified",
+      "pass": true,
+      "detail": {
+        "accent": "#777777",
+        "input": {
+          "source": "free-input",
+          "entered": "#777777",
+          "input_type": "color",
+          "input_value": "#777777",
+          "inline_accent": "#777777",
+          "inline_ink": "#000000",
+          "computed_accent": "#777777",
+          "computed_ink": "#000000",
+          "preview_accent": "#777777",
+          "preview_ink": "#000000",
+          "pressed_chips": []
+        },
+        "persisted": {
+          "version": 1,
+          "theme": "dusk",
+          "accent": "#777777",
+          "allowlist": []
+        },
+        "boot": {
+          "source": "persist-reload",
+          "entered": "#777777",
+          "input_type": "color",
+          "input_value": "#777777",
+          "inline_accent": "#777777",
+          "inline_ink": "#000000",
+          "computed_accent": "#777777",
+          "computed_ink": "#000000",
+          "preview_accent": "#777777",
+          "preview_ink": "#000000",
+          "pressed_chips": []
+        },
+        "read_delta": 1
+      }
+    },
+    {
+      "name": "no console/page errors",
+      "pass": true,
+      "detail": []
+    },
+    {
+      "name": "no CSP violations",
+      "pass": true,
+      "detail": []
+    }
+  ],
+  "summary": {
+    "passed": 25,
+    "failed": 0,
+    "total": 25
+  }
+}

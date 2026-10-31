@@ -1,0 +1,718 @@
+diff --git a/index.html b/index.html
+index 2d28ab6..b342e8d 100644
+--- a/index.html
++++ b/index.html
+@@ -33,0 +34,3 @@
++          <button id="open-settings" class="icon" aria-label="Open settings" title="Open settings" aria-haspopup="dialog" aria-controls="settings-panel">
++            <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.2"/><path d="M6.8 1.8h2.4l.5 1.7 1.2.7 1.7-.5 1.2 2.1-1.2 1.2v1.4l1.2 1.2-1.2 2.1-1.7-.5-1.2.7-.5 1.7H6.8l-.5-1.7-1.2-.7-1.7.5-1.2-2.1 1.2-1.2V7L2.2 5.8l1.2-2.1 1.7.5 1.2-.7z"/></svg>
++          </button>
+@@ -59,0 +63,105 @@
++    <div id="settings-scrim" class="settings-scrim hidden">
++      <section id="settings-panel" class="settings" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabindex="-1">
++        <header class="settings-head">
++          <h2 id="settings-title">Settings</h2>
++          <button id="settings-close" class="icon" aria-label="Close settings" title="Close settings">
++            <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 3l10 10M13 3 3 13"/></svg>
++          </button>
++        </header>
++
++        <div class="settings-body">
++          <nav class="settings-nav" aria-label="Settings sections">
++            <button class="set-nav set-nav-item" data-section="general">General</button>
++            <button class="set-nav set-nav-item" data-section="appearance" aria-current="page">Appearance</button>
++            <button class="set-nav set-nav-item" data-section="terminal">Terminal</button>
++            <button class="set-nav set-nav-item" data-section="ssh">SSH &amp; Keys</button>
++            <button class="set-nav set-nav-item" data-section="ai">AI Assistant</button>
++            <button class="set-nav set-nav-item" data-section="snippets">Snippets</button>
++            <button class="set-nav set-nav-item" data-section="account">Account</button>
++          </nav>
++
++          <div class="settings-content">
++            <section id="settings-appearance" aria-labelledby="appearance-title">
++              <h3 class="set-h" id="appearance-title">Appearance</h3>
++              <p class="set-sub">Theme and accent for the whole app.</p>
++
++              <div class="set-block">
++                <div class="set-label">Theme</div>
++                <div class="preset-grid" role="group" aria-label="Theme presets">
++                  <button class="preset" data-preset="dusk" aria-pressed="true" aria-label="Dusk theme, selected">
++                    <span class="preset-swatch" aria-hidden="true" style="--pb:#191512;--ps:#221c17;--pa:#e2a35c;--pt:#f2e9dc">
++                      <span class="sw-row"><span class="sw-text">Aa</span><span class="sw-accent"></span></span>
++                      <span class="sw-surface"></span>
++                    </span>
++                    <span class="preset-top"><span class="preset-name">Dusk</span><span class="preset-check" aria-hidden="true">✓</span></span>
++                  </button>
++                  <button class="preset" data-preset="slate" aria-pressed="false" aria-disabled="true" aria-label="Slate theme, coming soon">
++                    <span class="preset-swatch" aria-hidden="true" style="--pb:#171d24;--ps:#222a33;--pa:#6cc4dc;--pt:#e4ebf2">
++                      <span class="sw-row"><span class="sw-text">Aa</span><span class="sw-accent"></span></span>
++                      <span class="sw-surface"></span>
++                    </span>
++                    <span class="preset-top"><span class="preset-name">Slate</span><span class="preset-coming">Coming</span><span class="preset-check" aria-hidden="true">✓</span></span>
++                  </button>
++                  <button class="preset" data-preset="ink" aria-pressed="false" aria-disabled="true" aria-label="Ink theme, coming soon">
++                    <span class="preset-swatch" aria-hidden="true" style="--pb:#141414;--ps:#1e1e1e;--pa:#e0563f;--pt:#ececec">
++                      <span class="sw-row"><span class="sw-text">Aa</span><span class="sw-accent"></span></span>
++                      <span class="sw-surface"></span>
++                    </span>
++                    <span class="preset-top"><span class="preset-name">Ink</span><span class="preset-coming">Coming</span><span class="preset-check" aria-hidden="true">✓</span></span>
++                  </button>
++                  <button class="preset" data-preset="light" aria-pressed="false" aria-disabled="true" aria-label="Light theme, coming soon">
++                    <span class="preset-swatch" aria-hidden="true" style="--pb:#f5f1e8;--ps:#ffffff;--pa:#96571a;--pt:#26201a">
++                      <span class="sw-row"><span class="sw-text">Aa</span><span class="sw-accent"></span></span>
++                      <span class="sw-surface"></span>
++                    </span>
++                    <span class="preset-top"><span class="preset-name">Light</span><span class="preset-coming">Coming</span><span class="preset-check" aria-hidden="true">✓</span></span>
++                  </button>
++                </div>
++              </div>
++
++              <div class="set-block">
++                <div class="set-label">Accent color</div>
++                <div class="accent-row">
++                  <div class="color-well">
++                    <input type="color" id="accent-input" value="#e2a35c" aria-label="Custom accent color" />
++                    <span class="color-hex" id="accent-hex">#e2a35c</span>
++                  </div>
++                  <div class="chip-row" role="group" aria-label="Quick accent picks">
++                    <button class="accent-chip" data-accent="#e2a35c" aria-pressed="true" aria-label="Honey amber accent" title="Honey amber" style="background:#e2a35c"><span class="chip-check" aria-hidden="true">✓</span></button>
++                    <button class="accent-chip" data-accent="#5fbfae" aria-pressed="false" aria-label="Teal accent" title="Teal" style="background:#5fbfae"><span class="chip-check" aria-hidden="true">✓</span></button>
++                    <button class="accent-chip" data-accent="#e0869b" aria-pressed="false" aria-label="Rose accent" title="Rose" style="background:#e0869b"><span class="chip-check" aria-hidden="true">✓</span></button>
++                    <button class="accent-chip" data-accent="#aec267" aria-pressed="false" aria-label="Lime accent" title="Lime" style="background:#aec267"><span class="chip-check" aria-hidden="true">✓</span></button>
++                    <button class="accent-chip" data-accent="#b99be3" aria-pressed="false" aria-label="Violet accent" title="Violet" style="background:#b99be3"><span class="chip-check" aria-hidden="true">✓</span></button>
++                  </div>
++                </div>
++                <p class="set-note">Recolors the accent only. Surfaces, text and status colors stay with the chosen theme.</p>
++              </div>
++
++              <div class="set-block">
++                <div class="set-label">Preview</div>
++                <div class="live-preview pv" id="pv-mock">
++                  <div class="pv-tabs"><span class="pv-tab">prod-web</span><span class="pv-tab on">db-core</span></div>
++                  <div class="pv-body">
++                    <span class="pv-btn">Run once</span>
++                    <span class="pv-line"><span class="pv-user">mekl@prod-web</span>:~$ <span class="pv-cursor"></span></span>
++                  </div>
++                </div>
++              </div>
++            </section>
++
++            <section id="settings-placeholder" class="settings-placeholder hidden" aria-live="polite">
++              <h3 class="set-h" id="settings-placeholder-title">General</h3>
++              <p>Coming soon.</p>
++            </section>
++          </div>
++        </div>
++
++        <footer class="settings-foot">
++          <button id="accent-reset" class="btn-text">Reset to Dusk default</button>
++          <span id="settings-status" class="settings-status" role="status" aria-live="polite"></span>
++          <span class="foot-spacer"></span>
++          <button id="settings-done" class="primary">Done</button>
++        </footer>
++      </section>
++    </div>
++
+diff --git a/qa-reports/headless-smoke.mjs b/qa-reports/headless-smoke.mjs
+index 6d3fea5..d81c189 100644
+--- a/qa-reports/headless-smoke.mjs
++++ b/qa-reports/headless-smoke.mjs
+@@ -68,0 +69,6 @@ let binCheckState = { ssh_missing: false, sftp_missing: false };
++let storedSettings = {
++  version: 1,
++  theme: "dusk",
++  accent: "#e2a35c",
++  allowlist: [{ host: "prod-web", command: "sudo systemctl restart netdata", added_at: "2026-10-30T12:00:00Z" }],
++};
+@@ -80,0 +87,5 @@ const invoke = (cmd, args = {}) => {
++    case "read_settings": return Promise.resolve(JSON.parse(JSON.stringify(storedSettings)));
++    case "write_settings": {
++      storedSettings = JSON.parse(JSON.stringify(args.settings));
++      return Promise.resolve(null);
++    }
+@@ -876,3 +887,2 @@ check("U-D1: Abyss glow box-shadow fully removed", shadowSelectors.glow.length =
+-// --shadow-drawer only lands on .modal-box (settings modal + dialogs share the box);
+-// no sidebar/tab/row carries it. (Drawer panels arrive in U-D5/U-D7.)
+-const elevationOk = shadowSelectors.elevation.every((s) => /modal-box/.test(s));
++// --shadow-drawer only lands on modal/drawer surfaces; no sidebar/tab/row carries it.
++const elevationOk = shadowSelectors.elevation.every((s) => /modal-box|\.settings\b/.test(s));
+@@ -1606,0 +1617,174 @@ await page.waitForTimeout(200);
++
++// U-D4 Settings + Appearance (FR-SET1..13, INV-23).
++check("U-D4 boot: read_settings invoked + Dusk/default accent applied",
++  calls.some((c) => c.cmd === "read_settings") &&
++  await page.evaluate(() => document.documentElement.dataset.theme === "dusk" &&
++    document.documentElement.style.getPropertyValue("--accent").trim() === "#e2a35c"));
++
++await page.locator("#open-settings").click();
++await page.waitForTimeout(150);
++const settingsMeta = await page.evaluate(() => {
++  const scrim = document.getElementById("settings-scrim");
++  const panel = document.getElementById("settings-panel");
++  const rect = panel.getBoundingClientRect();
++  return {
++    open: !scrim.classList.contains("hidden"),
++    role: panel.getAttribute("role"),
++    modal: panel.getAttribute("aria-modal"),
++    scrim: getComputedStyle(scrim).backgroundColor,
++    width: Math.round(rect.width),
++    height: Math.round(rect.height),
++    inert: document.getElementById("app").hasAttribute("inert"),
++  };
++});
++check("U-D4 FR-SET1: in-app modal + exact scrim + 900x620 geometry",
++  settingsMeta.open && settingsMeta.role === "dialog" && settingsMeta.modal === "true" &&
++  settingsMeta.scrim === "rgba(12, 9, 6, 0.55)" && settingsMeta.width === 900 && settingsMeta.height === 620 && settingsMeta.inert,
++  JSON.stringify(settingsMeta));
++
++const navState = await page.evaluate(() => ({
++  labels: [...document.querySelectorAll(".set-nav")].map((b) => b.textContent.trim()),
++  current: document.querySelector('.set-nav[aria-current="page"]')?.dataset.section,
++}));
++check("U-D4 FR-SET2: 7 nav items + Appearance default current",
++  JSON.stringify(navState.labels) === JSON.stringify(["General", "Appearance", "Terminal", "SSH & Keys", "AI Assistant", "Snippets", "Account"]) &&
++  navState.current === "appearance", JSON.stringify(navState));
++await page.locator('.set-nav[data-section="general"]').click();
++const comingState = await page.evaluate(() => ({
++  title: document.getElementById("settings-placeholder-title").textContent,
++  copy: document.getElementById("settings-placeholder").textContent,
++  appearanceHidden: document.getElementById("settings-appearance").classList.contains("hidden"),
++}));
++check("U-D4 FR-SET3: non-Appearance nav renders coming placeholder",
++  comingState.title === "General" && comingState.copy.includes("Coming soon") && comingState.appearanceHidden,
++  JSON.stringify(comingState));
++await page.locator('.set-nav[data-section="appearance"]').click();
++
++const presetState = await page.evaluate(() => ({
++  count: document.querySelectorAll(".preset").length,
++  dusk: document.querySelector('.preset[data-preset="dusk"]')?.getAttribute("aria-pressed"),
++  disabled: document.querySelectorAll('.preset[aria-disabled="true"]').length,
++}));
++check("U-D4 FR-SET4: four presets; Dusk selected; three coming presets disabled",
++  presetState.count === 4 && presetState.dusk === "true" && presetState.disabled === 3, JSON.stringify(presetState));
++const themeBeforeDisabled = await page.evaluate(() => document.documentElement.dataset.theme);
++await page.evaluate(() => document.querySelector('.preset[data-preset="slate"]').click());
++const themeAfterDisabled = await page.evaluate(() => document.documentElement.dataset.theme);
++check("U-D4 OQ-2: disabled Slate click never swaps data-theme",
++  themeBeforeDisabled === "dusk" && themeAfterDisabled === themeBeforeDisabled,
++  `${themeBeforeDisabled}->${themeAfterDisabled}`);
++
++const stableBefore = await page.evaluate(() => {
++  const cs = getComputedStyle(document.documentElement);
++  return ["--surface", "--text", "--live", "--danger"].map((k) => cs.getPropertyValue(k).trim());
++});
++await page.locator('.accent-chip[data-accent="#5fbfae"]').click();
++const tealState = await page.evaluate(() => {
++  const root = document.documentElement;
++  const preview = document.getElementById("pv-mock");
++  const cs = getComputedStyle(root);
++  return {
++    accent: root.style.getPropertyValue("--accent").trim(),
++    ink: root.style.getPropertyValue("--accent-ink").trim(),
++    pressed: document.querySelector('.accent-chip[data-accent="#5fbfae"]')?.getAttribute("aria-pressed"),
++    preview: preview.style.getPropertyValue("--pa").trim(),
++    previewButton: getComputedStyle(document.querySelector(".pv-btn")).backgroundColor,
++    stable: ["--surface", "--text", "--live", "--danger"].map((k) => cs.getPropertyValue(k).trim()),
++  };
++});
++check("U-D4 FR-SET7/8/10: teal updates inline accent + pressed chip + preview only",
++  tealState.accent === "#5fbfae" && tealState.ink === "#241404" && tealState.pressed === "true" &&
++  tealState.preview === "#5fbfae" && tealState.previewButton === "rgb(95, 191, 174)" &&
++  JSON.stringify(tealState.stable) === JSON.stringify(stableBefore), JSON.stringify(tealState));
++
++const chipContrast = await page.evaluate(() => {
++  const luminance = (hex) => {
++    const values = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
++      .map((v) => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
++    return 0.2126 * values[0] + 0.7152 * values[1] + 0.0722 * values[2];
++  };
++  const ratio = (a, b) => {
++    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
++    return (hi + 0.05) / (lo + 0.05);
++  };
++  return [...document.querySelectorAll(".accent-chip")].map((chip) => ({
++    accent: chip.dataset.accent,
++    ratio: ratio(chip.dataset.accent, "#241404"),
++  }));
++});
++check("U-D4 INV-23: all five quick chips contrast >=4.5 with #241404",
++  chipContrast.length === 5 && chipContrast.every((x) => x.ratio >= 4.5), JSON.stringify(chipContrast));
++
++await page.locator("#accent-input").evaluate((input) => {
++  input.value = "#101010";
++  input.dispatchEvent(new Event("input", { bubbles: true }));
++});
++const darkFree = await page.evaluate(() => {
++  const luminance = (hex) => {
++    const values = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
++      .map((v) => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
++    return 0.2126 * values[0] + 0.7152 * values[1] + 0.0722 * values[2];
++  };
++  const root = document.documentElement;
++  const accent = root.style.getPropertyValue("--accent").trim();
++  const ink = root.style.getPropertyValue("--accent-ink").trim();
++  const [hi, lo] = [luminance(accent), luminance(ink)].sort((x, y) => y - x);
++  return { accent, ink, ratio: (hi + 0.05) / (lo + 0.05), pressed: document.querySelectorAll('.accent-chip[aria-pressed="true"]').length };
++});
++check("U-D4 INV-23: dark free color auto-switches to light ink at >=4.5",
++  darkFree.accent === "#101010" && darkFree.ink === "#f2e9dc" && darkFree.ratio >= 4.5 && darkFree.pressed === 0,
++  JSON.stringify(darkFree));
++
++await page.locator("#accent-reset").click();
++const resetState = await page.evaluate(() => ({
++  theme: document.documentElement.dataset.theme,
++  accent: document.documentElement.style.getPropertyValue("--accent").trim(),
++  dusk: document.querySelector('.preset[data-preset="dusk"]')?.getAttribute("aria-pressed"),
++}));
++check("U-D4 FR-SET11: reset restores Dusk + #e2a35c", resetState.theme === "dusk" && resetState.accent === "#e2a35c" && resetState.dusk === "true", JSON.stringify(resetState));
++
++await page.locator('.accent-chip[data-accent="#5fbfae"]').click();
++const writesBeforeDone = calls.filter((c) => c.cmd === "write_settings").length;
++await page.locator("#settings-done").click();
++await page.waitForTimeout(200);
++const writeCall = calls.filter((c) => c.cmd === "write_settings").at(-1);
++check("U-D4 FR-SET12/13: Done closes + write_settings persists explicit full shape",
++  await page.locator("#settings-scrim").evaluate((el) => el.classList.contains("hidden")) &&
++  calls.filter((c) => c.cmd === "write_settings").length === writesBeforeDone + 1 &&
++  writeCall?.args?.settings?.version === 1 && writeCall.args.settings.theme === "dusk" &&
++  writeCall.args.settings.accent === "#5fbfae" && writeCall.args.settings.allowlist.length === 1,
++  JSON.stringify(writeCall?.args));
++
++const readsBeforeReload = calls.filter((c) => c.cmd === "read_settings").length;
++await page.reload();
++await page.waitForTimeout(400);
++const bootApplied = await page.evaluate(() => ({
++  theme: document.documentElement.dataset.theme,
++  accent: document.documentElement.style.getPropertyValue("--accent").trim(),
++  teal: document.querySelector('.accent-chip[data-accent="#5fbfae"]')?.getAttribute("aria-pressed"),
++}));
++check("U-D4 FR-SET13 boot: persisted theme/accent read and applied",
++  calls.filter((c) => c.cmd === "read_settings").length === readsBeforeReload + 1 &&
++  bootApplied.theme === "dusk" && bootApplied.accent === "#5fbfae" && bootApplied.teal === "true",
++  JSON.stringify(bootApplied));
++
++await page.locator("#open-settings").click();
++await page.waitForTimeout(100);
++await page.evaluate(() => document.getElementById("settings-scrim").click());
++await page.waitForTimeout(100);
++check("U-D4 FR-SET12: scrim click closes modal", await page.locator("#settings-scrim").evaluate((el) => el.classList.contains("hidden")));
++await page.locator("#open-settings").click();
++await page.waitForTimeout(100);
++await page.keyboard.press("Escape");
++await page.waitForTimeout(100);
++check("U-D4 FR-SET12: Escape closes + restores gear focus",
++  await page.locator("#settings-scrim").evaluate((el) => el.classList.contains("hidden")) &&
++  await page.evaluate(() => document.activeElement?.id === "open-settings"));
++
++// Restore the Dusk default so the remaining legacy checks keep their canonical palette.
++await page.locator("#open-settings").click();
++await page.locator("#accent-reset").click();
++await page.locator("#settings-done").click();
++await page.waitForTimeout(150);
++// End U-D4 checks.
++
+diff --git a/src/main.ts b/src/main.ts
+index b7d5e08..53147f5 100644
+--- a/src/main.ts
++++ b/src/main.ts
+@@ -20,0 +21,15 @@ interface HostDto {
++type ThemePreset = "dusk" | "slate" | "ink" | "light";
++
++interface AllowEntry {
++  host: string;
++  command: string;
++  added_at: string;
++}
++
++interface AppSettings {
++  version: number;
++  theme: ThemePreset;
++  accent: string;
++  allowlist: AllowEntry[];
++}
++
+@@ -86,0 +102,14 @@ let identityFiles: string[] = [];
++const DEFAULT_SETTINGS: AppSettings = {
++  version: 1,
++  theme: "dusk",
++  accent: "#e2a35c",
++  allowlist: [],
++};
++const QUICK_ACCENTS = new Set(["#e2a35c", "#5fbfae", "#e0869b", "#aec267", "#b99be3"]);
++const DARK_ACCENT_INK = "#241404";
++const LIGHT_ACCENT_INK = "#f2e9dc";
++let appSettings: AppSettings = { ...DEFAULT_SETTINGS, allowlist: [] };
++let settingsDirty = false;
++let settingsClosing = false;
++let settingsReady: Promise<void> = Promise.resolve();
++
+@@ -140,0 +170 @@ function onOverlayEscape() {
++  else if (top.el.id === "settings-scrim") void closeSettings();
+@@ -232,0 +263,162 @@ function resolveDialog(id: string) {
++// Settings and appearance.
++function validAccent(value: string): boolean {
++  return /^#[0-9a-fA-F]{6}$/.test(value);
++}
++
++function relativeLuminance(hex: string): number {
++  const channel = (offset: number) => {
++    const value = parseInt(hex.slice(offset, offset + 2), 16) / 255;
++    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
++  };
++  return 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5);
++}
++
++function contrastRatio(a: string, b: string): number {
++  const [lighter, darker] = [relativeLuminance(a), relativeLuminance(b)].sort((x, y) => y - x);
++  return (lighter + 0.05) / (darker + 0.05);
++}
++
++function guardedAccentInk(accent: string): string {
++  return contrastRatio(accent, DARK_ACCENT_INK) >= contrastRatio(accent, LIGHT_ACCENT_INK)
++    ? DARK_ACCENT_INK
++    : LIGHT_ACCENT_INK;
++}
++
++function applyTheme(preset: ThemePreset, markDirty: boolean) {
++  document.documentElement.setAttribute("data-theme", preset);
++  document.querySelectorAll<HTMLButtonElement>(".preset").forEach((button) => {
++    button.setAttribute("aria-pressed", String(button.dataset.preset === preset));
++  });
++  appSettings.theme = preset;
++  if (markDirty) settingsDirty = true;
++}
++
++function applyAccent(hex: string, source: "chip" | "free", markDirty: boolean) {
++  if (!validAccent(hex)) return;
++  const accent = hex.toLowerCase();
++  const ink = source === "chip" ? DARK_ACCENT_INK : guardedAccentInk(accent);
++  const root = document.documentElement;
++  root.style.setProperty("--accent", accent);
++  root.style.setProperty("--accent-ink", ink);
++  ($("#accent-input") as HTMLInputElement).value = accent;
++  $("#accent-hex").textContent = accent;
++  const preview = $("#pv-mock");
++  preview.style.setProperty("--pa", accent);
++  preview.style.setProperty("--pi", ink);
++  document.querySelectorAll<HTMLButtonElement>(".accent-chip").forEach((button) => {
++    button.setAttribute("aria-pressed", String(button.dataset.accent?.toLowerCase() === accent));
++  });
++  appSettings.accent = accent;
++  if (markDirty) settingsDirty = true;
++}
++
++function selectSettingsSection(section: string) {
++  document.querySelectorAll<HTMLButtonElement>(".set-nav").forEach((button) => {
++    if (button.dataset.section === section) button.setAttribute("aria-current", "page");
++    else button.removeAttribute("aria-current");
++  });
++  const appearance = $("#settings-appearance");
++  const placeholder = $("#settings-placeholder");
++  const showingAppearance = section === "appearance";
++  appearance.classList.toggle("hidden", !showingAppearance);
++  placeholder.classList.toggle("hidden", showingAppearance);
++  if (!showingAppearance) {
++    const active = document.querySelector<HTMLButtonElement>(`.set-nav[data-section="${section}"]`);
++    $("#settings-placeholder-title").textContent = active?.textContent?.trim() || "Settings";
++  }
++}
++
++async function readAndApplySettings() {
++  let loaded = DEFAULT_SETTINGS;
++  try {
++    loaded = await invoke<AppSettings>("read_settings");
++  } catch {
++    loaded = DEFAULT_SETTINGS;
++  }
++  const theme: ThemePreset = ["dusk", "slate", "ink", "light"].includes(loaded.theme)
++    ? loaded.theme
++    : "dusk";
++  const accent = validAccent(loaded.accent) ? loaded.accent.toLowerCase() : DEFAULT_SETTINGS.accent;
++  appSettings = {
++    version: 1,
++    theme,
++    accent,
++    allowlist: Array.isArray(loaded.allowlist) ? loaded.allowlist : [],
++  };
++  applyTheme(theme, false);
++  applyAccent(accent, QUICK_ACCENTS.has(accent) ? "chip" : "free", false);
++  settingsDirty = false;
++}
++
++async function persistSettings(): Promise<boolean> {
++  if (!settingsDirty) return true;
++  const status = $("#settings-status");
++  const panel = $("#settings-panel");
++  const controls = [...panel.querySelectorAll<HTMLButtonElement | HTMLInputElement>("button, input")];
++  status.textContent = "";
++  panel.setAttribute("aria-busy", "true");
++  controls.forEach((control) => { control.disabled = true; });
++  try {
++    await invoke("write_settings", {
++      settings: {
++        version: 1,
++        theme: appSettings.theme,
++        accent: appSettings.accent,
++        allowlist: appSettings.allowlist,
++      },
++    });
++    settingsDirty = false;
++    return true;
++  } catch (e) {
++    status.textContent = `Could not save settings: ${msg(e)}. Try again.`;
++    return false;
++  } finally {
++    panel.removeAttribute("aria-busy");
++    controls.forEach((control) => { control.disabled = false; });
++  }
++}
++
++async function openSettings() {
++  await settingsReady;
++  selectSettingsSection("appearance");
++  $("#settings-status").textContent = "";
++  openOverlay("#settings-scrim", $("#settings-panel"));
++}
++
++async function closeSettings() {
++  if (settingsClosing) return;
++  settingsClosing = true;
++  const saved = await persistSettings();
++  settingsClosing = false;
++  if (saved) closeOverlay("#settings-scrim");
++}
++
++function initSettings() {
++  $("#open-settings").addEventListener("click", () => void openSettings());
++  $("#settings-close").addEventListener("click", () => void closeSettings());
++  $("#settings-done").addEventListener("click", () => void closeSettings());
++  $("#settings-scrim").addEventListener("click", (event) => {
++    if (event.target === event.currentTarget) void closeSettings();
++  });
++  document.querySelectorAll<HTMLButtonElement>(".set-nav").forEach((button) => {
++    button.addEventListener("click", () => selectSettingsSection(button.dataset.section || "appearance"));
++  });
++  document.querySelectorAll<HTMLButtonElement>(".preset").forEach((button) => {
++    button.addEventListener("click", () => {
++      if (button.getAttribute("aria-disabled") === "true") return;
++      applyTheme((button.dataset.preset || "dusk") as ThemePreset, true);
++    });
++  });
++  document.querySelectorAll<HTMLButtonElement>(".accent-chip").forEach((button) => {
++    button.addEventListener("click", () => applyAccent(button.dataset.accent || "", "chip", true));
++  });
++  ($("#accent-input") as HTMLInputElement).addEventListener("input", (event) => {
++    applyAccent((event.target as HTMLInputElement).value, "free", true);
++  });
++  $("#accent-reset").addEventListener("click", () => {
++    applyTheme("dusk", true);
++    applyAccent(DEFAULT_SETTINGS.accent, "chip", true);
++  });
++  settingsReady = readAndApplySettings();
++}
++
+@@ -2078,0 +2271 @@ window.addEventListener("DOMContentLoaded", () => {
++  initSettings();
+diff --git a/src/styles.css b/src/styles.css
+index 6840b2f..687f585 100644
+--- a/src/styles.css
++++ b/src/styles.css
+@@ -77 +77 @@ button:disabled:hover { background: var(--surface); }
+-button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
++button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+@@ -199 +199 @@ body.sb-collapsed #sidebar > :not(#btn-expand) { display: none; }
+-.sidebar-foot #btn-reload { width: 26px; height: 26px; }
++.sidebar-foot #btn-reload, .sidebar-foot #open-settings { width: 26px; height: 26px; }
+@@ -459,0 +460,193 @@ body.sftp-dragging { user-select: none; cursor: grabbing; }
++.settings-scrim {
++  position: fixed;
++  inset: 0;
++  z-index: 60;
++  display: flex;
++  align-items: center;
++  justify-content: center;
++  padding: 32px;
++  background: rgba(12, 9, 6, .55);
++}
++.settings {
++  width: 900px;
++  max-width: 94vw;
++  height: 620px;
++  max-height: 92vh;
++  display: flex;
++  flex-direction: column;
++  overflow: hidden;
++  background: var(--sidebar);
++  border: 1px solid var(--border);
++  border-radius: var(--r-lg);
++  box-shadow: var(--shadow-drawer);
++}
++.settings-head {
++  display: flex;
++  align-items: center;
++  gap: 9px;
++  flex: 0 0 auto;
++  padding: 13px 16px;
++  border-bottom: 1px solid var(--border);
++}
++.settings-head h2 { margin: 0; font-size: 14px; font-weight: 650; }
++.settings-head #settings-close { width: 26px; height: 26px; margin-left: auto; }
++.settings-body { display: flex; flex: 1; min-height: 0; }
++.settings-nav {
++  width: 186px;
++  flex: 0 0 186px;
++  display: flex;
++  flex-direction: column;
++  gap: 2px;
++  overflow-y: auto;
++  padding: 10px;
++  border-right: 1px solid var(--border);
++}
++.set-nav {
++  position: relative;
++  height: 32px;
++  flex: 0 0 32px;
++  padding: 0 10px;
++  text-align: left;
++  white-space: nowrap;
++  color: var(--dim);
++  background: transparent;
++  border: 0;
++  border-radius: var(--r-md);
++  font-size: 12.5px;
++}
++.set-nav:hover, .set-nav[aria-current="page"] { color: var(--text); background: var(--surface); }
++.set-nav[aria-current="page"]::before {
++  content: "";
++  position: absolute;
++  left: -10px;
++  top: 7px;
++  bottom: 7px;
++  width: 2px;
++  border-radius: 2px;
++  background: var(--accent);
++}
++.settings-content { flex: 1; min-width: 0; overflow-y: auto; padding: 20px 22px 22px; }
++.set-h { margin: 0 0 3px; font-size: 13.5px; font-weight: 650; }
++.set-sub { margin: 0 0 18px; color: var(--dim); font-size: 12px; }
++.set-label {
++  margin-bottom: 9px;
++  color: var(--faint);
++  font-size: 10.5px;
++  font-weight: 600;
++  letter-spacing: .09em;
++  text-transform: uppercase;
++}
++.set-block { margin-bottom: 24px; }
++.settings-placeholder { color: var(--dim); }
++.settings-placeholder p { margin: 6px 0 0; }
++
++.preset-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
++.preset {
++  min-width: 0;
++  display: flex;
++  flex-direction: column;
++  gap: 8px;
++  padding: 9px 9px 8px;
++  text-align: left;
++  background: var(--surface);
++  border: 1px solid var(--border);
++  border-radius: var(--r-lg);
++}
++.preset:hover { background: var(--surface); border-color: var(--hairline); }
++.preset[aria-pressed="true"] { border-color: var(--accent); }
++.preset[aria-disabled="true"] { cursor: not-allowed; opacity: .68; }
++.preset[aria-disabled="true"]:hover { border-color: var(--border); }
++.preset-swatch {
++  height: 62px;
++  display: flex;
++  flex-direction: column;
++  justify-content: space-between;
++  gap: 6px;
++  overflow: hidden;
++  padding: 9px;
++  background: var(--pb);
++  border: 1px solid rgba(128, 128, 128, .3);
++  border-radius: var(--r-md);
++}
++.sw-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
++.sw-text { color: var(--pt); font-family: var(--font-mono); font-size: 11px; line-height: 1; }
++.sw-accent { width: 24px; height: 12px; flex: 0 0 auto; border-radius: 3px; background: var(--pa); }
++.sw-surface { height: 12px; border: 1px solid rgba(128, 128, 128, .22); border-radius: 3px; background: var(--ps); }
++.preset-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
++.preset-name { color: var(--text); font-size: 12.5px; font-weight: 550; }
++.preset-check { display: none; margin-left: auto; color: var(--accent); font-weight: 700; }
++.preset[aria-pressed="true"] .preset-check { display: inline; }
++.preset-coming { margin-left: auto; color: var(--faint); font-size: 9.5px; text-transform: uppercase; }
++.preset[aria-pressed="true"] .preset-coming { display: none; }
++
++.accent-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
++.color-well {
++  height: 42px;
++  display: flex;
++  align-items: center;
++  gap: 10px;
++  padding: 0 12px 0 8px;
++  background: var(--surface);
++  border: 1px solid var(--border);
++  border-radius: var(--r-md);
++}
++.color-well input[type="color"] {
++  width: 36px;
++  height: 28px;
++  padding: 0;
++  cursor: pointer;
++  background: transparent;
++  border: 1px solid var(--border);
++  border-radius: var(--r-sm);
++}
++.color-hex { color: var(--dim); font-family: var(--font-mono); font-size: 12px; }
++.chip-row { display: flex; align-items: center; gap: 9px; }
++.accent-chip {
++  width: 26px;
++  height: 26px;
++  display: grid;
++  place-items: center;
++  padding: 0;
++  border: 1px solid rgba(128, 128, 128, .35);
++  border-radius: 50%;
++}
++.accent-chip:hover { filter: brightness(1.06); }
++.accent-chip[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--sidebar), 0 0 0 4px var(--accent); }
++.chip-check { color: #241404; font-size: 13px; font-weight: 800; opacity: 0; }
++.accent-chip[aria-pressed="true"] .chip-check { opacity: 1; }
++.set-note { margin: 9px 0 0; color: var(--dim); font-size: 11.5px; }
++
++.pv {
++  --pa: #e2a35c;
++  --pi: #241404;
++  overflow: hidden;
++  background: var(--surface);
++  border: 1px solid var(--border);
++  border-radius: var(--r-lg);
++}
++.pv-tabs { display: flex; align-items: center; gap: 6px; padding: 9px 10px 0; background: var(--sidebar); border-bottom: 1px solid var(--border); }
++.pv-tab { position: relative; height: 26px; display: flex; align-items: center; padding: 0 10px; color: var(--dim); border-radius: var(--r-md) var(--r-md) 0 0; font-size: 12px; }
++.pv-tab.on { color: var(--text); background: var(--surface); }
++.pv-tab.on::after { content: ""; position: absolute; left: 8px; right: 8px; bottom: -1px; height: 2px; border-radius: 2px 2px 0 0; background: var(--pa); }
++.pv-body { display: flex; align-items: center; gap: 20px; padding: 13px 14px; }
++.pv-btn { height: 28px; display: inline-flex; align-items: center; padding: 0 13px; color: var(--pi); background: var(--pa); border-radius: var(--r-md); font-size: 12px; font-weight: 650; }
++.pv-line { color: var(--faint); font-family: var(--font-mono); font-size: 12px; }
++.pv-user { color: var(--pa); }
++.pv-cursor { width: 7px; height: 13px; display: inline-block; margin-left: 3px; vertical-align: -2px; background: var(--pa); }
++
++.settings-foot { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; padding: 12px 16px; border-top: 1px solid var(--border); }
++.btn-text { height: 30px; padding: 0 10px; color: var(--dim); background: transparent; border: 0; border-radius: var(--r-md); font-size: 12.5px; }
++.btn-text:hover { color: var(--text); background: var(--surface); }
++.settings-foot .foot-spacer { flex: 1; }
++.settings-status { color: var(--danger); font-size: 11.5px; }
++.settings-foot #settings-done { height: 30px; padding: 0 14px; }
++
++@media (max-width: 700px) {
++  .settings-scrim { padding: 12px; }
++  .settings-body { flex-direction: column; }
++  .settings-nav { width: 100%; flex: 0 0 auto; flex-direction: row; overflow-x: auto; overflow-y: hidden; border-right: 0; border-bottom: 1px solid var(--border); }
++  .set-nav { width: auto; }
++  .set-nav[aria-current="page"]::before { left: 10px; right: 10px; top: auto; bottom: -10px; width: auto; height: 2px; }
++  .preset-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
++}
++

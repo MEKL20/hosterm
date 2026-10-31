@@ -1,0 +1,113 @@
+warning: variable does not need to be mutable
+    --> src/lib.rs:1160:9
+     |
+1160 |     let mut sess = SftpPtySession { master: pair.master, writer, rx, alive };
+     |         ----^^^^
+     |         |
+     |         help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+    --> src/lib.rs:1208:13
+     |
+1208 |         let mut g = sess.lock().unwrap();
+     |             ----^
+     |             |
+     |             help: remove this `mut`
+
+warning: `hosterm` (lib test) generated 2 warnings (run `cargo fix --lib -p hosterm --tests` to apply 2 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.76s
+     Running unittests src/lib.rs (target/debug/deps/hosterm_lib-c453ecead5237683)
+
+running 87 tests
+test auth_key_tests::create_identity_file_writes_key_0600_and_lists_it ... ok
+test auth_key_tests::create_identity_file_rejects_bad_name_and_duplicate ... ok
+test auth_key_tests::delete_removes_only_first_duplicate_block ... ok
+test auth_key_tests::live_pty_password_autoinject ... ok
+test auth_key_tests::live_sftp_persistent_session_reuses_login ... ok
+test auth_key_tests::legacy_keys_in_ssh_dir_still_listed ... ok
+test auth_key_tests::list_identity_files_skips_pub_and_config ... ok
+test auth_key_tests::local_list_skips_hidden_and_sorts_dirs_first ... ok
+test auth_key_tests::migration_moves_legacy_password_directive_to_sidecar ... ok
+test auth_key_tests::password_auth_writes_prompt_directives_no_secret ... ok
+test auth_key_tests::save_password_host_keeps_config_ssh_clean_and_stores_secret_in_sidecar ... ok
+test auth_key_tests::stored_password_sidecar_roundtrips ... ok
+test bin_check_tests::sftp_override_replaces_lookup ... ok
+test fleet::tests::classify_status_matrix ... ok
+test auth_key_tests::switching_password_to_key_clears_password_directives ... ok
+test bin_check_tests::system_dir_fallback_used_for_both ... ok
+test bin_check_tests::all_four_result_states ... ok
+test fleet::tests::fake_ssh::fleet_concurrency_ceiling_never_exceeds_n ... ok
+test fleet::tests::fake_ssh::fleet_exit_255_is_fail_not_timeout ... ok
+test fleet::tests::fake_ssh::fleet_finished_true_fast_path_zero_events ... ok
+test fleet::tests::fake_ssh::fleet_guard_call_site_skips_unsafe_alias ... ok
+test fleet::tests::fake_ssh::fleet_probe_and_config_rejections ... ok
+test fleet::tests::fake_ssh::fleet_script_mode_pipes_stdin_with_frozen_argv ... ok
+test fleet::tests::fake_ssh::fleet_spawn_failure_reports_frozen_reason ... ok
+test fleet::tests::fake_ssh::fleet_stop_kills_and_marks_remaining_skipped ... ok
+test fleet::tests::fake_ssh::fleet_streams_10mib_with_honest_counters ... ok
+test fleet::tests::host_eligibility_precedence_matrix ... ok
+test fleet::tests::normalize_script_four_cases ... ok
+test fleet::tests::pick_transport_three_fixtures ... ok
+test fleet::tests::sidecar_keys_only_plan_or ... ok
+test fleet::tests::snapshot_hosts_parses_text_only ... ok
+test fleet::tests::ssh_argv_is_the_only_argv_source ... ok
+test fleet::tests::validate_rejects_exact_fleet_prefixes ... ok
+test fleet::tests::validation_rejections_emit_zero_events ... ok
+test fleet::tests::fake_ssh::fleet_summary_invariant_holds_on_mixed_run ... ok
+test fleet::tests::fake_ssh::fleet_timeout_kills_child ... ok
+test fleet::tests::fake_ssh::fleet_writes_nothing_config_or_sidecar ... ok
+test forget_secret_tests::forget_secret_drops_the_stored_password_flag ... ok
+test forget_secret_tests::forget_secret_is_idempotent_and_ignores_empty_alias ... ok
+test forget_secret_tests::forget_secret_keeps_sidecar_0600_and_config_untouched ... ok
+test forget_secret_tests::forget_secret_propagates_write_error_and_keeps_row ... ok
+test forget_secret_tests::forget_secret_removes_only_the_named_row ... ok
+test qa_roundtrip_tests::qa_alias_with_space_no_corruption ... ok
+test qa_roundtrip_tests::qa_crlf_normalized_to_lf ... ok
+test qa_roundtrip_tests::qa_alias_with_space_roundtrip_and_rename ... ok
+test qa_roundtrip_tests::qa_append_new_option_lands_after_blank_separator ... ok
+test qa_roundtrip_tests::qa_backend_allows_deleting_wildcard_block ... ok
+test qa_roundtrip_tests::qa_dash_leading_alias_rejected ... ok
+test qa_roundtrip_tests::qa_delete_missing_alias_no_corruption ... ok
+test qa_roundtrip_tests::qa_duplicate_host_blocks_delete_removes_both ... ok
+test qa_roundtrip_tests::qa_duplicate_host_blocks_rename_updates_first_only ... ok
+test qa_roundtrip_tests::qa_edit_one_host_rest_of_file_byte_identical ... ok
+test qa_roundtrip_tests::qa_lowercase_host_keyword_normalized ... ok
+test qa_roundtrip_tests::qa_edit_preserves_comment_inside_edited_block ... ok
+test qa_roundtrip_tests::qa_empty_file_roundtrip ... ok
+test qa_roundtrip_tests::qa_host_without_hostname_edit_keeps_it_absent ... ok
+test qa_roundtrip_tests::qa_missing_file_ops ... ok
+test qa_roundtrip_tests::qa_new_host_appended_after_catchall_is_shadowed ... ok
+test qa_roundtrip_tests::qa_roundtrip_bare_host_keyword_no_patterns ... ok
+test qa_roundtrip_tests::qa_roundtrip_bare_keyword_no_value ... ok
+test qa_roundtrip_tests::qa_pattern_block_10_0_preserved ... ok
+test qa_roundtrip_tests::qa_tab_indent_normalized_to_spaces ... ok
+test qa_roundtrip_tests::qa_rename_host_updates_right_block_others_intact ... ok
+test qa_roundtrip_tests::qa_rename_to_missing_original_errors ... ok
+test qa_roundtrip_tests::qa_save_empty_alias_rejected ... ok
+test sftp_tests::live_sftp_roundtrip ... ok
+test qa_roundtrip_tests::qa_unquoted_space_alias_shows_first_pattern ... ok
+test sftp_tests::parse_ls_basic_entries ... ok
+test sftp_tests::parse_ls_ignores_noise ... ok
+test sftp_tests::parse_ls_name_with_spaces ... ok
+test sftp_tests::sftp_safe_rejects_option_and_newline_injection ... ok
+test qa_roundtrip_tests::qa_wildcard_preserved_on_other_host_edit ... ok
+test qa_roundtrip_tests::qa_write_config_raw_roundtrip_arbitrary_text ... ok
+test store_tests::read_snippets_returns_bundled_categories ... ok
+test store_tests::read_settings_coerces_unknown_theme_and_invalid_accent ... ok
+test store_tests::read_settings_corrupt_file_returns_defaults_and_does_not_clobber ... ok
+test store_tests::read_settings_missing_file_returns_defaults ... ok
+test store_tests::write_settings_empty_allowlist_entry_rejected ... ok
+test store_tests::write_settings_invalid_accent_rejects_without_writing ... ok
+test tests::add_new_host_block ... ok
+test store_tests::write_settings_invalid_theme_rejects_without_writing ... ok
+test tests::edit_preserves_other_hosts_and_comments ... ok
+test tests::reads_host_fields ... ok
+test tests::roundtrip_is_byte_identical ... ok
+test tests::set_empty_removes_option ... ok
+test store_tests::write_settings_leaves_ssh_config_and_sidecar_untouched ... ok
+test store_tests::write_then_read_roundtrips_and_stamps_added_at ... ok
+
+test result: ok. 87 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.49s
+

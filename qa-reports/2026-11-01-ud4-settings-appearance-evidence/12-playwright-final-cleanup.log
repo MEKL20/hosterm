@@ -1,0 +1,11 @@
+COMMAND: archive QA probe; mv Playwright packages to $TMPDIR; unlink bins
+START: 2026-10-31T18:56:25+00:00
+BIN_LINKS_REMOVED: 2
+unlink node_modules/.bin/playwright
+unlink node_modules/.bin/playwright-core
+PACKAGE_DIRS_ABSENT: true
+BIN_LINKS_REMAINING: 0
+PROBE_ARCHIVE: qa-reports/2026-11-01-ud4-settings-appearance-evidence/11-contrast-probe.mjs
+DEST: /home/mekl/.hermes/profiles/crew-coding-qa/cache/scratch/ud4-playwright-cleanup-repro
+EXIT_CODE: 0
+END: 2026-10-31T18:56:25+00:00

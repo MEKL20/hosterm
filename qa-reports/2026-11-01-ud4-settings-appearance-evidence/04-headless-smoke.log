@@ -1,0 +1,264 @@
+COMMAND: node qa-reports/headless-smoke.mjs
+START: 2026-10-31T18:49:25+00:00
+PASS check_binaries invoked at launch
+PASS present binaries: guide never appears
+PASS missing (Linux): guide skipped, app usable
+PASS missing (Linux): friendly per-attempt error names ssh — The ssh binary was not found on this machine, so this action
+PASS missing (Linux): backend spawn never attempted
+PASS missing (Windows): blocking guide shown at launch
+PASS guide: app inert behind it (blocking, OQ-A1)
+PASS guide: names the missing binary specifically (AC-A1.3) — OpenSSH client (ssh) not found on this machine.
+PASS guide: byte-exact PowerShell rendered
+PASS guide: all 7 content elements (AC-A2.1)
+PASS guide: Copy writes byte-exact command (AC-A2.1)
+PASS re-check still missing: screen stays, exactly one
+PASS re-check fixed: guide closes
+PASS re-check fixed: connect works without restart
+PASS Continue anyway dismisses guide
+PASS declined: raw config still works (AC-A3.1)
+PASS declined: connect shows friendly error naming ssh (AC-A3.2) — The ssh binary was not found on this machine, so this action cannot ru
+PASS 'Open install guide' re-opens the guide (AC-A3.2)
+PASS winPage CSP violations == 0 (NFR-W2-1)
+PASS host list renders — count=3
+PASS sidebar sftp action is a button
+PASS row actions hover-only at rest — opacity=0
+PASS row actions revealed on hover — opacity=1
+PASS row actions revealed on focus-within (R-32) — opacity=1
+PASS sftp rows render from mock — rows=2
+PASS dir size cell empty (no em dash) — ""
+PASS editor opens with mocked file — hello editorline two
+PASS U4: ed-wrap fills panel (height chain) — {"ph":654,"wh":654}
+PASS dirty dot appears on edit — dots=1
+PASS dirty dot is 8px --warn (U3)
+PASS dirty close uses in-app dialog (no native) — native=null
+PASS dialog has >=3 action buttons — buttons=15
+PASS raw modal opens
+PASS Escape closes modal
+PASS :focus-visible rule present
+PASS search: no match message
+PASS search: match renders
+PASS collapse: body class set
+PASS collapse: expand button shown
+PASS collapse: persisted
+PASS expand: class removed
+PASS edit/delete buttons gone from rows
+PASS right-click row opens in-app host menu
+PASS host menu = Open SFTP / Edit / Delete — Open SFTP|Edit|Delete
+PASS host menu Delete styled danger
+PASS delete dialog names the host — 
+      
+        Delete host
+        Delete host "prod-web" f
+PASS delete uses in-app dialog (no native) — native=null
+PASS delete dialog focuses Cancel — focus=Cancel
+PASS cancel keeps host
+PASS ⋯ button opens host menu
+PASS Escape closes host menu
+PASS host menu Edit opens modal
+PASS terminal right-click handled (no native menu)
+PASS sftp dual-pane: remote pane
+PASS sftp dual-pane: local pane rows
+PASS sftp dual-pane: local home prefilled
+PASS sftp single-click selects
+PASS sftp double-click navigates local dir
+PASS download without selection shows hint
+PASS pw sftp: stale-session retry renders entries
+PASS pw sftp: backend re-invoked exactly once on retry — calls=2
+PASS pw sftp: second tab on same host lists too
+PASS pw sftp: refresh rides the persistent session — before=3 after=4
+PASS pw sftp: closing one tab keeps its sibling
+PASS pw sftp: sibling tab still lists
+PASS drop target highlighted while dragging
+PASS drag tab onto tab adds second term-host — panels=2 split=1
+PASS split panes side-by-side ~50/50 — w1=512 w2=512
+PASS U4: term-host well bg --term #14100d (Dusk) — rgb(20, 16, 13)
+PASS U4: split divider is 4px — w=4
+PASS U4: divider sits between the two sides — {"g1":0,"g2":0}
+PASS U4: divider lights --accent while dragging — rgb(226, 163, 92)
+PASS U4: divider drag resizes split (manual mouse) — {"l":55.6,"r":44}
+PASS U4: divider dblclick resets 50/50 — {"l":49.8,"r":49.8}
+PASS U4: focus follows clicked side — focused=1
+PASS U4: focused side underline 2px --accent — 2px rgb(226, 163, 92)
+PASS U4: split registers an abortable window-listener signal — {"n":1,"live":1}
+PASS U4: status bar always visible, 24px — h=24 vis=true
+PASS U-D2 FR-SH8: status bar left = host · user@ip:port · connected — db-core · admin@203.0.113.20 · connected
+PASS U4: status bar shows app version — v0.10.0
+PASS U-D2 FR-SH8: status bar live count increments on tab open — 3 -> 4
+PASS U4: activateTab restores split focus to first side — pre=1 post=0
+PASS U4: legacy 'float: left' split layout removed (grep 0)
+PASS paste normalize: CRLF collapses to LF
+PASS right-click tab opens in-app menu
+PASS menu has close items (U3 adds Close host: 4)
+PASS contextmenu handled (menu visible)
+PASS close others leaves one tab
+PASS sftp wrap fits viewport (list scrollable)
+PASS upload/download buttons visible
+PASS U5: Upload/Download live in .pane-head (target pane), not a foot — {"wrapFits":true,"stripVisible":true,"upInHead":true,"dlInHead":true,"stripTop":634,"vh":720}
+PASS U5: grep .sftp-foot in main.ts+styles.css = 0
+PASS U4: panel == #panels height (status bar ate 24px) — {"ph":654,"ch":654,"wh":654}
+PASS U4: sftp-wrap fills panel (height chain) — {"ph":654,"ch":654,"wh":654}
+PASS sidebar drag-resize works — before=248 after=448
+PASS sidebar width persisted — stored=448
+PASS local pane is left of remote — L=This PC — local@465 R=prod-web — remote@871
+PASS U-D2 FR-SH8: status bar visible with 0 tabs ('0 live', empty host, shell 'shell') — {"vis":true,"h":24,"left":"","live":"0 live","shell":"shell"}
+PASS U4: split window listeners released on closeTab (no leak) — {"n":7,"live":0}
+PASS U-D2 §13.3: host row is exactly 34px (single line) — h=34
+PASS no second-line subtitle element
+PASS subtitle lives in title tooltip — deploy@203.0.113.10
+PASS group headers from '-' prefix — PROD|DB|PW
+PASS prod-web sits under PROD header
+PASS wildcard Host * not rendered
+PASS non-pw rows have no lock
+PASS pw-host shows lock marker
+PASS lock uses --accent token (Dusk)
+PASS Ctrl+K focuses #host-search
+PASS ArrowDown moves focus to first row
+PASS Enter on row opens terminal
+PASS dot goes live with live terminal
+PASS dot live uses --live token (Dusk)
+PASS dot back to muted after tab close
+PASS loading renders 3 static skeleton rows
+PASS no spinner replace during load
+PASS U-D2 §13.3: skeleton rows are 34px — h=34
+PASS no layout jump: #host-list height stable — during=563 after=563
+PASS hosts render after skeleton
+PASS U-D1: --bg == #191512 (Dusk) — #191512
+PASS U-D1: --accent == #e2a35c (Dusk) — #e2a35c
+PASS U-D1: all Dusk :root tokens byte-exact §13.3
+PASS theme color-scheme: dark — dark
+PASS no font CDN (@import / url(http) in styles.css + index.html
+PASS U-D1 INV-21: zero Abyss literal in src/ (grep gate)
+PASS U-D1: Abyss glow box-shadow fully removed
+PASS U-D1: elevation (--shadow-drawer) only on modal/drawer box — .modal-box, .settings
+PASS no glow on inactive tab / plain button — none / none
+PASS U-D1: xterm/CM literal remapped to Dusk (no Abyss hex)
+PASS U3: SFTP tab icon is --accent (Dusk) — rgb(226, 163, 92)
+PASS U3: active terminal icon is --text (Dusk) — rgb(242, 233, 220)
+PASS U3: PTY exit marks terminal tab dead
+PASS U3: dead tab title exact
+PASS U3: dead icon is --danger (Dusk)
+PASS U9: dead tab shows ONE ✕ (reconnect icon ≠ close glyph) — {"ico":"<svg viewBox=\"0 0 16 16\" width=\"16\" height=\"16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\"
+PASS U3: clicking dead tab respawns PTY
+PASS U3: reconnect clears dead state
+PASS U3: 12 tabs open — tabs=12
+PASS U3: activating last tab scrolls bar (scrollIntoView) — scrollLeft=1062
+PASS U3: activating first tab scrolls back — first=0 last=1062
+PASS U3: menu = Close/Close others/Close host/Close all — Close|Close others|Close host|Close all
+PASS U3: menu tooltips name new shortcuts — Ctrl+W|Ctrl+Shift+W||
+PASS U3: Close host keeps only other hosts' tabs
+PASS U3: Ctrl+W closes active tab
+PASS U3: Ctrl+Shift+W no-op while typing
+PASS U3: Ctrl+Shift+W closes all but active
+PASS U3: no draggable attribute (grep = 0)
+PASS U3: drop-zone rests --border (Dusk)
+PASS U3: drop-zone lights --accent while dragging — {"hot":true,"c":"rgb(226, 163, 92)"}
+PASS U5: loading shows 3 skeleton rows, no spinner text
+PASS U5 AC6: .sftp-row is 28px measured — h=28
+PASS U5 AC4: Space selects, no editor opened
+PASS U5 AC1: .sel paints bg var(--sel) + 1px solid --accent outline on clicked row — {"nm":"notes.txt","last":false,"bg":"rgba(226, 163, 92, 0.12)","oW":"1px","oS":"solid","oC":"rgb(226, 163, 92)"}
+PASS U5: chips ▲ sumber / ▼ target light on select (src --warn) — {"src":"▲ sumber: notes.txt","c":"rgb(226, 163, 92)","dst":"▼ target: drop di sini / klik file lalu Upload ▸"}
+PASS U5: Tab moves focus to opposite pane — {"inRemote":true,"nm":"notes.txt"}
+PASS U5 AC4: Ctrl+Enter transfers selection with correct paths — {"host":"prod-web","localPath":"/tmp/mockhome/notes.txt","remotePath":"notes.txt"}
+PASS U5: strip row reaches ok state
+PASS U5: running transfer shows 12px spinner row
+PASS U5: click-click two-stage transfer (remote→local, correct paths) — {"host":"prod-web","remotePath":"notes.txt","localPath":"/tmp/mockhome/notes.txt"}
+PASS U5: ok rows auto-fade after 4s
+PASS U5 AC5: two consecutive transfers = 2 strip rows (not overwritten) — rows=2
+PASS U5 AC5: failed transfer shows --danger row with retry button — {"n":1,"retry":true,"title":"Failed to upload notes.txt: permission denied (mock). Check the path and try again.","c":"rgb(224, 120, 86)"}
+PASS U5: retry replaces the failed row and succeeds
+PASS U5 AC3: drag lights opposite pane dashed 2px --accent — {"cls":true,"body":true,"oS":"dashed","oW":"2px","oC":"rgb(226, 163, 92)"}
+PASS U5 AC3: manual drag remote→local invokes sftp_download (correct paths) — {"host":"prod-web","remotePath":"notes.txt","localPath":"/tmp/mockhome/notes.txt"}
+PASS U5 AC3: zero [draggable] elements + no sftp-dragging stuck on body
+PASS U5: strip caps 3 rows + scroll — {"maxH":"64px","scrollable":true,"hint":"Pilih file → klik pane tujuan / drag manual mouse — HTML5 DnD tidak dipakai","fs":"11px","c":"rgb(185, 170, 149)"}
+PASS U5: static hint 11px --muted names click/drag paths — 11px/rgb(185, 170, 149)
+PASS U5: sftp drag listener released on closeTab (AbortController, live==0) — {"n":2,"live":0,"sftp":2}
+PASS U6 AC1: loading = 3 static .skel rows (0 list rows, 0 spinner) — {"skels":3,"rows":0,"spinners":0,"h":498,"anim":"shimmer","adur":"1.4s","tdur":"0s"}
+PASS U-D2 §13.3: skeletons shimmer (animationName 'shimmer', 1.4s) — shimmer/1.4s
+PASS U6 AC1: remote list height stable during loading (delta 0) — before=498 during=498
+PASS U6 AC1: local list loading = 3 .skel rows + height stable (delta 0) — {"skels":3,"rows":0,"h":499,"before":499}
+PASS U6 AC2: empty copy byte-identical "Empty directory." (remote + local) — {"r":"Empty directory.","l":"Empty directory."}
+PASS U6 AC2: remote error copy byte-identical + Go/Up actionable + no height jump — {"text":"Failed to list /boom: sftp boom (mock). Fix the path and press Go, or go up one level.","err":true,"goOn":true,"upOn":true,"h":498,"before":498}
+PASS U6 AC2: local error copy byte-identical + Go/Up actionable — {"text":"Failed to read /boom: permission denied (mock-local). Fix the path and press Go.","goOn":true,"upOn":true}
+PASS U6 AC2: copy strings untouched in main.ts source
+PASS U6: listeners released after U6 tab lifecycle (AbortController, live==0) — {"n":3,"live":0}
+PASS U6: delayList reset to 0 (later checks assume instant listings) — delayList=0
+PASS U7 AC2: ed-bar carries '● unsaved', hidden while clean — {"text":"● unsaved","display":"none"}
+PASS U7 AC2: edit shows '● unsaved' in --warn on the ed-bar — {"display":"block","color":"rgb(226, 163, 92)","tabDirty":true,"dot":"block"}
+PASS U7 AC2: existing tab dirty dot + .tab.dirty survive (not replaced) — {"display":"block","color":"rgb(226, 163, 92)","tabDirty":true,"dot":"block"}
+PASS U7 AC1: Ctrl+S while focus sits on Save invokes sftp_write_file with the edit — ["notes.txt"]
+PASS U7 AC2: save clears the ed-bar text and the tab dot — {"display":"none","tabDirty":false,"status":"Saved 18:50:27"}
+PASS U7 AC1: Ctrl+S inside .cm-editor still saves (bubbles to the panel listener) — {"n":1,"hasV":true}
+PASS U7 AC2: Reload while dirty raises the in-app dirty dialog (no native confirm) — {"native":null,"open":true,"msg":"notes.txt has unsaved changes.","btns":["Save and reload","Discard changes","Cancel"]}
+PASS U7 AC2: Cancel reload = no read invoked, edit + dirty kept — {"text":"hello editorline twoXVY","dirty":true}
+PASS U7 AC2: Discard reloads server text, clears dirty, keeps 'Reloaded from server' copy — {"text":"hello editorline two","dirty":false,"status":"Reloaded from server"}
+PASS U7 AC2: 'Save and reload' writes the edit THEN re-reads (1 write + 1 read), ends clean — {"dirty":false,"text":"hello editorline two","wr":1,"rd":1}
+PASS U7 AC1: keydown listener lives on the editor panel (view.dom handler removed) — panel=true
+PASS U7: pasteNormalize + 0 draggable untouched by U7
+PASS U8 AC1a: has_password=true → chip '● stored (sidecar, 0600)' visible, --ok text + dot — {"modalOpen":true,"chipHidden":false,"chipText":"stored (sidecar, 0600)","chipColor":"rgb(157, 196, 137)","dotColor":"rgb(157, 196, 137)","rowHidden":false,"note":"A password is stored for this host. Leave the field empty to keep it; type to replace it.","d3Hidden":false,"d3Text":"Auto-typing hanya aktif untuk host ini (opt-in per host).","placeholder":"kept — type to replace"}
+PASS U8 AC3: D3 note exact text, shown while auth=password (stored state keeps 'kept' placeholder) — {"modalOpen":true,"chipHidden":false,"chipText":"stored (sidecar, 0600)","chipColor":"rgb(157, 196, 137)","dotColor":"rgb(157, 196, 137)","rowHidden":false,"note":"A password is stored for this host. Leave the field empty to keep it; type to replace it.","d3Hidden":false,"d3Text":"Auto-typing hanya aktif untuk host ini (opt-in per host).","placeholder":"kept — type to replace"}
+PASS U8 AC3: D3 note hidden at auth=key, back when auth=password (chip round-trips) — {"u8Key":{"modalOpen":true,"chipHidden":true,"chipText":"stored (sidecar, 0600)","chipColor":"rgb(157, 196, 137)","dotColor":"rgb(157, 196, 137)","rowHidden":true,"note":"A password is stored for this host. Leave the field empty to keep it; type to replace it.","d3Hidden":true,"d3Text":"Auto-typing hanya aktif untuk host ini (opt-in per host).","placeholder":"kept — type to replace"},"u8s":{"modalOpen":true,"chipHidden":false,"chipText":"stored (sidecar, 0600)","chipColor":"rgb(157, 196, 137)","dotColor":"rgb(157, 196, 137)","rowHidden":false,"note":"A password is stored for this host. Leave the field empty to keep it; type to replace it.","d3Hidden":false,"d3Text":"Auto-typing hanya aktif untuk host ini (opt-in per host).","placeholder":"kept — type to replace"}}
+PASS U8 AC1b: has_password=false → chip absent, D3 hidden at auth=key — {"modalOpen":true,"chipHidden":true,"chipText":"stored (sidecar, 0600)","chipColor":"rgb(157, 196, 137)","dotColor":"rgb(157, 196, 137)","rowHidden":true,"note":"A password is stored for this host. Leave the field empty to keep it; type to replace it.","d3Hidden":true,"d3Text":"Auto-typing hanya aktif untuk host ini (opt-in per host).","placeholder":"kept — type to replace"}
+PASS U8 AC3: D3 note also shown at auth=password for a host without stored password — {"modalOpen":true,"chipHidden":true,"chipText":"stored (sidecar, 0600)","chipColor":"rgb(157, 196, 137)","dotColor":"rgb(157, 196, 137)","rowHidden":false,"note":"The password is stored in ~/.ssh/hosterm.secrets (file perms 0600), never in ~/.ssh/config, and filled in automatically at connect.","d3Hidden":false,"d3Text":"Auto-typing hanya aktif untuk host ini (opt-in per host).","placeholder":"stored in ~/.ssh/hosterm.secrets"}
+PASS U8 AC2: in-app confirm dialog (never native confirm), danger 'Hapus' + focus on Cancel — {"u8Native":null,"open":true,"title":"Hapus password tersimpan","buttons":["Hapus","Cancel"],"focused":"Cancel"}
+PASS U8 AC2: forget_secret invoked once with the edited alias — [{"cmd":"forget_secret","args":{"alias":"pw-host"}}]
+PASS U8 AC2: chip gone + note back to the empty version after forget — {"modalOpen":true,"chipHidden":true,"chipText":"stored (sidecar, 0600)","chipColor":"rgb(157, 196, 137)","dotColor":"rgb(157, 196, 137)","rowHidden":false,"note":"The password is stored in ~/.ssh/hosterm.secrets (file perms 0600), never in ~/.ssh/config, and filled in automatically at connect.","d3Hidden":false,"d3Text":"Auto-typing hanya aktif untuk host ini (opt-in per host).","placeholder":"stored in ~/.ssh/hosterm.secrets"}
+PASS U8 AC2: sidebar lock icon drops with the sidecar entry — lockGone=true chipHidden=true
+PASS U8 AC4: copy names the sidecar (hosterm.secrets) and never claims storage in ~/.ssh/config
+PASS U9 (a): grep draggable in src/ = 0 — files=6 hits=
+PASS U9 (a): no draggable in index.html + 0 [draggable] in live DOM
+PASS U9 (c): pasteNormalize body unchanged (CRLF/CR→LF, strip 1 trailing LF) — "\n  const lf = text.replace(/\\r\\n/g, \"\\n\").replace(/\\r/g, \"\\n\");\n  return lf.endsWith(\"\\n\") ? lf.slice(0, -1) : lf;"
+PASS U9 (c): pasteNormalize wired on both PTY paste paths
+PASS U-D2 §13.3: keyframes = shimmer + spin + sweep (shimmer added, no stragglers)
+PASS U9 (d): prefers-reduced-motion stops the spinner — none
+PASS U9: shipped skeleton class is .skel (no .skel-row) + no @font-face
+PASS U-D2 §13.3: sidebar is 248px wide — w=248
+PASS U-D2 FR-SH8: zero /etc/passwd probes via sftp_read_file on terminal open (anti-regression) — before=0 after=0
+PASS U-D2 §13.3: tab bar 42px, tab 32px — {"bar":42,"tab":32}
+PASS U-D2 FR-SH5: active tab underline 2px --accent — {"w":"2px","c":"rgb(226, 163, 92)"}
+PASS U-D2 FR-SH8: status bar mono 11px — {"fs":"11px","mono":true}
+PASS U-D2 FR-SH8: status bar right shows N live · UTF-8 · LF · shell (static display-only label) — {"live":"1 live","enc":"UTF-8","eol":"LF","shell":"shell","order":[0,1,2,3,4]}
+PASS U-D2 FR-SH8: right cluster field order live·enc·eol·shell·clock — [0,1,2,3,4]
+PASS U-D2 §13.3: row-actions fade transition 0.12s — 0.12s
+PASS U-D2 FR-SH6: divider 4px col-resize (CSS source asserts flex 4px + col-resize)
+PASS U-D2 FR-DT4: reduced-motion stops the shimmer skeleton — none
+PASS U-D4 boot: read_settings invoked + Dusk/default accent applied
+PASS U-D4 FR-SET1: in-app modal + exact scrim + 900x620 geometry — {"open":true,"role":"dialog","modal":"true","scrim":"rgba(12, 9, 6, 0.55)","width":900,"height":620,"inert":true}
+PASS U-D4 FR-SET2: 7 nav items + Appearance default current — {"labels":["General","Appearance","Terminal","SSH & Keys","AI Assistant","Snippets","Account"],"current":"appearance"}
+PASS U-D4 FR-SET3: non-Appearance nav renders coming placeholder — {"title":"General","copy":"\n              General\n              Coming soon.\n            ","appearanceHidden":true}
+PASS U-D4 FR-SET4: four presets; Dusk selected; three coming presets disabled — {"count":4,"dusk":"true","disabled":3}
+PASS U-D4 OQ-2: disabled Slate click never swaps data-theme — dusk->dusk
+PASS U-D4 FR-SET7/8/10: teal updates inline accent + pressed chip + preview only — {"accent":"#5fbfae","ink":"#241404","pressed":"true","preview":"#5fbfae","previewButton":"rgb(95, 191, 174)","stable":["#221c17","#f2e9dc","#9dc489","#e07856"]}
+PASS U-D4 INV-23: all five quick chips contrast >=4.5 with #241404 — [{"accent":"#e2a35c","ratio":8.18060039728731},{"accent":"#5fbfae","ratio":8.115110618605044},{"accent":"#e0869b","ratio":6.842802495508517},{"accent":"#aec267","ratio":9.102683799795606},{"accent":"#b99be3","ratio":7.529220380096464}]
+PASS U-D4 INV-23: dark free color auto-switches to light ink at >=4.5 — {"accent":"#101010","ink":"#f2e9dc","ratio":15.824570367603279,"pressed":0}
+PASS U-D4 FR-SET11: reset restores Dusk + #e2a35c — {"theme":"dusk","accent":"#e2a35c","dusk":"true"}
+PASS U-D4 FR-SET12/13: Done closes + write_settings persists explicit full shape — {"settings":{"version":1,"theme":"dusk","accent":"#5fbfae","allowlist":[{"host":"prod-web","command":"sudo systemctl restart netdata","added_at":"2026-10-30T12:00:00Z"}]}}
+PASS U-D4 FR-SET13 boot: persisted theme/accent read and applied — {"theme":"dusk","accent":"#5fbfae","teal":"true"}
+PASS U-D4 FR-SET12: scrim click closes modal
+PASS U-D4 FR-SET12: Escape closes + restores gear focus
+PASS U9 (b): sidebar empty copy byte-identical — {"text":"No hosts in ~/.ssh/config yet. Click + to add one.","err":false,"btn":"Add host"}
+PASS U9: empty-state CTA 'Add host' opens the add-host modal
+PASS U9 (b): sidebar error copy byte-identical (.list-state.err) — {"text":"Could not read ~/.ssh/config: permission denied (mock). Check the file, then press Reload.","err":true,"btn":null}
+PASS U9: fail fixture logs exactly the expected console.error
+PASS U9 (b): sidebar no-match copy byte-identical — {"text":"No host matches \"zzz\".","err":false,"btn":null}
+PASS U9: ArrowDown from search focuses the first host row — prod-web vs prod-web
+PASS U9: row ArrowDown/ArrowUp move focus between host rows — db-core/prod-web
+PASS U9: local pane renders on the LEFT and copy says so — {"leftLocal":true,"ax":265,"bx":770.5}
+PASS U9 (b): SFTP selection/transfer copy byte-identical in source
+PASS U9 hostile: remote .nm childElementCount 0 for every entry — [0,0,0]
+PASS U9 hostile: .nm text + dataset.name keep raw bytes — ["<img src=x onerror=window.__pwn=1>","\"><svg onload=window.__pwn=2>","&amp;<b>x</b>"]
+PASS U9 hostile: 0 <img>/<b> + 0 on* attributes injected anywhere in the DOM
+PASS U9 hostile: path echo in .sftp-status inert (0 child elements, raw text) — {"kids":0,"text":"Failed to list /boom/<img src=x onerror=window.__pwn=1>: sftp boom (mock). Fix the path and press Go, or go up one level."}
+PASS U9 hostile: sidebar .h-name inert + aria-label raw — {"kids":0,"text":"<img src=x onerror=window.__pwn=1>","aria":"Open terminal to <img src=x onerror=window.__pwn=1>"}
+PASS U9 hostile: tab label + remote pane title inert — {"lk":0,"lt":"<img src=x onerror=window.__pwn=1>","tk":0,"tt":"<img src=x onerror=window.__pwn=1> — remote"}
+PASS U9 hostile: window.__pwn undefined + CSP 0 after all hostile fixtures
+PASS U9: teardown — 0 tabs, 3 hosts back
+PASS U9: end-of-suite window drag listeners live == 0 — live=0
+PASS U9 audit: §8#9 (host menu/divider/status bar/strip) covered + U3–U8 all PASS — units= missing=
+PASS U-D2 FR-SH8: /etc/passwd probe count exact 0 across the whole suite — total=0
+PASS no console/page errors
+PASS CSP violations == 0 across suite (AC R1.4)
+PASS served CSP == tauri.conf.json policy — default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src
+
+255/255 passed
+EXIT_CODE: 0
+END: 2026-10-31T18:50:43+00:00

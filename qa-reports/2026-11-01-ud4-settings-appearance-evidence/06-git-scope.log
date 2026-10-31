@@ -1,0 +1,20 @@
+COMMANDS:
+git diff --name-status 876d32d..ca3e86b
+git diff --numstat 876d32d..ca3e86b
+git diff --check 876d32d..ca3e86b
+git status --short
+== name-status ==
+M	index.html
+M	qa-reports/headless-smoke.mjs
+M	src/main.ts
+M	src/styles.css
+== numstat ==
+108	0	index.html
+187	3	qa-reports/headless-smoke.mjs
+193	0	src/main.ts
+195	2	src/styles.css
+== diff-check ==
+== working status after verify ==
+?? qa-reports/2026-11-01-ud4-settings-appearance-evidence/
+DIFF_FILE: /home/mekl/src/hosterm/qa-reports/2026-11-01-ud4-settings-appearance-evidence/06-target-u0.diff
+EXIT_CODE: 0

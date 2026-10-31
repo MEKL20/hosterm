@@ -625,6 +625,8 @@ Structural verdict for the spec's Clarifying Q3 / R-FL-1: a spawn has exactly on
 
 > Architect addendum (card t_60df4386, 31 Okt 2026), derived FROM `docs/FEATURE-SPEC-redesign-dusk-v1.md` (pm, FR/NFR/OQ) with the **visual truth** taken verbatim from the MEKL-approved prototypes `docs/UX/prototypes/proto-a-dusk.html` + `proto-a-dusk-settings.html` (+ `verification-report.json`). This extends — does not replace — §§1–12. New decisions: **ADR-18..22**; new invariants: **INV-21..26**; IPC inventory **24 → 27** (`read_settings`, `write_settings`, `read_snippets`). The §12 Fleet IPC table stays frozen; nothing here touches it.
 >
+> **INV-23 correction (card t_4575ff90, 1 Nov 2026; ADR-20 Rev. 2).** U-D4 QA at `ca3e86b` proved the original free-accent endpoints `#241404` / `#f2e9dc` leave a luminance gap where neither reaches `4.5:1` (`#777777` → `3.9848605473:1`; `#6f6f6f` → `4.1788873680:1`). §13.2.1 below supersedes only that endpoint rule. No IPC, store schema, or other ADR changes.
+>
 > **MEKL-pending assumptions (reversible defaults, NOT final facts).** nano locked these on 31 Okt as working defaults because MEKL has not overridden; every one is tagged `[ASSUME-OQ-n]` where it bites and re-surfaced in §13.9. They are design inputs here, not closed constraints like Fleet's OQ-1..9.
 
 ### 13.1 Frontend-only vs new-IPC split (the first architectural cut)
@@ -645,7 +647,7 @@ The redesign is **mostly a frontend re-skin**; only persistence and the allowlis
 
 **Net new IPC = 3 commands** (`read_settings`, `write_settings`, `read_snippets`). Everything else is CSS variables + DOM behavior the frontend owns, and is mockable in smoke with zero backend (same posture Fleet Units 3–4 used). The AI *backend* (model, execution wiring) is explicitly **not designed here** `[ASSUME-OQ-4]` — §13.6 defines only the UX contract + the integration point, mirroring how §12.8 owed the v2 spec author a note.
 
-### 13.2 Theme token as a SYSTEM (ADR-20)
+### 13.2 Theme token as a SYSTEM (ADR-20 Rev. 2)
 
 **Decision — presets are a data-driven `:root` variable set swapped by a single root attribute; custom accent is one overridable variable.** This is what lets Slate/Ink/Light be "filled in later" with zero rework (`[ASSUME-OQ-2]`).
 
@@ -653,8 +655,45 @@ Mechanism:
 1. **Dusk is the default `:root`** — all tokens §13.3 live directly on `:root` (so the app renders Dusk with no attribute set, and a token-less boot is always a valid theme).
 2. **Preset swap = `document.documentElement.setAttribute("data-theme", preset)`.** Each non-default preset is a CSS block `:root[data-theme="slate"] { … }` overriding only the surface/text/semantic tokens. Dusk = absence of the attribute (or `data-theme="dusk"`, treated identically). No per-component re-theming code — components only ever read `var(--token)`.
 3. **Accent is one variable + derived.** `--accent` is the single source; `--accent-soft` and `--accent-ink` are its only derivatives. Custom accent overrides **`--accent` alone** by writing an inline style on `:root` (`document.documentElement.style.setProperty("--accent", hex)`), leaving every preset block's surface/text/status untouched — this is the prototype `set-note` guarantee ("Recolors the accent only…") expressed structurally (FR-SET8).
-4. **Accent-ink contrast guard (FR-SET9/NFR-DK3).** `--accent-ink` must stay ≥ 4.5:1 over the chosen `--accent`. v1 rule (architect call, lead implements): compute relative luminance of the chosen accent; pick ink = `#241404` (dark, the Dusk value) when the accent is light enough, else a light ink (`#f2e9dc`-class) — a two-value auto-switch, NOT a free gradient. The 5 quick-pick chips are pre-verified with `#241404` ink; the auto-switch only engages for free color-input values. This keeps FR-SET9 a contract (≥ 4.5:1) with a deterministic, testable implementation and no clamp surprises. `[ASSUME pm-Q3]`
+4. **Accent-ink contrast guard (FR-SET9/NFR-DK3; ADR-20 Rev. 2).** `--accent-ink` must stay ≥ 4.5:1 over every applied `--accent`. The five curated quick-pick values keep the approved warm ink `#241404`; every other valid accent uses the mathematically complete safe pair `#000000` / `#ffffff` under the exact rule in §13.2.1. Classification is by normalized accent **value**, never by whether the event came from a chip, color input, boot, or reload. The accent itself is never clamped, remapped, or rejected.
 5. **xterm/CodeMirror remap (the literal that CSS vars can't reach).** Same pitfall as Arus U1 (STATE.md): the xterm `theme` object (23 keys) and CodeMirror `cmTheme`/`cmHighlight` are JS literals, not CSS vars. v1 scope locks them to **Dusk values only**; when a preset is active the terminal/editor palette does **not** repaint (documented limitation — terminal well stays Dusk-dark across presets). Making xterm/CM preset-aware is explicitly deferred with the preset-expose gate (`[ASSUME-OQ-2]`), because it needs its own AA pass per preset × ANSI-16.
+
+#### 13.2.1 INV-23 free-accent rule — FROZEN (ADR-20 Rev. 2)
+
+1. Normalize a valid accent to lowercase `#rrggbb`. If it is exactly one of the five curated values in §13.3, set `--accent-ink: #241404`; those five pairs are independently pre-verified ≥4.5:1.
+2. Otherwise compute WCAG sRGB relative luminance. For each 8-bit channel, `s = channel / 255` and `linear(s) = s / 12.92` when `s <= 0.04045`, otherwise `((s + 0.055) / 1.055) ^ 2.4`; then `L = 0.2126R + 0.7152G + 0.0722B`.
+3. For a non-curated value, choose `#000000` when its contrast is greater than or equal to white's; otherwise choose `#ffffff`. The equivalent exact switch is:
+
+   ```text
+   Lswitch = sqrt(0.05 × 1.05) − 0.05
+           = 0.179128784747792
+
+   L >= Lswitch  → #000000   (tie goes dark)
+   L <  Lswitch  → #ffffff
+   ```
+
+   Comparing the two unrounded contrast ratios is preferred to comparing a rounded threshold. For every `L ∈ [0,1]`, the selected ratio is at least `sqrt(21) = 4.58257569495584:1`, so a 4.5 gap is impossible. The former free-color pair `#241404` / `#f2e9dc` is forbidden: its uncovered interval is `0.144049732010495 < L < 0.214786549673552`.
+4. Selection must be a pure function of the normalized hex value. A quick-pick value entered through the free color input, persisted, then reloaded must still resolve to `#241404`; a non-curated value must resolve to the same black/white endpoint across those paths.
+5. **No constrain/remap/reject UX.** FR-SET7 promises application of any valid `#RRGGBB`; remapping would persist a color the operator did not choose, while rejection would introduce an unspecified error/recovery flow. Changing only the derived ink preserves the chosen accent and the prototype's surface/text/status isolation (FR-SET8).
+
+Frozen regression vectors (ratios use the formula above; expected ink is byte-exact lowercase):
+
+| Class | Accent | Expected ink | Expected contrast |
+|---|---:|---:|---:|
+| curated | `#e2a35c` | `#241404` | `8.18060039728731:1` |
+| curated | `#5fbfae` | `#241404` | `8.115110618605044:1` |
+| curated | `#e0869b` | `#241404` | `6.842802495508517:1` |
+| curated | `#aec267` | `#241404` | `9.102683799795606:1` |
+| curated | `#b99be3` | `#241404` | `7.529220380096464:1` |
+| free extreme | `#000000` | `#ffffff` | `21:1` |
+| free existing dark sentinel | `#101010` | `#ffffff` | `19.028110547666497:1` |
+| free QA failure | `#6f6f6f` | `#ffffff` | `5.024865064757633:1` |
+| free grayscale below switch | `#757575` | `#ffffff` | `4.607518093747377:1` |
+| free closest 24-bit value below switch | `#766cb5` | `#ffffff` | `4.58257700240974:1` |
+| free closest 24-bit value above switch | `#cf0dcc` | `#000000` | `4.5825758149421025:1` |
+| free grayscale above switch | `#767676` | `#000000` | `4.6232848849972035:1` |
+| free QA failure | `#777777` | `#000000` | `4.68949989000882:1` |
+| free extreme | `#ffffff` | `#000000` | `21:1` |
 
 Preset readiness gate (NFR-DK2): a preset may be **exposed as functional** only after full-shell AA is proven for *every* text pair in that preset, not just the swatch/accent pair in the verification report. Until then it renders as a **disabled "coming" entry** in the picker (`[ASSUME-OQ-2]` default = Dusk-only functional; Slate/Ink/Light = placeholders). The picker markup already exists in the prototype; "coming" = `aria-disabled="true"` + no `data-theme` swap on click.
 
@@ -675,7 +714,7 @@ Taken byte-exact from `proto-a-dusk.html` / `-settings.html`. Zero Abyss-Emerald
 | `--dim` | `#b9aa95` | secondary text |
 | `--faint` | `#93836f` | tertiary / placeholder |
 | `--accent` | `#e2a35c` | honey amber — focus, active tab, primary action |
-| `--accent-ink` | `#241404` | text on accent (8.18:1 over `--accent`) |
+| `--accent-ink` | `#241404` | static fallback + curated-accent ink (8.18:1 over default); non-curated free accents override with §13.2.1 black/white guard |
 | `--accent-soft` | `rgba(226,163,92,.12)` | faint accent fill |
 | `--live` | `#9dc489` | sage — live status (semantic only) |
 | `--danger` | `#e07856` | terracotta — error/dead/reject (semantic only) |
@@ -691,7 +730,7 @@ Non-Dusk preset token sets (for the preset CSS blocks when expose-gated open) �
 - **Ink** `data-theme="ink"`: `--bg #141414` · `--surface #1e1e1e` · `--accent #e0563f` · `--text #ececec` (text 15.59:1, accent 4.89:1).
 - **Light** `data-theme="light"`: `--bg #f5f1e8` · `--surface #ffffff` · `--accent #96571a` · `--text #26201a` (text 14.29:1, accent 5.07:1).
 
-Quick-pick accent chips (FR-SET6): amber `#e2a35c`, teal `#5fbfae`, rose `#e0869b`, lime `#aec267`, violet `#b99be3`.
+Quick-pick accent chips (FR-SET6): amber `#e2a35c`, teal `#5fbfae`, rose `#e0869b`, lime `#aec267`, violet `#b99be3`. This exact normalized set is the value-based curated allow-set for `#241404` ink (§13.2.1); interaction source is not part of the mapping.
 
 ### 13.4 Store: settings + snippet + allowlist (ADR-18/19/21)
 
@@ -831,7 +870,7 @@ Evolution: `version` gates future migration; unknown `version` or unparseable fi
 **New ADRs:**
 - **ADR-18** — settings/allowlist store = one app-data JSON resolved via existing `dirs` crate (NOT `~/.ssh`, NOT a new plugin dep); atomic whole-file write; `HOSTERM_DATA_DIR` test override.
 - **ADR-19** — snippet source v1 = bundled read-only JSON asset (`read_snippets`); user overlay deferred.
-- **ADR-20** — theme = data-driven `:root` token system swapped by one `data-theme` attribute; accent = single `--accent` variable overridden inline; presets are "fill-in-later" CSS blocks; Dusk = default (no attribute).
+- **ADR-20 Rev. 2** — theme = data-driven `:root` token system swapped by one `data-theme` attribute; accent = single `--accent` variable overridden inline; presets are "fill-in-later" CSS blocks; Dusk = default (no attribute). INV-23 correction: curated accents retain `#241404`; all other valid accents derive ink from `#000000` / `#ffffff` at `Lswitch = sqrt(0.0525) − 0.05`, without changing or rejecting the accent (§13.2.1).
 - **ADR-21** — AI allowlist = exact `(host, command)` tuple, byte-match, no pattern in v1; revoke-list UI, not a pattern editor.
 - **ADR-22** — Google login + AI are **visual-only v1**; no OAuth backend, no AI backend; the approval UX contract (§13.6) is frozen independent of any future backend, and execution reuses the existing real-ssh terminal (no new path).
 
@@ -841,7 +880,7 @@ Evolution: `version` gates future migration; unknown `version` or unparseable fi
 |---|---|---|
 | INV-21 | Zero Abyss-Emerald literal survives in `src/`; all rendered tokens are the Dusk values §13.3 | grep gate (`#08080a`/`#00d992`/`--glow` etc. = 0 hits) + smoke `:root` token asserts |
 | INV-22 | `read_settings`/`write_settings`/`read_snippets` never read or write `~/.ssh/config` or the sidecar; store lives under app-data only | cargo test: config+sidecar hash/mtime unchanged across a settings write; FS diff |
-| INV-23 | For every applied accent, `--accent-ink` contrast over `--accent` stays ≥ 4.5:1 (auto ink-switch) | smoke contrast assert on ink/accent pair across the 5 chips + a dark free value |
+| INV-23 | For every applied accent, `--accent-ink` contrast over `--accent` stays ≥ 4.5:1: curated set → `#241404`; every other value → §13.2.1 black/white guard; mapping is stable across input/boot/reload | smoke the complete frozen vector table, including both former failures + both switch sides; independently recompute ratios (not implementation helper reuse) |
 | INV-24 | A missing/corrupt `settings.json` yields `DEFAULT_SETTINGS` on read and is never overwritten until a legitimate write | cargo test: corrupt-file read returns defaults, file bytes unchanged |
 | INV-25 | "Run once" renders `btn-primary`, "Always allow" renders `btn-secondary` (permission-widening action never primary) | smoke: class assertion on the approval card |
 | INV-26 | A proposed command's host alias passes the `sftp_safe` guard before any execute (leading `-`/CR/LF refused) | reuses INV-19/INV-10 impl; frontend call-site smoke |
@@ -853,6 +892,8 @@ Plus the carried-forward Dusk NFR checks (pm §5): INV-DnD (`grep draggable` = 0
 - `node qa-reports/headless-smoke.mjs` → **225 pass** today. Each Dusk unit adds smoke for its behavior (token asserts, preset swap, accent+contrast, approval-card classes, hostile-output CSP); final number re-measured per unit, not hard-coded here.
 - IPC inventory gate: `grep -rc "tauri::command" src-tauri/src/*.rs` must move **24 → 27** when the store commands land (lib.rs 22 → 25; fleet.rs 2 unchanged). §11.5 self-check updates accordingly.
 - `npm run build` → 0 TS errors (unchanged gate).
+
+**INV-23 Rev. 2 fresh-QA gate.** The frontend correction is not accepted on the prior U-D4 `255/255` result. QA must test the new implementation SHA, rerun the full canonical loop, execute the frozen vectors through the rendered Settings color-input path, verify input → persist → reload mapping stability, and reproduce the former `#6f6f6f` / `#777777` probes twice with ratios ≥4.5. Re-measure the smoke total; do not hard-code the old count.
 
 **Invariants that MUST stay green (STATE.md §Hard invariants 1–6):** config parseable + round-trip (1/2), no secret in config (3 — the store is explicitly outside this boundary), paste CRLF→LF (3/INV-5), **drag = manual mouse, never HTML5 DnD** (4/INV-6 — any new drag in snippet reorder etc. follows this), staging grep (5), authorized_keys untouched (6). None of this addendum's surfaces alter them; the store write is the one new FS mutation and it is confined to app-data.
 

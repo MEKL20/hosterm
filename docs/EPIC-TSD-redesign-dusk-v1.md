@@ -150,7 +150,9 @@ Prefix unit = **U-D** (Dusk) untuk membedakan dari U1–U9 Arus yang sudah lande
 
 ### U-D4 — Settings panel + Appearance
 
-**Sumber:** FR-SET1..12, SDD §13.2 (ADR-20 preset mechanism) + §13.4 (persist), prototype `proto-a-dusk-settings.html` (preset-grid + accent-row + live-preview markup = visual truth), INV-23, `[ASSUME-OQ-2]`.
+**Sumber:** FR-SET1..12, SDD §13.2/§13.2.1 (ADR-20 Rev. 2 preset + INV-23 accent-ink mechanism) + §13.4 (persist), prototype `proto-a-dusk-settings.html` (preset-grid + accent-row + live-preview markup = visual truth), INV-23, `[ASSUME-OQ-2]`.
+
+> **Kanonisitas:** SDD §13.2.1 / ADR-20 Rev. 2 adalah sumber kanonik untuk aturan, angka, dan vector INV-23. Jika wording TSD ini konflik dengan SDD, **SDD yang berlaku**.
 
 **Cakupan file:** `src/main.ts` (Settings modal open/close, nav, preset picker, accent control + contrast guard, live preview, persist via `write_settings`/boot via `read_settings`), `index.html` (markup modal), `src/styles.css` (`.preset`/`.accent-chip`/`.set-nav`/live-preview + scrim). Deps: U-D1 (token) + U-D3 (store).
 
@@ -159,7 +161,25 @@ Prefix unit = **U-D** (Dusk) untuk membedakan dari U1–U9 Arus yang sudah lande
 - Nav kiri: General/Appearance/Terminal/SSH&Keys/AI Assistant/Snippets/Account; Appearance `aria-current=page` default; non-Appearance (dan Approvals, kecuali revoke list U-D7) = placeholder "coming" (FR-SET2/3).
 - Preset grid 4 kolom `.preset` (markup: `aria-pressed`, `.preset-swatch` style `--pb/--ps/--pa/--pt`, `.preset-check`): **Dusk FUNGSIONAL** (klik → aktif); **Slate/Ink/Light = placeholder "coming" `aria-disabled="true"`** — klik TIDAK swap `data-theme` (`[ASSUME-OQ-2]`, SDD §13.2 expose gate). Mekanisme swap = `setAttribute("data-theme", preset)` (ADR-20).
 - Accent: `input[type=color]#accent-input` + `.color-hex` + 5 `.accent-chip` (data-accent amber/teal/rose/lime/violet). Pilih chip/hex valid → `document.documentElement.style.setProperty("--accent", hex)` + live preview + `aria-pressed` match (FR-SET6/7). **Recolor accent SAJA** (surface/text/status tetap, FR-SET8).
-- **Contrast guard (INV-23, SDD §13.2 pt 4):** hitung luminance accent → ink = `#241404` (gelap) bila accent terang, else light ink `#f2e9dc`-class. Two-value auto-switch, bukan gradient. 5 chip pre-verified `#241404`; auto-switch hanya untuk free color-input.
+- **Contrast guard (INV-23, SDD §13.2.1; ADR-20 Rev. 2):** normalisasi setiap accent valid ke lowercase `#rrggbb`. Exact curated set `{#e2a35c,#5fbfae,#e0869b,#aec267,#b99be3}` selalu memakai `--accent-ink:#241404`. Untuk semua nilai non-curated, hitung WCAG sRGB relative luminance: per channel `s = channel / 255`, `linear(s) = s / 12.92` bila `s <= 0.04045`, selain itu `((s + 0.055) / 1.055) ^ 2.4`; lalu `L = 0.2126R + 0.7152G + 0.0722B`. Pilih `#000000` bila `L >= Lswitch`, selain itu `#ffffff`, dengan `Lswitch = sqrt(0.0525) - 0.05 = 0.179128784747792` (tie → dark; membandingkan ratio unrounded lebih disukai). Mapping = pure function dari normalized value, bukan interaction source (chip/free-input/boot/reload). Accent valid WAJIB diterapkan + dipersist apa adanya: NOL clamp/remap/reject. Pair free-color lama `#241404/#f2e9dc` dilarang; safe endpoints non-curated hanya `#000000/#ffffff` dan menjamin minimum `sqrt(21) = 4.58257569495584:1`.
+- **Frozen regression vectors (byte-exact; mirror SDD §13.2.1):**
+
+  | Class | Accent | Expected ink | Expected contrast |
+  |---|---:|---:|---:|
+  | curated | `#e2a35c` | `#241404` | `8.18060039728731:1` |
+  | curated | `#5fbfae` | `#241404` | `8.115110618605044:1` |
+  | curated | `#e0869b` | `#241404` | `6.842802495508517:1` |
+  | curated | `#aec267` | `#241404` | `9.102683799795606:1` |
+  | curated | `#b99be3` | `#241404` | `7.529220380096464:1` |
+  | free extreme | `#000000` | `#ffffff` | `21:1` |
+  | free existing dark sentinel | `#101010` | `#ffffff` | `19.028110547666497:1` |
+  | free QA failure | `#6f6f6f` | `#ffffff` | `5.024865064757633:1` |
+  | free grayscale below switch | `#757575` | `#ffffff` | `4.607518093747377:1` |
+  | free closest 24-bit value below switch | `#766cb5` | `#ffffff` | `4.58257700240974:1` |
+  | free closest 24-bit value above switch | `#cf0dcc` | `#000000` | `4.5825758149421025:1` |
+  | free grayscale above switch | `#767676` | `#000000` | `4.6232848849972035:1` |
+  | free QA failure | `#777777` | `#000000` | `4.68949989000882:1` |
+  | free extreme | `#ffffff` | `#000000` | `21:1` |
 - Live preview: tab + primary button + prompt line pakai accent terpilih, real-time (FR-SET10).
 - "Reset to Dusk default" → accent `#e2a35c` + preset Dusk (FR-SET11). Done/scrim-click/Escape tutup + pertahankan pilihan (FR-SET12). Persist via `write_settings` (FR-SET13).
 
@@ -168,10 +188,11 @@ Prefix unit = **U-D** (Dusk) untuk membedakan dari U1–U9 Arus yang sudah lande
 2. WHEN Settings terbuka THE SYSTEM SHALL menampilkan 7 nav item, Appearance `aria-current=page` default (FR-SET2).
 3. WHEN preset Dusk dipilih THE SYSTEM SHALL `aria-pressed=true` + check mark; WHEN Slate/Ink/Light THE SYSTEM SHALL `aria-disabled=true` DAN klik TIDAK meng-set `data-theme` (smoke assert, `[ASSUME-OQ-2]`).
 4. WHEN chip teal dipilih THE SYSTEM SHALL set inline `--accent #5fbfae` + chip `aria-pressed=true` + preview update; surface/text TIDAK berubah (FR-SET8, smoke).
-5. WHEN accent gelap bebas dipilih (color-input) THE SYSTEM SHALL auto-switch `--accent-ink` ke light sehingga kontras ink/accent ≥ 4.5:1 (INV-23 — smoke contrast assert pada 5 chip + 1 free value gelap, **acceptance kritis**).
-6. WHEN accent diubah lalu Done THE SYSTEM SHALL memanggil `write_settings` (smoke `calls` assert) + pertahankan pilihan.
-7. WHEN boot THE SYSTEM SHALL `read_settings` lalu apply theme+accent (smoke).
-8. Verify loop hijau + smoke ≥8 cek baru; cargo == baseline.
+5. WHEN seluruh frozen regression vector di atas dijalankan lewat Settings color-input path THE SYSTEM SHALL menghasilkan expected ink byte-exact DAN independent test calculation SHALL membuktikan ratio ≥ 4.5:1. Coverage WAJIB mencakup kedua former failures (`#6f6f6f`, `#777777`), kedua closest switch sides (`#766cb5`, `#cf0dcc`), grayscale sides (`#757575`, `#767676`), extremes (`#000000`, `#ffffff`), existing sentinel `#101010`, dan kelima curated values (**acceptance kritis**).
+6. WHEN normalized curated value yang sama masuk lewat chip ATAU free color-input THE SYSTEM SHALL selalu memilih `#241404`; WHEN normalized non-curated value masuk lewat free-input/boot/reload THE SYSTEM SHALL selalu memilih endpoint black/white yang sama — interaction source TIDAK boleh memengaruhi mapping.
+7. WHEN accent valid diubah lalu Done THE SYSTEM SHALL memanggil `write_settings` dengan normalized chosen accent TANPA clamp/remap/reject dan mempertahankan pilihan (smoke `calls` assert).
+8. WHEN saved accent dimuat ulang THE SYSTEM SHALL `read_settings`, apply accent yang sama, lalu derive ink deterministically dari value yang sama; smoke WAJIB membuktikan input → persist → reload untuk sedikitnya satu curated value dan satu non-curated value.
+9. Verify loop hijau + smoke bertambah sesuai seluruh vector + determinism coverage; cargo == baseline. Re-measure total, jangan hard-code count lama.
 
 ---
 
@@ -277,7 +298,7 @@ Hanya **U-D3** menambah `cargo test --lib`. Semua unit frontend = smoke-only, ca
 |---|---|---|---|
 | INV-21 anti-Abyss | U-D1 (set), U-D2/U-D8 (re-assert) | grep 0 literal Abyss (`#08080a`/`#00d992`/`var(--glow)`) + smoke `:root` token | **YA** |
 | INV-22 store isolation | U-D3 | cargo: config+sidecar hash/mtime unchanged across write | **YA** |
-| INV-23 accent-ink kontras | U-D4 | smoke contrast ink/accent ≥4.5:1 (5 chip + 1 free gelap) | **YA** |
+| INV-23 accent-ink kontras | U-D4 | smoke seluruh frozen vector SDD §13.2.1 (curated, former failures, kedua switch sides, extremes), independent WCAG ratio calculation, + input/persist/reload determinism | **YA** |
 | INV-24 corrupt → defaults | U-D3 | cargo: corrupt file → defaults, byte unchanged | ya |
 | INV-25 visual-weight approval | U-D7 | smoke class: Run-once=btn-primary, Always-allow=btn-secondary | **YA** |
 | INV-26 host alias safe-guard | U-D7 | smoke: leading `-`/CR/LF refuse sebelum execute | ya |

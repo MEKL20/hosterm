@@ -1,0 +1,17 @@
+5ba9cc8795338a365d94058ee5d007391702dfecda5e475a48c36e41d281cf9b  qa-reports/2026-11-01-inv23-adr20-rev2-fresh-evidence/cargo-test-lib.log
+a74acfe9f5b7fc0d5381249d3eedde40632e6b7d0a29452c0b50a9cedd6f382d  qa-reports/2026-11-01-inv23-adr20-rev2-fresh-evidence/check_scope_inv21.py
+cf0a31327ce9ce40cd3d77135dd69e2642644fd03af42210ddb66329c75dd701  qa-reports/2026-11-01-inv23-adr20-rev2-fresh-evidence/headless-smoke.log
+33f4ed96ab36864c4e13073640f792f53869e669814f791a68f2cad67575559d  qa-reports/2026-11-01-inv23-adr20-rev2-fresh-evidence/inv23-rendered-probe.mjs
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  qa-reports/2026-11-01-inv23-adr20-rev2-fresh-evidence/node-check.log
+d377cd7dc5a2064b8ac1b8cc0108a430fa756e9623c3525136a83562eec3c9ae  qa-reports/2026-11-01-inv23-adr20-rev2-fresh-evidence/npm-run-build.log
+2f88c4f5f2490338278a92139755aab38fcacf96d225238555e2ee0d986d841f  qa-reports/2026-11-01-inv23-adr20-rev2-fresh-evidence/playwright-cleanup.log
+21cd53eb66a6c27f93c030a7f3890d00256f4d77347605ae933a09dd5fc909c9  qa-reports/2026-11-01-inv23-adr20-rev2-fresh-evidence/playwright-install.log
+1148585de2e974547c3a2ba270a60cce9bb8293c0027dd3c1b528ea4b8281279  qa-reports/2026-11-01-inv23-adr20-rev2-fresh-evidence/recompute_wcag.py
+3dc670325d71edad8db54797211e7959851d5634f3d6c70c3068418605ba54f7  qa-reports/2026-11-01-inv23-adr20-rev2-fresh-evidence/rendered-probe.log
+93e4a630fb320f50f52bcee0428ab4f709ee97c2575c1c64edfc3272baaf5e28  qa-reports/2026-11-01-inv23-adr20-rev2-fresh-evidence/rendered-settings.json
+9772b4e2d6b0888621d701e27ca84d52e75856b53741c5d0a4576495316b0242  qa-reports/2026-11-01-inv23-adr20-rev2-fresh-evidence/scope-inv21.json
+90446ce1e7e61570642566ee16557c956d91acd150d421b8fd6f433de07b5d3e  qa-reports/2026-11-01-inv23-adr20-rev2-fresh-evidence/scope-inv21.log
+8f05f35b2a6eadf118cb6e611a76d5d6f7ae7b800b2625b95c25779569020a83  qa-reports/2026-11-01-inv23-adr20-rev2-fresh-evidence/settings-rendered.png
+ff4e7e9260e0afa07fdf756c6846552aed4f84eee646c466ffd878ddd062438f  qa-reports/2026-11-01-inv23-adr20-rev2-fresh-evidence/wcag-ratios.json
+6c6b1a469fc5789f48ac59ce93a24f15d429a576d9cd757ce6d0b66045cd95a9  qa-reports/2026-11-01-inv23-adr20-rev2-fresh-evidence/wcag-recompute.log
+c62e85f2bfe2f96a04ea993de3cf2975169bf97ab5b73becd544ae9020632d19  qa-reports/2026-11-01-inv23-adr20-rev2-fresh.md

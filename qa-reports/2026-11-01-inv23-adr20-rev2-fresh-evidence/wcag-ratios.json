@@ -1,0 +1,528 @@
+{
+  "target_sha": "f56e2ed04a2d744267fbd025afda999a34b46b78",
+  "oracle": {
+    "formula": "WCAG sRGB, cutoff 0.04045; selected endpoint compares unrounded black/white ratios",
+    "implementation_helper_reused": false,
+    "switch_luminance": 0.17912878474779204,
+    "theoretical_floor": 4.58257569495584
+  },
+  "vector_results": [
+    {
+      "class": "curated",
+      "entered": "#e2a35c",
+      "accent": "#e2a35c",
+      "actual_ink": "#241404",
+      "oracle_ink": "#241404",
+      "luminance": 0.4313584341012881,
+      "ratio": 8.18060039728731,
+      "spec_ratio": 8.18060039728731,
+      "checks": {
+        "accent_exact": true,
+        "input_exact": true,
+        "inline_matches_computed": true,
+        "preview_matches": true,
+        "spec_endpoint": true,
+        "oracle_endpoint": true,
+        "ratio_at_least_4_5": true,
+        "spec_ratio_exact_1e_12": true
+      },
+      "pass": true
+    },
+    {
+      "class": "curated",
+      "entered": "#5fbfae",
+      "accent": "#5fbfae",
+      "actual_ink": "#241404",
+      "oracle_ink": "#241404",
+      "luminance": 0.42750492020436315,
+      "ratio": 8.115110618605044,
+      "spec_ratio": 8.115110618605044,
+      "checks": {
+        "accent_exact": true,
+        "input_exact": true,
+        "inline_matches_computed": true,
+        "preview_matches": true,
+        "spec_endpoint": true,
+        "oracle_endpoint": true,
+        "ratio_at_least_4_5": true,
+        "spec_ratio_exact_1e_12": true
+      },
+      "pass": true
+    },
+    {
+      "class": "curated",
+      "entered": "#e0869b",
+      "accent": "#e0869b",
+      "actual_ink": "#241404",
+      "oracle_ink": "#241404",
+      "luminance": 0.3526404584185049,
+      "ratio": 6.842802495508517,
+      "spec_ratio": 6.842802495508517,
+      "checks": {
+        "accent_exact": true,
+        "input_exact": true,
+        "inline_matches_computed": true,
+        "preview_matches": true,
+        "spec_endpoint": true,
+        "oracle_endpoint": true,
+        "ratio_at_least_4_5": true,
+        "spec_ratio_exact_1e_12": true
+      },
+      "pass": true
+    },
+    {
+      "class": "curated",
+      "entered": "#aec267",
+      "accent": "#aec267",
+      "actual_ink": "#241404",
+      "oracle_ink": "#241404",
+      "luminance": 0.4856151635816037,
+      "ratio": 9.102683799795606,
+      "spec_ratio": 9.102683799795606,
+      "checks": {
+        "accent_exact": true,
+        "input_exact": true,
+        "inline_matches_computed": true,
+        "preview_matches": true,
+        "spec_endpoint": true,
+        "oracle_endpoint": true,
+        "ratio_at_least_4_5": true,
+        "spec_ratio_exact_1e_12": true
+      },
+      "pass": true
+    },
+    {
+      "class": "curated",
+      "entered": "#b99be3",
+      "accent": "#b99be3",
+      "actual_ink": "#241404",
+      "oracle_ink": "#241404",
+      "luminance": 0.39303028581722954,
+      "ratio": 7.529220380096464,
+      "spec_ratio": 7.529220380096464,
+      "checks": {
+        "accent_exact": true,
+        "input_exact": true,
+        "inline_matches_computed": true,
+        "preview_matches": true,
+        "spec_endpoint": true,
+        "oracle_endpoint": true,
+        "ratio_at_least_4_5": true,
+        "spec_ratio_exact_1e_12": true
+      },
+      "pass": true
+    },
+    {
+      "class": "free extreme",
+      "entered": "#000000",
+      "accent": "#000000",
+      "actual_ink": "#ffffff",
+      "oracle_ink": "#ffffff",
+      "luminance": 0.0,
+      "ratio": 21.0,
+      "spec_ratio": 21.0,
+      "checks": {
+        "accent_exact": true,
+        "input_exact": true,
+        "inline_matches_computed": true,
+        "preview_matches": true,
+        "spec_endpoint": true,
+        "oracle_endpoint": true,
+        "ratio_at_least_4_5": true,
+        "spec_ratio_exact_1e_12": true
+      },
+      "pass": true
+    },
+    {
+      "class": "free existing dark sentinel",
+      "entered": "#101010",
+      "accent": "#101010",
+      "actual_ink": "#ffffff",
+      "oracle_ink": "#ffffff",
+      "luminance": 0.005181516702338386,
+      "ratio": 19.028110547666497,
+      "spec_ratio": 19.028110547666497,
+      "checks": {
+        "accent_exact": true,
+        "input_exact": true,
+        "inline_matches_computed": true,
+        "preview_matches": true,
+        "spec_endpoint": true,
+        "oracle_endpoint": true,
+        "ratio_at_least_4_5": true,
+        "spec_ratio_exact_1e_12": true
+      },
+      "pass": true
+    },
+    {
+      "class": "free former failure",
+      "entered": "#6f6f6f",
+      "accent": "#6f6f6f",
+      "actual_ink": "#ffffff",
+      "oracle_ink": "#ffffff",
+      "luminance": 0.1589608350608804,
+      "ratio": 5.024865064757633,
+      "spec_ratio": 5.024865064757633,
+      "checks": {
+        "accent_exact": true,
+        "input_exact": true,
+        "inline_matches_computed": true,
+        "preview_matches": true,
+        "spec_endpoint": true,
+        "oracle_endpoint": true,
+        "ratio_at_least_4_5": true,
+        "spec_ratio_exact_1e_12": true
+      },
+      "pass": true
+    },
+    {
+      "class": "free grayscale below switch",
+      "entered": "#757575",
+      "accent": "#757575",
+      "actual_ink": "#ffffff",
+      "oracle_ink": "#ffffff",
+      "luminance": 0.17788841598362912,
+      "ratio": 4.607518093747377,
+      "spec_ratio": 4.607518093747377,
+      "checks": {
+        "accent_exact": true,
+        "input_exact": true,
+        "inline_matches_computed": true,
+        "preview_matches": true,
+        "spec_endpoint": true,
+        "oracle_endpoint": true,
+        "ratio_at_least_4_5": true,
+        "spec_ratio_exact_1e_12": true
+      },
+      "pass": true
+    },
+    {
+      "class": "free closest 24-bit below switch",
+      "entered": "#766cb5",
+      "accent": "#766cb5",
+      "actual_ink": "#ffffff",
+      "oracle_ink": "#ffffff",
+      "luminance": 0.1791287193751157,
+      "ratio": 4.58257700240974,
+      "spec_ratio": 4.58257700240974,
+      "checks": {
+        "accent_exact": true,
+        "input_exact": true,
+        "inline_matches_computed": true,
+        "preview_matches": true,
+        "spec_endpoint": true,
+        "oracle_endpoint": true,
+        "ratio_at_least_4_5": true,
+        "spec_ratio_exact_1e_12": true
+      },
+      "pass": true
+    },
+    {
+      "class": "free closest 24-bit above switch",
+      "entered": "#cf0dcc",
+      "accent": "#cf0dcc",
+      "actual_ink": "#000000",
+      "oracle_ink": "#000000",
+      "luminance": 0.17912879074710514,
+      "ratio": 4.5825758149421025,
+      "spec_ratio": 4.5825758149421025,
+      "checks": {
+        "accent_exact": true,
+        "input_exact": true,
+        "inline_matches_computed": true,
+        "preview_matches": true,
+        "spec_endpoint": true,
+        "oracle_endpoint": true,
+        "ratio_at_least_4_5": true,
+        "spec_ratio_exact_1e_12": true
+      },
+      "pass": true
+    },
+    {
+      "class": "free grayscale above switch",
+      "entered": "#767676",
+      "accent": "#767676",
+      "actual_ink": "#000000",
+      "oracle_ink": "#000000",
+      "luminance": 0.18116424424986022,
+      "ratio": 4.6232848849972035,
+      "spec_ratio": 4.6232848849972035,
+      "checks": {
+        "accent_exact": true,
+        "input_exact": true,
+        "inline_matches_computed": true,
+        "preview_matches": true,
+        "spec_endpoint": true,
+        "oracle_endpoint": true,
+        "ratio_at_least_4_5": true,
+        "spec_ratio_exact_1e_12": true
+      },
+      "pass": true
+    },
+    {
+      "class": "free former failure",
+      "entered": "#777777",
+      "accent": "#777777",
+      "actual_ink": "#000000",
+      "oracle_ink": "#000000",
+      "luminance": 0.184474994500441,
+      "ratio": 4.68949989000882,
+      "spec_ratio": 4.68949989000882,
+      "checks": {
+        "accent_exact": true,
+        "input_exact": true,
+        "inline_matches_computed": true,
+        "preview_matches": true,
+        "spec_endpoint": true,
+        "oracle_endpoint": true,
+        "ratio_at_least_4_5": true,
+        "spec_ratio_exact_1e_12": true
+      },
+      "pass": true
+    },
+    {
+      "class": "free extreme",
+      "entered": "#ffffff",
+      "accent": "#ffffff",
+      "actual_ink": "#000000",
+      "oracle_ink": "#000000",
+      "luminance": 1.0,
+      "ratio": 21.0,
+      "spec_ratio": 21.0,
+      "checks": {
+        "accent_exact": true,
+        "input_exact": true,
+        "inline_matches_computed": true,
+        "preview_matches": true,
+        "spec_endpoint": true,
+        "oracle_endpoint": true,
+        "ratio_at_least_4_5": true,
+        "spec_ratio_exact_1e_12": true
+      },
+      "pass": true
+    }
+  ],
+  "former_failure_repeats": [
+    {
+      "pass_number": 1,
+      "accent": "#6f6f6f",
+      "actual_ink": "#ffffff",
+      "oracle_ink": "#ffffff",
+      "luminance": 0.1589608350608804,
+      "ratio": 5.024865064757633,
+      "spec_ratio": 5.024865064757633,
+      "checks": {
+        "accent_exact": true,
+        "input_exact": true,
+        "inline_matches_computed": true,
+        "preview_matches": true,
+        "spec_endpoint": true,
+        "oracle_endpoint": true,
+        "ratio_at_least_4_5": true,
+        "spec_ratio_exact_1e_12": true
+      },
+      "pass": true
+    },
+    {
+      "pass_number": 1,
+      "accent": "#777777",
+      "actual_ink": "#000000",
+      "oracle_ink": "#000000",
+      "luminance": 0.184474994500441,
+      "ratio": 4.68949989000882,
+      "spec_ratio": 4.68949989000882,
+      "checks": {
+        "accent_exact": true,
+        "input_exact": true,
+        "inline_matches_computed": true,
+        "preview_matches": true,
+        "spec_endpoint": true,
+        "oracle_endpoint": true,
+        "ratio_at_least_4_5": true,
+        "spec_ratio_exact_1e_12": true
+      },
+      "pass": true
+    },
+    {
+      "pass_number": 2,
+      "accent": "#6f6f6f",
+      "actual_ink": "#ffffff",
+      "oracle_ink": "#ffffff",
+      "luminance": 0.1589608350608804,
+      "ratio": 5.024865064757633,
+      "spec_ratio": 5.024865064757633,
+      "checks": {
+        "accent_exact": true,
+        "input_exact": true,
+        "inline_matches_computed": true,
+        "preview_matches": true,
+        "spec_endpoint": true,
+        "oracle_endpoint": true,
+        "ratio_at_least_4_5": true,
+        "spec_ratio_exact_1e_12": true
+      },
+      "pass": true
+    },
+    {
+      "pass_number": 2,
+      "accent": "#777777",
+      "actual_ink": "#000000",
+      "oracle_ink": "#000000",
+      "luminance": 0.184474994500441,
+      "ratio": 4.68949989000882,
+      "spec_ratio": 4.68949989000882,
+      "checks": {
+        "accent_exact": true,
+        "input_exact": true,
+        "inline_matches_computed": true,
+        "preview_matches": true,
+        "spec_endpoint": true,
+        "oracle_endpoint": true,
+        "ratio_at_least_4_5": true,
+        "spec_ratio_exact_1e_12": true
+      },
+      "pass": true
+    }
+  ],
+  "determinism": {
+    "curated": {
+      "accent": "#5fbfae",
+      "states": {
+        "free_input": {
+          "accent": "#5fbfae",
+          "actual_ink": "#241404",
+          "oracle_ink": "#241404",
+          "luminance": 0.42750492020436315,
+          "ratio": 8.115110618605044,
+          "spec_ratio": 8.115110618605044,
+          "checks": {
+            "accent_exact": true,
+            "input_exact": true,
+            "inline_matches_computed": true,
+            "preview_matches": true,
+            "spec_endpoint": true,
+            "oracle_endpoint": true,
+            "ratio_at_least_4_5": true,
+            "spec_ratio_exact_1e_12": true
+          },
+          "pass": true
+        },
+        "chip": {
+          "accent": "#5fbfae",
+          "actual_ink": "#241404",
+          "oracle_ink": "#241404",
+          "luminance": 0.42750492020436315,
+          "ratio": 8.115110618605044,
+          "spec_ratio": 8.115110618605044,
+          "checks": {
+            "accent_exact": true,
+            "input_exact": true,
+            "inline_matches_computed": true,
+            "preview_matches": true,
+            "spec_endpoint": true,
+            "oracle_endpoint": true,
+            "ratio_at_least_4_5": true,
+            "spec_ratio_exact_1e_12": true
+          },
+          "pass": true
+        },
+        "free_input_before_persist": {
+          "accent": "#5fbfae",
+          "actual_ink": "#241404",
+          "oracle_ink": "#241404",
+          "luminance": 0.42750492020436315,
+          "ratio": 8.115110618605044,
+          "spec_ratio": 8.115110618605044,
+          "checks": {
+            "accent_exact": true,
+            "input_exact": true,
+            "inline_matches_computed": true,
+            "preview_matches": true,
+            "spec_endpoint": true,
+            "oracle_endpoint": true,
+            "ratio_at_least_4_5": true,
+            "spec_ratio_exact_1e_12": true
+          },
+          "pass": true
+        },
+        "persist_reload": {
+          "accent": "#5fbfae",
+          "actual_ink": "#241404",
+          "oracle_ink": "#241404",
+          "luminance": 0.42750492020436315,
+          "ratio": 8.115110618605044,
+          "spec_ratio": 8.115110618605044,
+          "checks": {
+            "accent_exact": true,
+            "input_exact": true,
+            "inline_matches_computed": true,
+            "preview_matches": true,
+            "spec_endpoint": true,
+            "oracle_endpoint": true,
+            "ratio_at_least_4_5": true,
+            "spec_ratio_exact_1e_12": true
+          },
+          "pass": true
+        }
+      },
+      "persisted_accent_exact": true,
+      "pass": true
+    },
+    "non_curated": {
+      "accent": "#777777",
+      "states": {
+        "free_input": {
+          "accent": "#777777",
+          "actual_ink": "#000000",
+          "oracle_ink": "#000000",
+          "luminance": 0.184474994500441,
+          "ratio": 4.68949989000882,
+          "spec_ratio": 4.68949989000882,
+          "checks": {
+            "accent_exact": true,
+            "input_exact": true,
+            "inline_matches_computed": true,
+            "preview_matches": true,
+            "spec_endpoint": true,
+            "oracle_endpoint": true,
+            "ratio_at_least_4_5": true,
+            "spec_ratio_exact_1e_12": true
+          },
+          "pass": true
+        },
+        "persist_reload": {
+          "accent": "#777777",
+          "actual_ink": "#000000",
+          "oracle_ink": "#000000",
+          "luminance": 0.184474994500441,
+          "ratio": 4.68949989000882,
+          "spec_ratio": 4.68949989000882,
+          "checks": {
+            "accent_exact": true,
+            "input_exact": true,
+            "inline_matches_computed": true,
+            "preview_matches": true,
+            "spec_endpoint": true,
+            "oracle_endpoint": true,
+            "ratio_at_least_4_5": true,
+            "spec_ratio_exact_1e_12": true
+          },
+          "pass": true
+        }
+      },
+      "persisted_accent_exact": true,
+      "pass": true
+    }
+  },
+  "legacy_gap_context": {
+    "#6f6f6f_with_forbidden_#f2e9dc": 4.1788873680219405,
+    "#777777_with_forbidden_#241404": 3.9848605473081395
+  },
+  "summary": {
+    "vectors_passed": 14,
+    "vectors_total": 14,
+    "repeat_probes_passed": 4,
+    "repeat_probes_total": 4,
+    "all_pass": true
+  }
+}
