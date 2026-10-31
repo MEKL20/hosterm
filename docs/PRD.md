@@ -32,7 +32,7 @@ Founding technical principle (product-visible): hosterm spawns the OS's **real `
 | Core surfaces | Host sidebar · embedded terminal · SFTP browser · remote editor |
 | Storage | `~/.ssh/config` only (+ secrets sidecar `~/.ssh/hosterm.secrets`, 0600, for optional opt-in-per-host stored passwords) |
 | Telemetry | None. No network calls except user-initiated SSH/SFTP (plus, from wave 2 M3, the user-initiated update check — see NFR-3 amendment pending MEKL, OQ-1) |
-| Visual identity | Theme Abyss Emerald, direction A "Arus" — FINAL (MEKL, redesign §6.5; not reopenable) |
+| Visual identity | **Redesign "Dusk" — warm paper-dark minimalist (MEKL-approved prototype), SUPERSEDES the shipped "Abyss Emerald / Arus" theme (v0.11.0).** Dusk keeps the Tauri+real-ssh architecture and shell component behavior; it changes theme tokens, geometry, radius, motion, density. See docs/FEATURE-SPEC-redesign-dusk-v1.md (§7). Arus (redesign §6.5) is now historical visual identity |
 | License | MIT, public GitHub Releases |
 | Shipped version | v0.10.0 (security hardening wave 1 + password-SFTP persistent + sidecar copy fix); W2-A startup ssh/sftp check and U1 theme landed post-tag, ride the next release |
 
@@ -47,8 +47,9 @@ Founding technical principle (product-visible): hosterm spawns the OS's **real `
 | UC5 | Operator switches laptops: copies `~/.ssh/config` (+ keys, + sidecar if used); hosterm on the new machine shows the same hosts | Whole product | Shipped |
 | UC6 | Operator hand-edits the raw config inside the app for directives the form doesn't cover | Raw config editor | Shipped |
 | UC7 | New user runs `hosterm.exe` on a machine missing the optional OpenSSH client: the app detects missing `ssh`/`sftp` at launch and shows a one-screen OpenSSH install guide instead of opaque spawn errors | Startup check (W2-A) | Shipped (3a3b5a0) |
-| UC8 | Operator sees the app in the Abyss Emerald theme: single-line grouped sidebar, kind-colored tabs, terminal well + status bar, SFTP transfer strip | Full UI (redesign Arus) | U1 shipped (33a1833); U2–U9 in flight |
+| UC8 | Operator sees the app in the Abyss Emerald theme: single-line grouped sidebar, kind-colored tabs, terminal well + status bar, SFTP transfer strip | Full UI (redesign Arus) | **Shipped v0.11.0 — visual identity SUPERSEDED by Dusk (UC10)** |
 | UC9 | Operator clicks "Check for updates"; the app verifies the downloaded installer against a baked minisign key before installing | Update flow (wave 2 M3) | Speced (docs/archive/FEATURE-SPEC-wave-2-draft.md §4/B) |
+| UC10 | Operator sees the app in the warm "Dusk" theme; opens Settings → Appearance to pick a preset (Dusk/Slate/Ink/Light) or a custom accent with live preview; uses the AI assistant that proposes a command and only runs it after explicit approval (Run once / Always allow exact-command / Reject); copies from the snippet cheatsheet; signs in with Google | Full UI (redesign Dusk) + Settings + Google login + Snippets + AI approval | Speced (docs/FEATURE-SPEC-redesign-dusk-v1.md) |
 
 ---
 
@@ -106,7 +107,11 @@ As an operator I want key or password auth expressed as plain OpenSSH directives
 - WHEN config surfaces (host form, raw editor, key paste) are used while binaries are missing THE SYSTEM SHALL keep them fully functional.
 - IF a connect/SFTP attempt fails after the user declined the guide THEN THE SYSTEM SHALL show a per-attempt error naming the recovery path, with the raw spawn strings suppressed.
 
-### US-8: Arus UI (redesign, Abyss Emerald) (SSH operator)
+### US-8: Arus UI (redesign, Abyss Emerald) (SSH operator) — SHIPPED v0.11.0, visual identity SUPERSEDED by US-11 (Dusk)
+> Retained as history: the ACs below describe the Abyss Emerald theme that shipped in v0.11.0. The Dusk
+> redesign (US-11, docs/FEATURE-SPEC-redesign-dusk-v1.md) replaces the theme tokens/geometry/motion while
+> keeping the shell component behavior these ACs defined. Where Dusk conflicts with a token/glow AC here,
+> US-11 + FR-DT* win.
 - WHEN the app renders THE SYSTEM SHALL use the 16+3 Abyss Emerald tokens (§6.5 redesign) with zero Tokyo Night literals in `src/`.
 - WHEN a sidebar host has a live terminal tab THE SYSTEM SHALL show its status dot in `--ok`, and revert it to `--muted` when the last tab of that host closes.
 - WHEN a tab is active, terminal pane focused, or a primary button rendered THE SYSTEM SHALL apply `var(--glow)` — and never on hover/idle states.
@@ -128,6 +133,25 @@ As an operator I want key or password auth expressed as plain OpenSSH directives
 - WHEN any change is made THE SYSTEM SHALL pass the full verify loop (NFR-5 baselines) before staging.
 - WHEN a new behavior ships THE SYSTEM SHALL have an explicit smoke check covering it.
 - WHEN a working tree is staged THE SYSTEM SHALL contain no `target/|node_modules|.exe$|dist/` paths.
+
+### US-11: Dusk redesign + Settings/theme + Google login + Snippets + AI approval (SSH operator)
+As an operator I want a warm, calmer workspace with a settings-driven theme, reusable snippets, and an AI
+helper that never runs anything without my say-so, so that the tool feels its own and stays safe.
+> Full behavior, acceptance criteria, scope IN/OUT, and open questions live in
+> **docs/FEATURE-SPEC-redesign-dusk-v1.md** (FR-DT*, FR-SH*, FR-SET*, FR-GL*, FR-SN*, FR-AI*, NFR-DK*, OQ-1..6).
+> This story is the PRD anchor; the spec is the contract. Summary of the testable spine:
+- WHEN the app renders THE SYSTEM SHALL use the Dusk token set (bg `#191512`, surface `#221c17`, accent
+  `#e2a35c`, radius 10/8/6px) with zero Abyss Emerald literals left in `src/` (FR-DT1).
+- WHEN Settings → Appearance is used THE SYSTEM SHALL offer a preset picker (Dusk/Slate/Ink/Light) plus one
+  custom accent (color input + 5 quick-pick chips) with live preview, Done, and Reset — and NOTHING MORE of
+  the theme is editable (no full token editor, no import/export, no separate light/dark toggle) (FR-SET4..12, OUT §2.2).
+- WHEN the AI assistant proposes a command THE SYSTEM SHALL execute it only on explicit Run once, or on an
+  exact-command + exact-host match the user previously chose via Always allow; THE SYSTEM SHALL render
+  "Always allow" visually secondary to "Run once" and NEVER auto-run (FR-AI3..9).
+- WHEN a theme/accent, snippet, or AI allowlist entry is persisted THE SYSTEM SHALL keep it OUT of
+  `~/.ssh/config` (store location = OQ-5) (NFR-DK7).
+- WHEN the Dusk UI renders THE SYSTEM SHALL meet WCAG AA on all normal text (prototype-verified, NFR-DK1) and
+  respect `prefers-reduced-motion` (NFR-DK5).
 
 ---
 
@@ -210,7 +234,8 @@ Living-doc rule: FEATURE-SPEC-*/EPIC-TSD-* implement this PRD; this section trac
 | Password-SFTP persistent sessions | One interactive `sftp` per host shared across tabs; sidecar-stored password auto-type; sidecar copy fix | **Shipped — v0.10.0** (8b36f2b, 6ce0381) | docs/STATE.md §layout; PRD v1 US-D2 |
 | W2-A startup ssh/sftp missing-check + OpenSSH guide | Launch-time binary detection, blocking guide + re-check, per-attempt refusal errors | **Shipped — post-tag, rides next release** (3a3b5a0) | docs/FEATURE-SPEC-startup-ssh-check.md · docs/archive/FEATURE-SPEC-wave-2-draft.md §3 |
 | Redesign Arus U1 — Abyss Emerald theme | 16+3 token swap, xterm/CodeMirror remap, glow on 3 active selectors, offline fonts, +4 smoke checks | **Shipped — post-tag** (33a1833) | EPIC-TSD-redesign-arus-v1.md §U1 · redesign §6.5 |
-| Redesign Arus U2–U9 | Sidebar (U2, dispatch in progress), tab bar (U3), terminal well/divider/status bar (U4), SFTP strip/selection (U5), skeletons (U6), editor dirty/Ctrl+S (U7), password dialog chips (U8), smoke canonization (U9) | **In flight** (U2 running on working tree; U1 done; units dispatched serially — hotspot `src/styles.css`/`src/main.ts`) | docs/EPIC-TSD-redesign-arus-v1.md §2 · docs/UX/redesign-hosterm-v1.md §2/§6.5 |
+| Redesign Arus U2–U9 | Sidebar (U2), tab bar (U3), terminal well/divider/status bar (U4), SFTP strip/selection (U5), skeletons (U6), editor dirty/Ctrl+S (U7), password dialog chips (U8), smoke canonization (U9) | **Shipped — v0.11.0** (4be09c5; smoke 225, cargo 78). Visual identity now SUPERSEDED by Dusk | docs/EPIC-TSD-redesign-arus-v1.md §2 · docs/UX/redesign-hosterm-v1.md §2/§6.5 |
+| Redesign Dusk v1 | New warm "Dusk" visual identity (tokens/geometry/radius/motion) REPLACING Abyss Emerald; Settings panel + Appearance (preset picker + 1 custom accent + live preview); Google login (visual + high-level auth); Snippet cheatsheet panel; AI assistant + command execution with human-in-the-loop approval (Run once / Always allow exact-command / Reject). Keeps Tauri+real-ssh architecture + config/sidecar invariants + shell component behavior | **Speced — awaiting MEKL approval** (6 OQ open: preset AA scope, Google OAuth, AI backend, snippet/settings store, "Always allow" pattern roadmap). PM doc only, no code | docs/FEATURE-SPEC-redesign-dusk-v1.md · docs/UX/prototypes/proto-a-dusk*.html (MEKL-approved) |
 | Wave 2 B — signing (M2) then updater (M3) | Authenticode via SignPath Foundation (free OSS program; cert issued to the Foundation) + minisign artifacts, fail-closed gates, `latest.json` feed; then user-initiated verified updater | **Speced — awaiting MEKL approval** (draft uncommitted, commit deferred §10) | docs/archive/FEATURE-SPEC-wave-2-draft.md §4 · docs/SDD-signing-updater.md |
 | Wave 2 C — config auto-reload on focus | mtime+size stat on window focus, no watcher daemon | **Speced** (same draft; HR-W2-2) | docs/archive/FEATURE-SPEC-wave-2-draft.md §5 |
 | Fleet Run v1 — multi-host command/script runner | native parallel `ssh`-argv runner over the existing `~/.ssh/config` host list; command or stdin-script to selected hosts; concurrency cap + per-host timeout; per-host status/exit/live output + run summary; confirm-gated blast radius | **Approved (MEKL 19 Okt — OQ closed, spec §5)** — backend Unit 1–2 paralel Arus; frontend Unit 3–5 antre setelah U9 | docs/FEATURE-SPEC-fleet-run-v1.md |

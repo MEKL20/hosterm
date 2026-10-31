@@ -621,4 +621,268 @@ Structural verdict for the spec's Clarifying Q3 / R-FL-1: a spawn has exactly on
 
 ---
 
-*Sources: docs/PRD.md, docs/archive/SDD-hosterm-v1.md, docs/SDD-signing-updater.md, docs/EPIC-TSD-redesign-arus-v1.md, docs/archive/FEATURE-SPEC-wave-2-draft.md, docs/FEATURE-SPEC-fleet-run-v1.md, docs/STATE.md, docs/SPIKE-csp-findings.md, src-tauri/src/lib.rs, src/main.ts, qa-reports/headless-smoke.mjs, src-tauri/tauri.conf.json (all read 2026-10-19). Note: PRD-hosterm-v2.md landed mid-authoring from pm; header/flows reconciled against it. §12 addendum + ADR-13..16 + INV-14..19 authored for card t_a367888f (Fleet Run Unit 0).*
+## 13. Redesign Dusk v1 (addendum — token-system architecture + app-data store + AI approval contract)
+
+> Architect addendum (card t_60df4386, 31 Okt 2026), derived FROM `docs/FEATURE-SPEC-redesign-dusk-v1.md` (pm, FR/NFR/OQ) with the **visual truth** taken verbatim from the MEKL-approved prototypes `docs/UX/prototypes/proto-a-dusk.html` + `proto-a-dusk-settings.html` (+ `verification-report.json`). This extends — does not replace — §§1–12. New decisions: **ADR-18..22**; new invariants: **INV-21..26**; IPC inventory **24 → 27** (`read_settings`, `write_settings`, `read_snippets`). The §12 Fleet IPC table stays frozen; nothing here touches it.
+>
+> **MEKL-pending assumptions (reversible defaults, NOT final facts).** nano locked these on 31 Okt as working defaults because MEKL has not overridden; every one is tagged `[ASSUME-OQ-n]` where it bites and re-surfaced in §13.9. They are design inputs here, not closed constraints like Fleet's OQ-1..9.
+
+### 13.1 Frontend-only vs new-IPC split (the first architectural cut)
+
+The redesign is **mostly a frontend re-skin**; only persistence and the allowlist store cross into Rust. Separated hard so the lead can parallel-plan the backend unit against the serial frontend units:
+
+| Area | Surface | New IPC? | FR trace |
+|---|---|---|---|
+| Dusk token swap (`:root`, xterm/CodeMirror remap) | `src/styles.css`, `src/main.ts` theme literals | **No** — pure frontend | FR-DT1..7 |
+| Shell re-skin (sidebar/tab/split/status bar/SFTP geometry+motion) | `src/styles.css`, `src/main.ts` | **No** | FR-SH1..8 |
+| Settings modal + Appearance (preset picker, accent, preview) UI | `src/main.ts`, `index.html`, `src/styles.css` | **No** for the UI itself | FR-SET1..12 |
+| **Theme/accent persistence** across sessions | app-data JSON | **Yes** — `read_settings`/`write_settings` (ADR-18/19) | FR-SET13 |
+| Snippet panel UI (render/filter/copy) | `src/main.ts`, `index.html`, `src/styles.css` | **No** for UI | FR-SN1..5 |
+| **Snippet source** (bundled default read-only v1) | bundled JSON asset + optional app-data overlay | **Yes** — `read_snippets` (ADR-19) | FR-SN6 |
+| Google login chip + popover | `src/main.ts`, `index.html`, `src/styles.css` | **No** — visual-only v1 `[ASSUME-OQ-3]` | FR-GL1..5 |
+| AI panel + command card + approval UX | `src/main.ts`, `index.html`, `src/styles.css` | **No** backend v1 `[ASSUME-OQ-4]` | FR-AI1..13 |
+| **AI allowlist** (exact-command + host, revoke) persistence | app-data JSON (same store as settings) | **Yes** — folded into `read_settings`/`write_settings` (ADR-21) | FR-AI6/7/10 |
+
+**Net new IPC = 3 commands** (`read_settings`, `write_settings`, `read_snippets`). Everything else is CSS variables + DOM behavior the frontend owns, and is mockable in smoke with zero backend (same posture Fleet Units 3–4 used). The AI *backend* (model, execution wiring) is explicitly **not designed here** `[ASSUME-OQ-4]` — §13.6 defines only the UX contract + the integration point, mirroring how §12.8 owed the v2 spec author a note.
+
+### 13.2 Theme token as a SYSTEM (ADR-20)
+
+**Decision — presets are a data-driven `:root` variable set swapped by a single root attribute; custom accent is one overridable variable.** This is what lets Slate/Ink/Light be "filled in later" with zero rework (`[ASSUME-OQ-2]`).
+
+Mechanism:
+1. **Dusk is the default `:root`** — all tokens §13.3 live directly on `:root` (so the app renders Dusk with no attribute set, and a token-less boot is always a valid theme).
+2. **Preset swap = `document.documentElement.setAttribute("data-theme", preset)`.** Each non-default preset is a CSS block `:root[data-theme="slate"] { … }` overriding only the surface/text/semantic tokens. Dusk = absence of the attribute (or `data-theme="dusk"`, treated identically). No per-component re-theming code — components only ever read `var(--token)`.
+3. **Accent is one variable + derived.** `--accent` is the single source; `--accent-soft` and `--accent-ink` are its only derivatives. Custom accent overrides **`--accent` alone** by writing an inline style on `:root` (`document.documentElement.style.setProperty("--accent", hex)`), leaving every preset block's surface/text/status untouched — this is the prototype `set-note` guarantee ("Recolors the accent only…") expressed structurally (FR-SET8).
+4. **Accent-ink contrast guard (FR-SET9/NFR-DK3).** `--accent-ink` must stay ≥ 4.5:1 over the chosen `--accent`. v1 rule (architect call, lead implements): compute relative luminance of the chosen accent; pick ink = `#241404` (dark, the Dusk value) when the accent is light enough, else a light ink (`#f2e9dc`-class) — a two-value auto-switch, NOT a free gradient. The 5 quick-pick chips are pre-verified with `#241404` ink; the auto-switch only engages for free color-input values. This keeps FR-SET9 a contract (≥ 4.5:1) with a deterministic, testable implementation and no clamp surprises. `[ASSUME pm-Q3]`
+5. **xterm/CodeMirror remap (the literal that CSS vars can't reach).** Same pitfall as Arus U1 (STATE.md): the xterm `theme` object (23 keys) and CodeMirror `cmTheme`/`cmHighlight` are JS literals, not CSS vars. v1 scope locks them to **Dusk values only**; when a preset is active the terminal/editor palette does **not** repaint (documented limitation — terminal well stays Dusk-dark across presets). Making xterm/CM preset-aware is explicitly deferred with the preset-expose gate (`[ASSUME-OQ-2]`), because it needs its own AA pass per preset × ANSI-16.
+
+Preset readiness gate (NFR-DK2): a preset may be **exposed as functional** only after full-shell AA is proven for *every* text pair in that preset, not just the swatch/accent pair in the verification report. Until then it renders as a **disabled "coming" entry** in the picker (`[ASSUME-OQ-2]` default = Dusk-only functional; Slate/Ink/Light = placeholders). The picker markup already exists in the prototype; "coming" = `aria-disabled="true"` + no `data-theme` swap on click.
+
+### 13.3 Dusk tokens (verbatim from prototype `:root`) — FR-DT1
+
+Taken byte-exact from `proto-a-dusk.html` / `-settings.html`. Zero Abyss-Emerald literal may remain in `src/` (FR-DT1, grep gate INV-21).
+
+| Token | Value | Role |
+|---|---|---|
+| `--bg` | `#191512` | app background |
+| `--sidebar` | `#1d1814` | sidebar / tab bar / status bar / drawer |
+| `--surface` | `#221c17` | row hover, card, input |
+| `--raised` | `#2a231c` | chip, kbd, avatar, btn-secondary |
+| `--term` | `#14100d` | terminal well + cmd-line/output bg |
+| `--border` | `#332a21` | 1px line |
+| `--hairline` | `rgba(226,163,92,.14)` | faint accent line |
+| `--text` | `#f2e9dc` | primary text |
+| `--dim` | `#b9aa95` | secondary text |
+| `--faint` | `#93836f` | tertiary / placeholder |
+| `--accent` | `#e2a35c` | honey amber — focus, active tab, primary action |
+| `--accent-ink` | `#241404` | text on accent (8.18:1 over `--accent`) |
+| `--accent-soft` | `rgba(226,163,92,.12)` | faint accent fill |
+| `--live` | `#9dc489` | sage — live status (semantic only) |
+| `--danger` | `#e07856` | terracotta — error/dead/reject (semantic only) |
+| `--r-lg`/`--r-md`/`--r-sm` | `10px`/`8px`/`6px` | radius |
+| `--shadow-drawer` | `0 10px 30px rgba(0,0,0,.42)` | elevation — **drawer + settings modal ONLY** |
+| `--font-ui` | Inter-stack, system fallback | UI |
+| `--font-mono` | JetBrains-Mono-stack, system fallback | mono/terminal |
+
+Geometry (FR-SH1/2, prototype §3.2): sidebar `248px`, host-row `34px`, tab `32px` / tab-bar `42px`, drawer `340px`, Settings modal `900×620` (max `94vw×92vh`), status bar `24px`, term divider `4px` `col-resize`, base font `13px`/lh `1.5`, Settings scrim `rgba(12,9,6,.55)`, Google button radius `4px` (brand, not `--r-*`).
+
+Non-Dusk preset token sets (for the preset CSS blocks when expose-gated open) — surface/text/accent only, verified pairs from the report:
+- **Slate** `data-theme="slate"`: `--bg #171d24` · `--surface #222a33` · `--accent #6cc4dc` · `--text #e4ebf2` (text 14.11:1, accent 8.54:1).
+- **Ink** `data-theme="ink"`: `--bg #141414` · `--surface #1e1e1e` · `--accent #e0563f` · `--text #ececec` (text 15.59:1, accent 4.89:1).
+- **Light** `data-theme="light"`: `--bg #f5f1e8` · `--surface #ffffff` · `--accent #96571a` · `--text #26201a` (text 14.29:1, accent 5.07:1).
+
+Quick-pick accent chips (FR-SET6): amber `#e2a35c`, teal `#5fbfae`, rose `#e0869b`, lime `#aec267`, violet `#b99be3`.
+
+### 13.4 Store: settings + snippet + allowlist (ADR-18/19/21)
+
+**One app-data JSON file for settings+allowlist; one read-only bundled JSON for default snippets** (`[ASSUME-OQ-5]`). This is additive — zero impact on `~/.ssh/config` or the sidecar (INV-22).
+
+**Location (ADR-18).** Follow the existing `config_path()`/`secrets_path()` posture: resolve via the **`dirs` crate already in the dependency tree** (NOT a new `tauri-plugin-store`/`tauri-plugin-fs` — zero new deps, same rule as NFR-FL1). Path = `dirs::config_dir()/hosterm/settings.json`:
+- Linux: `~/.config/hosterm/settings.json`
+- Windows: `%APPDATA%\hosterm\settings.json`
+- macOS (dev only): `~/Library/Application Support/hosterm/settings.json`
+
+`HOSTERM_DATA_DIR` env override (test hook, parity with `HOSTERM_CONFIG`) points the parent dir elsewhere so smoke runs against a temp file.
+
+**Schema — `settings.json` (ADR-18, data model §13.7):**
+
+```jsonc
+{
+  "version": 1,                       // schema version; unknown → read as default, never crash
+  "theme": "dusk",                    // "dusk" | "slate" | "ink" | "light"; unknown → "dusk"
+  "accent": "#e2a35c",                // #RRGGBB; invalid → ignored, falls back to preset accent
+  "allowlist": [                      // AI exact-command approvals (ADR-21)
+    { "host": "prod-web", "command": "docker system prune -af", "added_at": "2026-10-31T06:00:00Z" }
+  ]
+}
+```
+
+**Snippets — `read_snippets` (ADR-19).** v1 = **bundled read-only default** shipped as a JSON asset (`src/assets/snippets.default.json`, embedded in the bundle, zero network, FR-DT5/NFR-DK6 clean). Shape:
+
+```jsonc
+[ { "category": "Docker", "items": [ { "name": "Prune everything", "command": "docker system prune -af" } ] },
+  { "category": "Git",    "items": [ … ] },
+  { "category": "systemd","items": [ … ] } ]
+```
+
+`read_snippets` returns the bundled set in v1. A user-editable overlay (`snippets.user.json` in the same app-data dir) is the forward path but **out of v1 scope** (FR-SN6 "v1 read"); designing the merge/dedup is deferred with `[ASSUME-OQ-5]`.
+
+**Write posture (INV-22/24).** `write_settings` is **atomic + whole-file** (sibling temp → rename), identical to the config/sidecar write discipline (§5.1). No partial writes, no self-heal of `~/.ssh/*`. An unreadable/corrupt `settings.json` → the backend returns defaults (theme=dusk, accent=#e2a35c, allowlist=[]) and does **not** overwrite until the next legitimate `write_settings`, so a hand-corrupted file is never silently clobbered on read (mirrors "unreadable config refuses edit", ADR-4).
+
+**Portability (NFR-8 / NFR-DK7).** The store lives **outside `~/.ssh/`**, so the existing "copy `~/.ssh` to move machines" story is unchanged. Settings/snippets/allowlist do **not** travel with the ssh config by default — documented trade-off: a device switch carries hosts+keys (ssh dir) but resets theme/allowlist unless the user also copies `~/.config/hosterm/`. This is the deliberate separation that keeps the ssh config pure (INV-3 class) and is the honest answer MEKL must confirm in `[ASSUME-OQ-5]` (does the snippet/settings store ride along, or stay machine-local?).
+
+### 13.5 New IPC contract (frozen like §12.3 — lead's TSD implements verbatim; frontend mocks verbatim)
+
+Conventions identical to §12.3: command args camelCase at the boundary, JSON payload fields snake_case. Inventory **24 → 27** (`grep -rc "tauri::command" src-tauri/src/*.rs` must read 27 after these land). This block is the freeze — a shape change here is an addendum revision, never an implementation drift.
+
+```ts
+invoke("read_settings"): Promise<Settings>
+// Never throws for a missing/corrupt file: returns DEFAULT_SETTINGS instead (INV-24).
+interface Settings {
+  version: number;                 // 1
+  theme: "dusk" | "slate" | "ink" | "light";   // unknown value coerced to "dusk" by backend
+  accent: string;                  // "#RRGGBB"; backend validates 6-hex, else returns preset default
+  allowlist: AllowEntry[];
+}
+interface AllowEntry {
+  host: string;                    // ssh config alias, EXACT (no pattern/glob — v1, OQ-6 default)
+  command: string;                 // exact command string the user approved
+  added_at: string;                // RFC 3339 UTC; backend-stamped on write, display/audit only
+}
+
+invoke("write_settings", { settings: Settings }): Promise<null>
+// Atomic whole-file write (temp → rename), 0600-class perms where the OS supports it.
+// Backend re-validates: theme enum, accent 6-hex, allowlist entries non-empty host+command.
+// Rejects with "settings:invalid-accent" | "settings:invalid-theme" | "settings:write-failed".
+// NEVER reads/writes ~/.ssh/config or the sidecar on this path (INV-22).
+
+invoke("read_snippets"): Promise<SnippetGroup[]>
+// v1 = bundled read-only default set; never throws (empty array on read failure).
+interface SnippetGroup { category: string; items: Snippet[] }
+interface Snippet { name: string; command: string }
+```
+
+Rejection strings (frontend maps prefix → copy; 0 file write on any): `settings:invalid-accent`, `settings:invalid-theme`, `settings:write-failed`.
+
+**No events.** Unlike Fleet, this surface is request/response only — there is no streaming. The AI approval flow (§13.6) is **frontend-state-driven in v1** (no backend AI), so it emits no IPC until the AI backend epic defines one `[ASSUME-OQ-4]`.
+
+Mock fixture (copy-paste for the Settings/AI frontend units):
+
+```json
+{ "version": 1, "theme": "dusk", "accent": "#e2a35c",
+  "allowlist": [ { "host": "prod-web", "command": "sudo systemctl restart netdata", "added_at": "2026-10-30T12:00:00Z" } ] }
+```
+
+### 13.6 AI command-approval contract (FROZEN like §12 Fleet — security-sensitive)
+
+Human-in-the-loop is mandatory and explicit. In v1 there is **no AI backend and no new execution path**: a "Run once" executes through the **existing real-ssh terminal** for that host (ADR-1/2), exactly as if the user typed the command — no second execution engine is introduced `[ASSUME-OQ-4]`.
+
+**Command-card state machine (frozen, FR-AI2/3/7):**
+
+```
+proposed ─► AWAITING APPROVAL ─┬─ Run once      ─► (execute once via terminal) ─► done, allowlist UNCHANGED
+  (cmd-card.awaiting,          ├─ Always allow   ─► (persist AllowEntry + execute) ─► ALWAYS ALLOWED
+   cmd-state.warn)             └─ Reject         ─► rejected (no execute, no allowlist write)
+
+Any newly-proposed command whose (host, command) EXACTLY matches an AllowEntry renders directly as
+ALWAYS ALLOWED (cmd-state.ok, sage) and MAY execute without re-prompting (FR-AI7).
+```
+
+Prototype markup is the visual truth (`proto-a-dusk.html` lines 580–608):
+- Awaiting: `.cmd-card.awaiting` + `.cmd-state.warn` "AWAITING APPROVAL"; actions `button.btn-primary.approval-run` **Run once** / `button.btn-secondary.approval-always` **Always allow** / `button.btn-ghost.approval-reject` **Reject**; foot copy "Allowlist stores this exact command only. Review patterns in Settings > Approvals."
+- Allowed: `.cmd-state.ok` "ALWAYS ALLOWED".
+
+**Visual-weight invariant (FR-AI4, INV-25).** "Run once" is `btn-primary` (accent fill, the eye/click default); "Always allow" is `btn-secondary` (muted, `--raised`). This is a *security* property — the permission-widening action must never be the primary target — and is asserted in smoke (INV-25), not left to CSS drift.
+
+**Allowlist data = exact-command-only (ADR-21, `[ASSUME-OQ-6]` default).** An `AllowEntry` is the tuple `(host, command)` compared **byte-exact**; no pattern, glob, prefix, or normalization in v1. Stored in `settings.json.allowlist` (§13.4). "Always allowed" fires only for an exact `(host, command)` re-match. **Revoke** (FR-AI10) = Settings › AI Assistant/Approvals is a **read + revoke list**: render each entry, revoke = remove that entry and `write_settings`. It is NOT a pattern editor in v1.
+
+**Execution safety (FR-AI13, reuses Fleet posture).** Before any execute, a proposed command's **host alias** passes the same `sftp_safe` guard Fleet uses (leading `-`, CR/LF → refuse, INV-19 family → INV-26). The command string itself reaches the host only through the existing terminal-PTY write path (never `sh -c` locally — INV-14 class), so no new local-shell surface is created.
+
+**Hostile-output escape (FR-AI11, INV-11 family).** Both AI thread text and any rendered command output route through `esc()`/`escAttr()` — AI/remote output is hostile input, same rule as Fleet §12.3 and SFTP. CSP (ADR-6) remains the structural backstop.
+
+**Threat note (what the contract prevents):**
+- *Execution without consent* — FR-AI9 forbids any implicit/auto-run; the ONLY execute paths are an explicit Run-once click or an exact allowlist re-match the user previously created by clicking Always-allow. A compromised/hallucinating AI cannot run anything the user never approved.
+- *Mis-click widening permissions* — INV-25 keeps "Always allow" visually secondary so the reflexive click is the one-shot, not the standing grant.
+- *Allowlist as a blast-radius* — exact-command-only (ADR-21) means an approved `docker system prune -af` can never silently authorize `docker system prune -af --volumes`; the tuple must match byte-for-byte. Pattern/glob is explicitly out (`[ASSUME-OQ-6]`) precisely because it widens blast radius and needs its own security design (anchoring/escaping/preview-match), exactly as §12.8 deferred fleet passwords.
+- *Secret leakage* — the allowlist stores commands + host aliases only; it lives outside `~/.ssh/` and never holds secrets (INV-22). Stored passwords never cross into the AI path (INV-4 class).
+
+### 13.7 Data model (new entities)
+
+No DB; one new app-data file + one bundled asset (§13.4). Entities:
+
+```
+Settings (settings.json, app-data)
+├── version: u32
+├── theme: enum { dusk, slate, ink, light }        # default dusk
+├── accent: string "#RRGGBB"                        # default #e2a35c
+└── allowlist: AllowEntry[]
+    ├── host: string        # ssh alias, exact
+    ├── command: string     # exact approved command
+    └── added_at: string    # RFC 3339 UTC, audit only
+
+SnippetGroup[] (snippets.default.json, bundled read-only)
+└── { category: string, items: { name, command }[] }
+```
+
+Evolution: `version` gates future migration; unknown `version` or unparseable file → defaults on read, no destructive rewrite (ADR-4 posture). A user snippet overlay adds a sibling file, never mutates the bundled default — additive, no model break.
+
+### 13.8 Impact on the verify loop + invariants
+
+**New ADRs:**
+- **ADR-18** — settings/allowlist store = one app-data JSON resolved via existing `dirs` crate (NOT `~/.ssh`, NOT a new plugin dep); atomic whole-file write; `HOSTERM_DATA_DIR` test override.
+- **ADR-19** — snippet source v1 = bundled read-only JSON asset (`read_snippets`); user overlay deferred.
+- **ADR-20** — theme = data-driven `:root` token system swapped by one `data-theme` attribute; accent = single `--accent` variable overridden inline; presets are "fill-in-later" CSS blocks; Dusk = default (no attribute).
+- **ADR-21** — AI allowlist = exact `(host, command)` tuple, byte-match, no pattern in v1; revoke-list UI, not a pattern editor.
+- **ADR-22** — Google login + AI are **visual-only v1**; no OAuth backend, no AI backend; the approval UX contract (§13.6) is frozen independent of any future backend, and execution reuses the existing real-ssh terminal (no new path).
+
+**New invariants (carry named checks; flow to STATE.md when units land):**
+
+| INV | Property | Check |
+|---|---|---|
+| INV-21 | Zero Abyss-Emerald literal survives in `src/`; all rendered tokens are the Dusk values §13.3 | grep gate (`#08080a`/`#00d992`/`--glow` etc. = 0 hits) + smoke `:root` token asserts |
+| INV-22 | `read_settings`/`write_settings`/`read_snippets` never read or write `~/.ssh/config` or the sidecar; store lives under app-data only | cargo test: config+sidecar hash/mtime unchanged across a settings write; FS diff |
+| INV-23 | For every applied accent, `--accent-ink` contrast over `--accent` stays ≥ 4.5:1 (auto ink-switch) | smoke contrast assert on ink/accent pair across the 5 chips + a dark free value |
+| INV-24 | A missing/corrupt `settings.json` yields `DEFAULT_SETTINGS` on read and is never overwritten until a legitimate write | cargo test: corrupt-file read returns defaults, file bytes unchanged |
+| INV-25 | "Run once" renders `btn-primary`, "Always allow" renders `btn-secondary` (permission-widening action never primary) | smoke: class assertion on the approval card |
+| INV-26 | A proposed command's host alias passes the `sftp_safe` guard before any execute (leading `-`/CR/LF refused) | reuses INV-19/INV-10 impl; frontend call-site smoke |
+
+Plus the carried-forward Dusk NFR checks (pm §5): INV-DnD (`grep draggable` = 0, NFR-DK4/INV-6), reduced-motion kill-switch (NFR-DK5), zero-network font (NFR-DK6/FR-DT5), CSP counter == 0 with hostile AI/snippet fixtures (NFR-DK9/INV-11 family).
+
+**Verify-loop deltas (baseline re-measured in working tree 31 Okt, HEAD 31bef63):**
+- `cargo test --lib` → **78 pass** today (lib 57 + fleet 21 by static count; STATE.md canon = 77). The store commands add cargo tests (write/read round-trip, corrupt-file defaults, config/sidecar byte-identity INV-22/24) → baseline + ≥ 4.
+- `node qa-reports/headless-smoke.mjs` → **225 pass** today. Each Dusk unit adds smoke for its behavior (token asserts, preset swap, accent+contrast, approval-card classes, hostile-output CSP); final number re-measured per unit, not hard-coded here.
+- IPC inventory gate: `grep -rc "tauri::command" src-tauri/src/*.rs` must move **24 → 27** when the store commands land (lib.rs 22 → 25; fleet.rs 2 unchanged). §11.5 self-check updates accordingly.
+- `npm run build` → 0 TS errors (unchanged gate).
+
+**Invariants that MUST stay green (STATE.md §Hard invariants 1–6):** config parseable + round-trip (1/2), no secret in config (3 — the store is explicitly outside this boundary), paste CRLF→LF (3/INV-5), **drag = manual mouse, never HTML5 DnD** (4/INV-6 — any new drag in snippet reorder etc. follows this), staging grep (5), authorized_keys untouched (6). None of this addendum's surfaces alter them; the store write is the one new FS mutation and it is confined to app-data.
+
+### 13.9 Hotspot + recommended unit sequence (RECOMMENDATION — final granularity = lead's TSD)
+
+**Hotspot (binding, from Arus §0 + STATE.md):** `src/styles.css` and `src/main.ts` are touched by nearly every Dusk unit. Units that touch either file **must be serial — one active card per file, never parallel.** The backend store unit (new `settings`/`snippets` commands in `lib.rs`) is **file-disjoint** from the frontend hotspot and MAY dispatch in parallel with an early frontend unit (same way Fleet FL-1 ran parallel to Arus U5–U9), as long as no frontend unit is mid-flight in `lib.rs`.
+
+> `hotspot: src/styles.css + src/main.ts — every Dusk frontend unit touches them; serialize, one card per file (Arus §0 posture).`
+
+Recommended order (dependency-driven; lead locks the actual unit boundaries):
+1. **Dusk token swap** — `:root` tokens §13.3 + xterm/CM literal remap + glow→elevation moved to drawer/modal only. Foundation for everything. (frontend hotspot; analog of Arus U1)
+2. **Shell re-skin** — sidebar/tab/split/status bar/SFTP to Dusk geometry+motion, behavior preserved. (serial, hotspot)
+3. **Store backend** (`read_settings`/`write_settings`/`read_snippets`, app-data JSON, bundled snippets asset). *File-disjoint — can run parallel to #1/#2 as long as no frontend card is in `lib.rs`.*
+4. **Settings modal + Appearance** — preset picker (Dusk functional; others gated "coming" per `[ASSUME-OQ-2]`), accent control + contrast guard, live preview, persist via #3. Needs tokens (#1) + store (#3).
+5. **Snippet panel** — render/filter/copy from `read_snippets`. Needs #3.
+6. **Google login visual** — chip + popover, no backend (`[ASSUME-OQ-3]`).
+7. **AI assistant + approval** — thread, command card, allowlist exact + revoke list (§13.6). **Last** — most security-sensitive; depends on #3 (allowlist persistence) + #1 (tokens).
+8. **Smoke canonization + docs** — fold all new checks, re-measure baselines, update STATE.md (analog of Arus U9).
+
+### 13.10 Open items still gated on MEKL (next gate for nano)
+
+Every `[ASSUME-*]` below is a reversible default nano locked 31 Okt; none is a closed constraint. Listed so nano knows what to confirm before / during the relevant unit:
+
+- **OQ-1** (Dusk supersedes Arus as active identity; Arus = archived history): assumed **yes**. STATE.md §layout update (Arus token notes → historical) recommended **when the token unit lands**, not now — architect/lead does it then, not pm.
+- **OQ-2** (non-Dusk preset scope): assumed **Dusk-only functional; Slate/Ink/Light = disabled "coming" placeholders** until full-shell AA proven per preset. ADR-20 makes them drop-in later. MEKL confirms whether v1 ships the placeholders or hides them entirely.
+- **OQ-3** (Google OAuth backend): assumed **visual-only v1** — chip + popover, no real session, no cloud sync. Backend (provider/redirect/scope/what-syncs/token-storage=sidecar-class) is a later epic; MEKL must confirm that Dusk opening a cloud-sync door is acceptable vs PRD "zero cloud".
+- **OQ-4** (AI backend): assumed **deferred** — approval UX frozen (§13.6), no model/execution backend designed. §13.6 is the owed input to the future AI-backend spec author (mirrors §12.8). MEKL picks the direction (on-device vs remote; privacy/NFR-3 impact) in that epic.
+- **OQ-5** (store location + portability): assumed **`dirs::config_dir()/hosterm/` JSON, bundled read-only default snippets, outside `~/.ssh/`**. MEKL confirms the location AND whether settings/snippets ride along on a device move or stay machine-local (NFR-8 trade-off, §13.4).
+- **OQ-6** ("Always allow" scope): assumed **exact-command-only v1**; pattern/glob = separate security epic. MEKL confirms the roadmap exists (prototype foot copy promises "Review patterns in Settings › Approvals") but is out of v1.
+
+---
+
+*Sources: docs/PRD.md, docs/archive/SDD-hosterm-v1.md, docs/SDD-signing-updater.md, docs/EPIC-TSD-redesign-arus-v1.md, docs/archive/FEATURE-SPEC-wave-2-draft.md, docs/FEATURE-SPEC-fleet-run-v1.md, docs/STATE.md, docs/SPIKE-csp-findings.md, src-tauri/src/lib.rs, src/main.ts, qa-reports/headless-smoke.mjs, src-tauri/tauri.conf.json (all read 2026-10-19). Note: PRD-hosterm-v2.md landed mid-authoring from pm; header/flows reconciled against it. §12 addendum + ADR-13..16 + INV-14..19 authored for card t_a367888f (Fleet Run Unit 0). §13 Dusk addendum + ADR-18..22 + INV-21..26 authored for card t_60df4386 (Redesign Dusk v1 SDD), derived from docs/FEATURE-SPEC-redesign-dusk-v1.md + docs/UX/prototypes/proto-a-dusk{,-settings}.html + verification-report.json (all read 2026-10-31).*

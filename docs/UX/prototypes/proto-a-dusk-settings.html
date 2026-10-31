@@ -1,0 +1,1057 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hosterm · proto A · dusk · settings</title>
+<!--
+  DIRECTION A: "dusk" - warm paper-dark minimalist.
+  RATIONALE: Terminal tools are always cold; this one is warm. A candlelit workshop feel:
+  brown-black paper surfaces, generous spacing, soft 10px radii, one honey-amber accent
+  reserved for focus, the active tab, and the primary action. Status colors (sage/terracotta)
+  are semantic only. Genuinely far from Abyss Emerald (warm hue family vs cool green-on-black).
+  LAYOUT HIGHLIGHT: AI assistant drawer OPEN, showing the approval UX.
+
+  ITERATION (this file): the SAME shell with a Settings modal shown OPEN on Appearance.
+  Base file proto-a-dusk.html is unchanged; palette, spacing, radii and components here are
+  inherited from it. Scope of the new surface: theme preset picker (Dusk/Slate/Ink/Light
+  mini-previews; the app itself stays Dusk) + ONE custom accent control with quick picks
+  + a small live preview. Not a token editor, no import/export, no light/dark toggle.
+
+  PALETTE (verified WCAG AA with contrast-check.py):
+    bg #191512 · sidebar #1d1814 · surface #221c17 · raised #2a231c
+    term #14100d · border #332a21 · hairline rgba(226,163,92,.14)
+    text #f2e9dc · dim #b9aa95 · faint #93836f
+    accent #e2a35c (honey) · accent-ink #241404
+    live #9dc489 (sage) · danger #e07856 (terracotta)
+
+  CONTRAST RATIOS (all normal-text AA PASS):
+    #f2e9dc / #191512  15.09:1   #b9aa95 / #191512   7.99:1
+    #93836f / #191512   4.94:1   #e2a35c / #191512   8.32:1
+    #241404 / #e2a35c   8.18:1   #f2e9dc / #14100d  15.74:1
+    #b9aa95 / #14100d   8.33:1   #9dc489 / #191512   9.24:1
+    #e07856 / #191512   6.04:1   #f2e9dc / #2a231c  12.88:1
+    #b9aa95 / #221c17   7.42:1   #1f1f1f / #ffffff  16.48:1 (Google button)
+
+  NEW PAIRS INTRODUCED BY THE SETTINGS PANEL (contrast-check.py, AA PASS):
+    Slate preset:  #e4ebf2 on #171d24  14.11:1 (text)   #6cc4dc on #171d24   8.54:1 (accent mark)
+    Ink preset:    #ececec on #141414  15.59:1 (text)   #e0563f on #141414   4.89:1 (accent mark)
+    Light preset:  #26201a on #f5f1e8  14.29:1 (text)   #96571a on #f5f1e8   5.07:1 (accent mark)
+    Quick-pick chips vs Dusk bg #191512 (component >=3, and >=4.5 anyway):
+      amber #e2a35c 8.32 · teal #5fbfae 8.25 · rose #e0869b 6.96 · lime #aec267 9.26 · violet #b99be3 7.66
+    Dark ink check #241404 placed on each chip: 8.18 / 8.12 / 6.84 / 9.10 / 7.53 (all >=4.5)
+    Settings nav on sidebar #1d1814 (reused tokens): text 14.64 · dim 7.75 · faint 4.79
+    Selected-preset check, accent on card surface #221c17: 7.72
+    Preview prompt/button ink #241404 on each chip color: same values as the chip checks above
+-->
+<style>
+  :root{
+    --bg:#191512; --sidebar:#1d1814; --surface:#221c17; --raised:#2a231c;
+    --term:#14100d; --border:#332a21; --hairline:rgba(226,163,92,.14);
+    --text:#f2e9dc; --dim:#b9aa95; --faint:#93836f;
+    --accent:#e2a35c; --accent-ink:#241404; --accent-soft:rgba(226,163,92,.12);
+    --live:#9dc489; --danger:#e07856;
+    --r-lg:10px; --r-md:8px; --r-sm:6px;
+    --shadow-drawer:0 10px 30px rgba(0,0,0,.42);
+    --font-ui:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+    --font-mono:"JetBrains Mono",ui-monospace,"SF Mono","Cascadia Code",Consolas,Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  [hidden]{display:none!important}
+  html,body{height:100%}
+  body{
+    background:var(--bg); color:var(--text);
+    font-family:var(--font-ui); font-size:13px; line-height:1.5;
+    -webkit-font-smoothing:antialiased; overflow:hidden;
+  }
+  button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;border-radius:var(--r-sm)}
+  input{font:inherit;color:inherit;background:none;border:0;outline:none}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  svg{display:block;flex:none}
+
+  .app{display:flex;height:100vh;min-width:1180px}
+
+  /* ---------- sidebar ---------- */
+  .sidebar{
+    width:248px;flex:none;background:var(--sidebar);
+    border-right:1px solid var(--border);
+    display:flex;flex-direction:column;
+  }
+  .brand{
+    display:flex;align-items:center;gap:9px;
+    padding:16px 16px 12px;
+  }
+  .brand-mark{
+    width:24px;height:24px;border-radius:var(--r-sm);
+    background:var(--accent-soft);border:1px solid var(--hairline);
+    display:grid;place-items:center;
+    color:var(--accent);font-family:var(--font-mono);font-size:12px;font-weight:700;
+  }
+  .brand-name{font-weight:650;letter-spacing:-.01em;font-size:14px}
+  .brand-ver{margin-left:auto;font-family:var(--font-mono);font-size:10.5px;color:var(--faint)}
+
+  .search-row{
+    margin:2px 12px 10px;padding:0 9px;
+    display:flex;align-items:center;gap:8px;
+    background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);
+    height:32px;color:var(--faint);
+  }
+  .search-row input{flex:1;min-width:0;height:100%;color:var(--text)}
+  .search-row input::placeholder{color:var(--faint)}
+  kbd{
+    font-family:var(--font-mono);font-size:10px;color:var(--faint);
+    background:var(--raised);border:1px solid var(--border);border-radius:4px;
+    padding:1px 5px;white-space:nowrap;
+  }
+
+  .host-list{flex:1;overflow-y:auto;padding:2px 8px 8px}
+  .group-label{
+    display:flex;align-items:center;gap:6px;
+    padding:12px 8px 5px;
+    font-size:10.5px;font-weight:600;letter-spacing:.09em;color:var(--faint);
+  }
+  .group-label .count{font-family:var(--font-mono);letter-spacing:0;font-weight:400;color:var(--faint)}
+  .host-row{
+    display:flex;align-items:center;gap:9px;
+    height:34px;padding:0 8px;border-radius:var(--r-md);
+    color:var(--dim);cursor:default;
+  }
+  .host-row:hover{background:var(--surface)}
+  .host-row.current{background:var(--surface);color:var(--text)}
+  .dot{width:7px;height:7px;border-radius:50%;flex:none}
+  .dot-live{background:var(--live);box-shadow:0 0 0 3px rgba(157,196,137,.16)}
+  .dot-idle{background:none;border:1.5px solid var(--faint)}
+  .host-name{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .auth-icon{color:var(--faint);margin-left:-2px}
+  .row-actions{margin-left:auto;display:flex;gap:2px;opacity:0;transition:opacity .12s ease}
+  .host-row:hover .row-actions,.host-row:focus-within .row-actions{opacity:1}
+  .icon-btn{
+    width:24px;height:24px;display:grid;place-items:center;
+    color:var(--dim);border-radius:var(--r-sm);
+  }
+  .icon-btn:hover{background:var(--raised);color:var(--text)}
+
+  .skeleton-row{display:flex;align-items:center;gap:9px;height:34px;padding:0 8px}
+  .sk-bar{height:9px;border-radius:4px;background:linear-gradient(90deg,var(--surface) 25%,var(--raised) 50%,var(--surface) 75%);background-size:200% 100%;animation:shimmer 1.4s linear infinite}
+  .sk-bar.w40{width:40%}.sk-bar.w22{width:22%}
+  @keyframes shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
+  .host-error{
+    display:flex;align-items:center;gap:7px;margin:2px 8px 4px;padding:6px 8px;
+    border:1px solid rgba(224,120,86,.28);border-radius:var(--r-md);
+    color:var(--danger);font-size:12px;
+  }
+  .host-error .err-name{color:var(--dim)}
+  .host-error .retry{margin-left:auto;display:flex;align-items:center;gap:4px;color:var(--danger);font-size:12px;padding:2px 6px;border-radius:var(--r-sm)}
+  .host-error .retry:hover{background:rgba(224,120,86,.12)}
+
+  .sidebar-footer{border-top:1px solid var(--border);padding:10px 12px 12px;position:relative}
+  .raw-row{display:flex;align-items:center;gap:6px;margin-bottom:8px}
+  .raw-btn{
+    display:flex;align-items:center;gap:7px;
+    padding:5px 8px;border-radius:var(--r-md);
+    color:var(--dim);font-size:12.5px;
+  }
+  .raw-btn:hover{background:var(--surface);color:var(--text)}
+  .user-chip{
+    width:100%;display:flex;align-items:center;gap:8px;
+    padding:6px 8px;border-radius:var(--r-md);text-align:left;
+  }
+  .user-chip:hover{background:var(--surface)}
+  .avatar{
+    width:24px;height:24px;border-radius:50%;flex:none;
+    background:var(--raised);border:1px solid var(--hairline);
+    display:grid;place-items:center;
+    font-size:10px;font-weight:650;color:var(--accent);
+  }
+  .user-name{font-size:12.5px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .user-chip .gmark{margin-left:auto}
+  .chip-caret{color:var(--faint)}
+
+  /* sign-in popover mockup (signed-out state) */
+  .signin-popover{
+    position:absolute;left:12px;right:12px;bottom:calc(100% + 8px);
+    background:var(--raised);border:1px solid var(--border);border-radius:var(--r-lg);
+    padding:14px;box-shadow:var(--shadow-drawer);
+  }
+  .signin-popover::after{
+    content:"";position:absolute;left:34px;bottom:-5px;width:8px;height:8px;
+    background:var(--raised);border-right:1px solid var(--border);border-bottom:1px solid var(--border);
+    transform:rotate(45deg);
+  }
+  .pop-title{font-size:12.5px;font-weight:600;margin-bottom:3px}
+  .pop-sub{font-size:11.5px;color:var(--dim);margin-bottom:11px}
+  .signin-btn{
+    width:100%;height:34px;display:flex;align-items:center;justify-content:center;gap:9px;
+    background:#ffffff;color:#1f1f1f;border:1px solid #747775;border-radius:4px;
+    font-size:12.5px;font-weight:550; /* Google brand spec: white surface, its own 4px radius */
+  }
+  .signin-btn:hover{background:#f2f2f2}
+
+  /* ---------- main column ---------- */
+  .main{flex:1;min-width:0;display:flex;flex-direction:column}
+
+  .tabbar{
+    height:42px;flex:none;display:flex;align-items:center;gap:8px;
+    padding:0 12px 0 8px;border-bottom:1px solid var(--border);background:var(--sidebar);
+  }
+  .tabs{display:flex;align-items:stretch;gap:2px;min-width:0;overflow:hidden}
+  .tab{
+    display:flex;align-items:center;gap:7px;
+    height:32px;align-self:center;padding:0 11px;border-radius:var(--r-md);
+    color:var(--dim);font-size:12.5px;white-space:nowrap;position:relative;
+  }
+  .tab:hover{background:var(--surface);color:var(--text)}
+  .tab.active{background:var(--surface);color:var(--text)}
+  .tab.active::after{
+    content:"";position:absolute;left:10px;right:10px;bottom:-1px;height:2px;
+    background:var(--accent);border-radius:2px 2px 0 0;
+  }
+  .tab .unsaved-dot{width:6px;height:6px;border-radius:50%;background:var(--accent)}
+  .tab.dead{color:var(--danger);background:rgba(224,120,86,.10)}
+  .tab.dead:hover{background:rgba(224,120,86,.16);color:var(--danger)}
+  .reconnect-pill{
+    display:flex;align-items:center;gap:4px;margin-left:4px;
+    padding:2px 7px;border:1px solid rgba(224,120,86,.4);border-radius:999px;
+    font-size:11px;color:var(--danger);
+  }
+  .tab.dead:hover .reconnect-pill{border-color:var(--danger)}
+  .split-drop{
+    width:26px;height:26px;align-self:center;flex:none;
+    display:grid;place-items:center;color:var(--faint);
+    border:1px dashed var(--border);border-radius:var(--r-sm);
+  }
+  .split-drop:hover{color:var(--accent);border-color:var(--hairline)}
+  .mode-switch{
+    margin-left:auto;display:flex;gap:2px;padding:2px;
+    background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);
+  }
+  .mode-btn{
+    display:flex;align-items:center;gap:6px;
+    height:24px;padding:0 10px;border-radius:var(--r-sm);
+    color:var(--faint);font-size:12px;
+  }
+  .mode-btn:hover{color:var(--text)}
+  .mode-btn[aria-pressed="true"]{background:var(--raised);color:var(--text)}
+
+  /* ---------- workbench ---------- */
+  .workbench{flex:1;min-height:0;display:flex}
+  .terminals{flex:1;min-width:0;display:flex}
+  .term{flex:1;min-width:0;background:var(--term);display:flex;flex-direction:column;position:relative}
+  .term-out{
+    flex:1;overflow:auto;padding:14px 16px;
+    font-family:var(--font-mono);font-size:12.5px;line-height:1.62;
+    color:var(--text);white-space:pre;
+  }
+  .term.focused::before{
+    content:"";position:absolute;top:0;left:0;right:0;height:2px;
+    background:var(--accent);z-index:1; /* focused-side accent underline */
+  }
+  .term.focused{box-shadow:inset 0 0 24px rgba(226,163,92,.05)}
+  .term-divider{
+    width:4px;flex:none;background:var(--border);cursor:col-resize;
+    display:grid;place-items:center;
+  }
+  .term-divider::after{
+    content:"";width:2px;height:22px;border-radius:2px;
+    background:repeating-linear-gradient(to bottom,var(--faint) 0 2px,transparent 2px 5px);
+  }
+  .term-divider:hover{background:var(--accent-soft)}
+
+  .p-user{color:var(--accent)} .p-path{color:var(--faint)}
+  .out{color:var(--dim)} .ok{color:var(--live)} .err{color:var(--danger)}
+  .cursor{display:inline-block;width:8px;height:15px;background:var(--accent);vertical-align:-2px;animation:blink 1.1s steps(2) infinite}
+  @keyframes blink{50%{opacity:0}}
+
+  /* ---------- drawers ---------- */
+  .drawer{
+    display:none;flex:none;width:340px;background:var(--sidebar);
+    border-left:1px solid var(--border);flex-direction:column;min-height:0;
+    box-shadow:var(--shadow-drawer); /* elevation signal: only element that floats */
+  }
+  .drawer.open{display:flex}
+  .drawer-head{
+    display:flex;align-items:center;gap:8px;flex:none;
+    padding:12px 14px;border-bottom:1px solid var(--border);
+  }
+  .drawer-head h2{font-size:13px;font-weight:650}
+  .head-tag{
+    font-family:var(--font-mono);font-size:10px;color:var(--faint);
+    border:1px solid var(--border);border-radius:4px;padding:1px 6px;
+  }
+  .head-count{font-family:var(--font-mono);font-size:11px;color:var(--faint)}
+  .drawer-close{margin-left:auto}
+
+  .ai-thread{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:14px}
+  .msg{font-size:12.5px}
+  .msg-user{
+    align-self:flex-end;max-width:85%;
+    background:var(--raised);border:1px solid var(--border);
+    padding:8px 12px;border-radius:var(--r-lg);color:var(--text);
+  }
+  .msg-ai{color:var(--dim);line-height:1.55}
+  .msg-ai p{margin-bottom:9px}
+  .msg-ai p strong{color:var(--text);font-weight:600}
+
+  .cmd-card{
+    border:1px solid var(--border);border-radius:var(--r-lg);
+    background:var(--surface);overflow:hidden;
+  }
+  .cmd-card.awaiting{border-color:rgba(226,163,92,.45)}
+  .cmd-head{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border)}
+  .cmd-scope{
+    font-family:var(--font-mono);font-size:10.5px;color:var(--dim);
+    background:var(--raised);border:1px solid var(--border);border-radius:4px;padding:1px 7px;
+  }
+  .cmd-state{margin-left:auto;font-size:10px;font-weight:650;letter-spacing:.08em}
+  .cmd-state.warn{color:var(--accent)}
+  .cmd-state.ok{color:var(--live)}
+  .cmd-line{
+    display:block;padding:10px 12px;
+    font-family:var(--font-mono);font-size:13px;color:var(--text);
+    background:var(--term);white-space:pre-wrap;word-break:break-all;
+  }
+  .cmd-desc{padding:9px 12px;font-size:11.5px;color:var(--dim);line-height:1.5}
+  .cmd-actions{display:flex;gap:7px;padding:4px 12px 12px}
+  .btn-primary{
+    height:30px;padding:0 14px;border-radius:var(--r-md);
+    background:var(--accent);color:var(--accent-ink);
+    font-weight:650;font-size:12.5px;
+  }
+  .btn-primary:hover{filter:brightness(1.06)}
+  .btn-secondary{
+    height:30px;padding:0 12px;border-radius:var(--r-md);
+    background:var(--raised);border:1px solid var(--border);color:var(--text);
+    font-size:12.5px;font-weight:500;
+  }
+  .btn-secondary:hover{border-color:var(--hairline)}
+  .btn-ghost{height:30px;padding:0 12px;border-radius:var(--r-md);color:var(--dim);font-size:12.5px}
+  .btn-ghost:hover{color:var(--danger);background:rgba(224,120,86,.10)}
+  .cmd-foot{padding:0 12px 11px;font-size:10.5px;color:var(--faint)}
+  .cmd-output{
+    padding:9px 12px;font-family:var(--font-mono);font-size:11.5px;line-height:1.6;
+    color:var(--dim);background:var(--term);white-space:pre;overflow-x:auto;
+  }
+
+  .ai-input{
+    flex:none;display:flex;gap:8px;align-items:center;
+    padding:12px 14px;border-top:1px solid var(--border);
+  }
+  .ai-input input{
+    flex:1;height:32px;padding:0 12px;border-radius:var(--r-md);
+    background:var(--surface);border:1px solid var(--border);color:var(--text);
+  }
+  .ai-input input::placeholder{color:var(--faint)}
+  .ai-input input:focus-visible{outline:2px solid var(--accent);outline-offset:0}
+  .send-btn{
+    width:32px;height:32px;border-radius:var(--r-md);flex:none;
+    background:var(--accent);color:var(--accent-ink);display:grid;place-items:center;
+  }
+  .send-btn:hover{filter:brightness(1.06)}
+
+  .snip-filter{
+    flex:none;display:flex;align-items:center;gap:8px;
+    margin:12px 14px 4px;padding:0 9px;height:30px;
+    background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);
+    color:var(--faint);
+  }
+  .snip-filter input{flex:1;min-width:0;height:100%;color:var(--text)}
+  .snip-filter input::placeholder{color:var(--faint)}
+  .snip-groups{flex:1;overflow-y:auto;padding:8px 14px 14px}
+  .snip-group-label{
+    padding:10px 2px 5px;font-size:10.5px;font-weight:600;
+    letter-spacing:.09em;color:var(--faint);
+  }
+  .snippet-item{padding:7px 2px;border-bottom:1px solid var(--hairline)}
+  .snip-top{display:flex;align-items:center;gap:8px}
+  .snip-name{font-size:12.5px;color:var(--text)}
+  .copy-btn{margin-left:auto;color:var(--faint);width:24px;height:24px;display:grid;place-items:center;border-radius:var(--r-sm)}
+  .copy-btn:hover{color:var(--text);background:var(--raised)}
+  .copy-btn.done{color:var(--live)}
+  .snip-cmd{
+    display:block;margin-top:3px;
+    font-family:var(--font-mono);font-size:11.5px;color:var(--dim);
+    white-space:pre-wrap;word-break:break-all;
+  }
+  .snip-empty{padding:24px 4px;font-size:12px;color:var(--faint);line-height:1.6}
+  .snip-empty strong{color:var(--dim);font-weight:600}
+
+  /* ---------- status bar ---------- */
+  .statusbar{
+    height:24px;flex:none;display:flex;align-items:center;gap:16px;
+    padding:0 13px;background:var(--sidebar);border-top:1px solid var(--border);
+    font-family:var(--font-mono);font-size:11px;color:var(--dim);
+  }
+  .sb-left{display:flex;align-items:center;gap:8px;min-width:0}
+  .sb-left .dot{width:6px;height:6px}
+  .sb-host{color:var(--text)}
+  .sb-spacer{flex:1}
+  .sb-right{display:flex;align-items:center;gap:16px;color:var(--faint)}
+  .sb-right .sb-clock{color:var(--dim)}
+
+  /* ---------- settings modal ---------- */
+  /* Larger container than the right-side drawers; floats over the dimmed shell. */
+  .settings-scrim{
+    position:fixed;inset:0;z-index:40;
+    background:rgba(12,9,6,.55);
+    display:flex;align-items:center;justify-content:center;padding:32px;
+  }
+  .settings{
+    width:900px;max-width:94vw;height:620px;max-height:92vh;
+    background:var(--sidebar);border:1px solid var(--border);border-radius:var(--r-lg);
+    box-shadow:var(--shadow-drawer); /* elevation signal: modal floats above the shell */
+    display:flex;flex-direction:column;overflow:hidden;
+  }
+  .settings-head{
+    flex:none;display:flex;align-items:center;gap:9px;
+    padding:13px 16px;border-bottom:1px solid var(--border);
+  }
+  .settings-head h2{font-size:14px;font-weight:650}
+  .settings-body{flex:1;min-height:0;display:flex}
+  .settings-nav{
+    flex:none;width:186px;border-right:1px solid var(--border);
+    padding:10px;display:flex;flex-direction:column;gap:2px;
+    overflow-y:auto;
+  }
+  .set-nav-item{
+    position:relative;display:flex;align-items:center;gap:9px;
+    height:32px;padding:0 10px;border-radius:var(--r-md);
+    color:var(--dim);font-size:12.5px;text-align:left;white-space:nowrap;
+  }
+  .set-nav-item svg{color:var(--faint)}
+  .set-nav-item:hover{background:var(--surface);color:var(--text)}
+  .set-nav-item[aria-current="page"]{background:var(--surface);color:var(--text)}
+  .set-nav-item[aria-current="page"] svg{color:var(--accent)}
+  .set-nav-item[aria-current="page"]::before{
+    content:"";position:absolute;left:-10px;top:7px;bottom:7px;width:2px;
+    background:var(--accent);border-radius:2px;
+  }
+  .settings-content{flex:1;min-width:0;overflow-y:auto;padding:20px 22px 22px}
+  .set-h{font-size:13.5px;font-weight:650;margin-bottom:3px}
+  .set-sub{font-size:12px;color:var(--dim);margin-bottom:18px}
+  .set-label{
+    font-size:10.5px;font-weight:600;letter-spacing:.09em;color:var(--faint);
+    margin-bottom:9px;
+  }
+  .set-block{margin-bottom:24px}
+
+  /* theme presets: mini previews only, the app stays in Dusk */
+  .preset-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  .preset{
+    display:flex;flex-direction:column;gap:8px;padding:9px 9px 8px;
+    background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);
+    text-align:left;
+  }
+  .preset:hover{border-color:var(--hairline)}
+  .preset[aria-pressed="true"]{border-color:rgba(226,163,92,.55)}
+  .preset-swatch{
+    height:62px;border-radius:var(--r-md);overflow:hidden;
+    background:var(--pb);border:1px solid rgba(128,128,128,.3);
+    padding:9px;display:flex;flex-direction:column;justify-content:space-between;gap:6px;
+  }
+  .sw-row{display:flex;align-items:center;justify-content:space-between;gap:6px}
+  .sw-text{font-family:var(--font-mono);font-size:11px;line-height:1;color:var(--pt)}
+  .sw-accent{width:24px;height:12px;border-radius:3px;background:var(--pa);flex:none}
+  .sw-surface{height:12px;border-radius:3px;background:var(--ps);border:1px solid rgba(128,128,128,.22)}
+  .preset-top{display:flex;align-items:center;gap:6px}
+  .preset-name{font-size:12.5px;font-weight:550;color:var(--text)}
+  .preset-check{margin-left:auto;color:var(--accent);display:none}
+  .preset[aria-pressed="true"] .preset-check{display:block}
+
+  /* custom accent: one color control + quick picks */
+  .accent-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  .color-well{
+    display:flex;align-items:center;gap:10px;height:42px;padding:0 12px 0 8px;
+    background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);
+  }
+  .color-well input[type="color"]{
+    width:36px;height:28px;padding:0;border:1px solid var(--border);
+    border-radius:var(--r-sm);background:none;cursor:pointer;
+  }
+  .color-hex{font-family:var(--font-mono);font-size:12px;color:var(--dim)}
+  .chip-row{display:flex;align-items:center;gap:9px}
+  .accent-chip{
+    width:26px;height:26px;border-radius:50%;padding:0;
+    border:1px solid rgba(128,128,128,.35);
+    display:grid;place-items:center;
+  }
+  .accent-chip[aria-pressed="true"]{box-shadow:0 0 0 2px var(--sidebar),0 0 0 4px rgba(226,163,92,.65)}
+  .chip-check{color:#241404} /* dark ink check: >=4.5:1 on every quick-pick chip color */
+  .set-note{margin-top:9px;font-size:11.5px;color:var(--dim)}
+
+  /* live preview: familiar shapes wearing the current accent */
+  .pv{
+    --pa:#e2a35c; /* updated cosmetically when a quick pick or the color input changes */
+    border:1px solid var(--border);border-radius:var(--r-lg);
+    background:var(--surface);overflow:hidden;
+  }
+  .pv-tabs{
+    display:flex;align-items:center;gap:6px;padding:9px 10px 0;
+    background:var(--sidebar);border-bottom:1px solid var(--border);
+  }
+  .pv-tab{
+    position:relative;height:26px;display:flex;align-items:center;padding:0 10px;
+    border-radius:var(--r-md) var(--r-md) 0 0;font-size:12px;color:var(--dim);
+  }
+  .pv-tab.on{background:var(--surface);color:var(--text)}
+  .pv-tab.on::after{
+    content:"";position:absolute;left:8px;right:8px;bottom:-1px;height:2px;
+    background:var(--pa);border-radius:2px 2px 0 0;
+  }
+  .pv-body{display:flex;align-items:center;gap:20px;padding:13px 14px}
+  .pv-btn{
+    height:28px;padding:0 13px;border-radius:var(--r-md);
+    background:var(--pa);color:#241404;font-weight:650;font-size:12px;
+    display:inline-flex;align-items:center;
+  }
+  .pv-line{font-family:var(--font-mono);font-size:12px;color:var(--faint)}
+  .pv-user{color:var(--pa)}
+  .pv-cursor{display:inline-block;width:7px;height:13px;background:var(--pa);vertical-align:-2px;margin-left:3px}
+
+  .settings-foot{
+    flex:none;display:flex;align-items:center;gap:10px;
+    padding:12px 16px;border-top:1px solid var(--border);
+  }
+  .btn-text{height:30px;padding:0 10px;border-radius:var(--r-md);color:var(--dim);font-size:12.5px}
+  .btn-text:hover{color:var(--text);background:var(--surface)}
+  .settings-foot .foot-spacer{flex:1}
+
+  @media (prefers-reduced-motion:reduce){
+    *,*::before,*::after{animation:none!important;transition:none!important}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">&gt;_</span>
+      <span class="brand-name">hosterm</span>
+      <span class="brand-ver">0.9.2</span>
+    </div>
+
+    <div class="search-row">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input type="text" placeholder="Search hosts" aria-label="Search hosts">
+      <kbd>Ctrl K</kbd>
+    </div>
+
+    <nav class="host-list" aria-label="Saved hosts">
+      <div class="group-label">PROD <span class="count">3</span></div>
+
+      <div class="host-row current">
+        <span class="dot dot-live" title="Live session"></span>
+        <span class="host-name">prod-web</span>
+        <svg class="auth-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-label="Password auth"><circle cx="8" cy="14" r="4.5"/><path d="M11.5 10.5 20 2m-4 2 3 3m-6 0 2.5 2.5"/></svg>
+        <span class="row-actions">
+          <button class="icon-btn" title="Open SFTP" aria-label="Open SFTP for prod-web"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h6l2 2h10v10H3z"/><path d="M9 14h6m-2.5-2.5L15 14l-2.5 2.5"/></svg></button>
+          <button class="icon-btn" title="Host menu" aria-label="Host menu for prod-web"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+        </span>
+      </div>
+
+      <div class="host-row">
+        <span class="dot dot-live" title="Live session"></span>
+        <span class="host-name">db-core</span>
+        <span class="row-actions">
+          <button class="icon-btn" title="Open SFTP" aria-label="Open SFTP for db-core"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h6l2 2h10v10H3z"/><path d="M9 14h6m-2.5-2.5L15 14l-2.5 2.5"/></svg></button>
+          <button class="icon-btn" title="Host menu" aria-label="Host menu for db-core"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+        </span>
+      </div>
+
+      <div class="host-row">
+        <span class="dot dot-idle" title="Idle"></span>
+        <span class="host-name">edge-proxy</span>
+        <svg class="auth-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-label="Password auth"><circle cx="8" cy="14" r="4.5"/><path d="M11.5 10.5 20 2m-4 2 3 3m-6 0 2.5 2.5"/></svg>
+        <span class="row-actions">
+          <button class="icon-btn" title="Open SFTP" aria-label="Open SFTP for edge-proxy"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h6l2 2h10v10H3z"/><path d="M9 14h6m-2.5-2.5L15 14l-2.5 2.5"/></svg></button>
+          <button class="icon-btn" title="Host menu" aria-label="Host menu for edge-proxy"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+        </span>
+      </div>
+
+      <div class="group-label">LAB <span class="count">2</span></div>
+
+      <div class="host-row">
+        <span class="dot dot-idle" title="Idle"></span>
+        <span class="host-name">staging-api</span>
+        <span class="row-actions">
+          <button class="icon-btn" title="Open SFTP" aria-label="Open SFTP for staging-api"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h6l2 2h10v10H3z"/><path d="M9 14h6m-2.5-2.5L15 14l-2.5 2.5"/></svg></button>
+          <button class="icon-btn" title="Host menu" aria-label="Host menu for staging-api"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+        </span>
+      </div>
+
+      <div class="host-row">
+        <span class="dot dot-idle" title="Idle"></span>
+        <span class="host-name">ci-runner</span>
+        <svg class="auth-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-label="Password auth"><circle cx="8" cy="14" r="4.5"/><path d="M11.5 10.5 20 2m-4 2 3 3m-6 0 2.5 2.5"/></svg>
+        <span class="row-actions">
+          <button class="icon-btn" title="Open SFTP" aria-label="Open SFTP for ci-runner"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h6l2 2h10v10H3z"/><path d="M9 14h6m-2.5-2.5L15 14l-2.5 2.5"/></svg></button>
+          <button class="icon-btn" title="Host menu" aria-label="Host menu for ci-runner"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+        </span>
+      </div>
+
+      <div class="skeleton-row" aria-label="Loading host">
+        <span class="sk-bar w22"></span><span class="sk-bar w40"></span>
+      </div>
+
+      <div class="host-error">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+        <span><span class="err-name">backup-vault</span> auth failed</span>
+        <button class="retry">Retry</button>
+      </div>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="raw-row">
+        <button class="raw-btn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M8 4c-2 0-2.5 1.5-2.5 3S5 10.5 3.5 12c1.5 1.5 2 3 2 5s.5 3 2.5 3"/><path d="M16 4c2 0 2.5 1.5 2.5 3s.5 3.5 2 5c-1.5 1.5-2 3-2 5s-.5 3-2.5 3"/></svg>
+          Raw config
+        </button>
+        <button class="icon-btn" title="Reload config" aria-label="Reload config" style="margin-left:auto">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4"/></svg>
+        </button>
+        <button class="icon-btn" id="open-settings" title="Open settings" aria-label="Open settings" aria-haspopup="dialog">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.33-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.01a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h.01a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.01a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z"/></svg>
+        </button>
+      </div>
+      <button class="user-chip" aria-haspopup="dialog">
+        <span class="avatar">MR</span>
+        <span class="user-name">Morgan Reyes</span>
+        <svg class="gmark" width="14" height="14" viewBox="0 0 48 48" aria-label="Google account"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+        <svg class="chip-caret" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+
+      <div class="signin-popover" role="dialog" aria-label="Sign in" hidden>
+        <div class="pop-title">Use hosterm with Google</div>
+        <div class="pop-sub">Sync hosts, snippets and settings across devices.</div>
+        <button class="signin-btn">
+          <svg class="gmark" width="16" height="16" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+          Sign in with Google
+        </button>
+      </div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="tabbar">
+      <div class="tabs" role="tablist" aria-label="Open tabs">
+        <button class="tab active" role="tab" aria-selected="true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3m5 1h5"/></svg>
+          prod-web
+        </button>
+        <button class="tab" role="tab" aria-selected="false">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3m5 1h5"/></svg>
+          db-core
+        </button>
+        <button class="tab" role="tab" aria-selected="false">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h6l2 2h10v10H3z"/><path d="M9 14h6m-2.5-2.5L15 14l-2.5 2.5"/></svg>
+          sftp · prod-web
+        </button>
+        <button class="tab" role="tab" aria-selected="false">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5"/></svg>
+          deploy.sh
+          <span class="unsaved-dot" title="Unsaved changes"></span>
+        </button>
+        <button class="tab dead" role="tab" aria-selected="false">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3m5 1h5"/></svg>
+          staging-api
+          <span class="reconnect-pill">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4"/></svg>
+            Reconnect
+          </span>
+        </button>
+      </div>
+      <button class="split-drop" title="Drop a tab here to split" aria-label="Split drop zone">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/></svg>
+      </button>
+      <div class="mode-switch" role="group" aria-label="Side panels">
+        <button class="mode-btn" data-panel="terminal" aria-pressed="false">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3m5 1h5"/></svg>
+          Terminal
+        </button>
+        <button class="mode-btn" data-panel="snippets" aria-pressed="false">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M8 4c-2 0-2.5 1.5-2.5 3S5 10.5 3.5 12c1.5 1.5 2 3 2 5s.5 3 2.5 3"/><path d="M16 4c2 0 2.5 1.5 2.5 3s.5 3.5 2 5c-1.5 1.5-2 3-2 5s-.5 3-2.5 3"/></svg>
+          Snippets
+        </button>
+        <button class="mode-btn" data-panel="ai" aria-pressed="true">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-8 8H4l2.2-3.3A8 8 0 1 1 21 12z"/><path d="m9 10 2 2 4-4"/></svg>
+          AI
+        </button>
+      </div>
+    </header>
+
+    <div class="workbench">
+      <section class="terminals" aria-label="Split terminals">
+        <div class="term focused" aria-label="Terminal session on prod-web (focused)">
+<pre class="term-out"><span class="out">Last login: Sat Oct 31 09:12:04 2026 from 192.168.1.24</span>
+<span class="p-user">mekl@prod-web</span><span class="p-path">:~$</span> df -h /
+<span class="out">Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p2  234G  187G   35G  84% /</span>
+<span class="p-user">mekl@prod-web</span><span class="p-path">:~$</span> tail -f /var/log/nginx/access.log
+<span class="out">10.0.4.17 - - [31/Oct/2026:09:41:02] "GET /api/health HTTP/1.1" 200 15 "-" "kube-probe/1.29"
+10.0.4.18 - - [31/Oct/2026:09:41:03] "GET /assets/app.9f31c2.js HTTP/1.1" 200 184213
+10.0.4.12 - - [31/Oct/2026:09:41:05] "POST /api/v2/deploy HTTP/1.1" 202 0
+10.0.4.17 - - [31/Oct/2026:09:41:07] "GET /api/health HTTP/1.1" 200 15 "-" "kube-probe/1.29"</span>
+^C
+<span class="p-user">mekl@prod-web</span><span class="p-path">:~$</span> <span class="cursor"></span></pre>
+        </div>
+        <div class="term-divider" role="separator" aria-orientation="vertical" aria-label="Drag to resize split" title="Drag to resize"></div>
+        <div class="term" aria-label="Terminal session on db-core">
+<pre class="term-out"><span class="out">Last login: Fri Oct 30 18:02:11 2026 from 10.0.4.9</span>
+<span class="p-user">mekl@db-core</span><span class="p-path">:~$</span> psql metrics -c "select count(*) from events
+where ts &gt; now() - interval '1 hour'"
+ <span class="out">count</span>
+<span class="out">---------
+   48213
+(1 row)</span>
+
+<span class="p-user">mekl@db-core</span><span class="p-path">:~$</span> docker ps --format '{{.Names}}\t{{.Status}}'
+<span class="out">postgres-16     Up 6 days
+redis-7         Up 6 days</span>
+<span class="p-user">mekl@db-core</span><span class="p-path">:~$</span> <span class="cursor"></span></pre>
+        </div>
+      </section>
+
+      <aside class="drawer drawer-ai open" aria-label="AI assistant">
+        <header class="drawer-head">
+          <h2>Assistant</h2>
+          <span class="head-tag">on-device</span>
+          <button class="icon-btn drawer-close" title="Close panel" aria-label="Close assistant panel">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+          </button>
+        </header>
+
+        <div class="ai-thread">
+          <div class="msg msg-user">why is staging-api so slow?</div>
+          <div class="msg msg-ai">
+            <p>Load average on staging-api is <strong>6.4</strong> across 4 cores. The top consumer is the metrics agent, not your app. Restarting it should clear the backlog:</p>
+            <div class="cmd-card">
+              <div class="cmd-head">
+                <span class="cmd-scope">staging-api</span>
+                <span class="cmd-state ok">ALWAYS ALLOWED</span>
+              </div>
+              <code class="cmd-line">sudo systemctl restart netdata</code>
+              <pre class="cmd-output">[sudo] password for mekl:
+netdata stopped
+netdata started</pre>
+            </div>
+          </div>
+
+          <div class="msg msg-user">free up disk space on prod-web</div>
+          <div class="msg msg-ai">
+            <p>Docker is holding <strong>43G</strong> on prod-web: dangling images, stopped containers and build cache. This reclaims most of it:</p>
+            <div class="cmd-card awaiting">
+              <div class="cmd-head">
+                <span class="cmd-scope">prod-web</span>
+                <span class="cmd-state warn">AWAITING APPROVAL</span>
+              </div>
+              <code class="cmd-line">docker system prune -af</code>
+              <p class="cmd-desc">Removes all stopped containers, unused networks, dangling images and build cache. Running containers are not touched.</p>
+              <div class="cmd-actions">
+                <button class="btn-primary approval-run">Run once</button>
+                <button class="btn-secondary approval-always">Always allow</button>
+                <button class="btn-ghost approval-reject">Reject</button>
+              </div>
+              <div class="cmd-foot">Allowlist stores this exact command only. Review patterns in Settings &gt; Approvals.</div>
+            </div>
+          </div>
+        </div>
+
+        <footer class="ai-input">
+          <input type="text" placeholder="Ask hosterm" aria-label="Ask the assistant">
+          <button class="send-btn" title="Send" aria-label="Send message">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg>
+          </button>
+        </footer>
+      </aside>
+
+      <aside class="drawer drawer-snippets" aria-label="Command snippets">
+        <header class="drawer-head">
+          <h2>Snippets</h2>
+          <span class="head-count">9</span>
+          <button class="icon-btn drawer-close" title="Close panel" aria-label="Close snippets panel">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+          </button>
+        </header>
+        <div class="snip-filter">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input type="text" placeholder="Filter snippets" aria-label="Filter snippets">
+          <kbd>/</kbd>
+        </div>
+        <div class="snip-groups">
+          <div class="snip-group-label">DOCKER</div>
+          <div class="snippet-item">
+            <div class="snip-top"><span class="snip-name">Prune unused images and cache</span>
+              <button class="copy-btn" title="Copy command" aria-label="Copy command"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/></svg></button></div>
+            <code class="snip-cmd">docker system prune -af</code>
+          </div>
+          <div class="snippet-item">
+            <div class="snip-top"><span class="snip-name">Follow a container's logs</span>
+              <button class="copy-btn" title="Copy command" aria-label="Copy command"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/></svg></button></div>
+            <code class="snip-cmd">docker logs -f --tail 100 api-gateway</code>
+          </div>
+          <div class="snippet-item">
+            <div class="snip-top"><span class="snip-name">Shell into a running container</span>
+              <button class="copy-btn" title="Copy command" aria-label="Copy command"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/></svg></button></div>
+            <code class="snip-cmd">docker exec -it api-gateway sh</code>
+          </div>
+
+          <div class="snip-group-label">GIT</div>
+          <div class="snippet-item">
+            <div class="snip-top"><span class="snip-name">Undo last commit, keep changes</span>
+              <button class="copy-btn" title="Copy command" aria-label="Copy command"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/></svg></button></div>
+            <code class="snip-cmd">git reset --soft HEAD~1</code>
+          </div>
+          <div class="snippet-item">
+            <div class="snip-top"><span class="snip-name">Stage changes interactively</span>
+              <button class="copy-btn" title="Copy command" aria-label="Copy command"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/></svg></button></div>
+            <code class="snip-cmd">git add -p</code>
+          </div>
+          <div class="snippet-item">
+            <div class="snip-top"><span class="snip-name">Who touched these lines</span>
+              <button class="copy-btn" title="Copy command" aria-label="Copy command"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/></svg></button></div>
+            <code class="snip-cmd">git blame -L 40,60 src/main.rs</code>
+          </div>
+
+          <div class="snip-group-label">SYSTEMD</div>
+          <div class="snippet-item">
+            <div class="snip-top"><span class="snip-name">Restart a unit and follow logs</span>
+              <button class="copy-btn" title="Copy command" aria-label="Copy command"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/></svg></button></div>
+            <code class="snip-cmd">sudo systemctl restart nginx &amp;&amp; journalctl -u nginx -f</code>
+          </div>
+          <div class="snippet-item">
+            <div class="snip-top"><span class="snip-name">Why did the unit fail</span>
+              <button class="copy-btn" title="Copy command" aria-label="Copy command"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/></svg></button></div>
+            <code class="snip-cmd">systemctl status nginx -l --no-pager</code>
+          </div>
+          <div class="snippet-item">
+            <div class="snip-top"><span class="snip-name">List failed units</span>
+              <button class="copy-btn" title="Copy command" aria-label="Copy command"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/></svg></button></div>
+            <code class="snip-cmd">systemctl list-units --state=failed</code>
+          </div>
+          <div class="snip-empty" hidden>No snippets match <strong>"<span></span>"</strong>. Clear the filter or press / to search again.</div>
+        </div>
+      </aside>
+    </div>
+
+    <footer class="statusbar">
+      <span class="sb-left">
+        <span class="dot dot-live"></span>
+        <span class="sb-host">prod-web</span>
+        <span>mekl@10.2.7.13:22 · connected</span>
+      </span>
+      <span class="sb-spacer"></span>
+      <span class="sb-right">
+        <span>2 live</span>
+        <span>UTF-8</span>
+        <span>LF</span>
+        <span>bash 5.2</span>
+        <span class="sb-clock">14:32</span>
+      </span>
+    </footer>
+  </main>
+</div>
+
+<!-- Settings: larger modal surface over the dimmed shell, OPEN by default on Appearance -->
+<div class="settings-scrim" id="settings-scrim">
+  <section class="settings" id="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabindex="-1">
+    <header class="settings-head">
+      <h2 id="settings-title">Settings</h2>
+      <span class="head-tag">0.9.2</span>
+      <button class="icon-btn" id="settings-close" title="Close settings" aria-label="Close settings" style="margin-left:auto">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+    </header>
+
+    <div class="settings-body">
+      <nav class="settings-nav" aria-label="Settings sections">
+        <button class="set-nav-item">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 8h8m4 0h4M4 16h4m4 0h8"/><circle cx="14" cy="8" r="2"/><circle cx="10" cy="16" r="2"/></svg>
+          General
+        </button>
+        <button class="set-nav-item" aria-current="page">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3c3.5 4 6 7.2 6 10.2a6 6 0 1 1-12 0C6 10.2 8.5 7 12 3z"/></svg>
+          Appearance
+        </button>
+        <button class="set-nav-item">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3m5 1h5"/></svg>
+          Terminal
+        </button>
+        <button class="set-nav-item">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="M11 12 20 3m-4 2 3 3"/></svg>
+          SSH &amp; Keys
+        </button>
+        <button class="set-nav-item">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-8 8H4l2.2-3.3A8 8 0 1 1 21 12z"/><path d="m9 10 2 2 4-4"/></svg>
+          AI Assistant
+        </button>
+        <button class="set-nav-item">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M8 4c-2 0-2.5 1.5-2.5 3S5 10.5 3.5 12c1.5 1.5 2 3 2 5s.5 3 2.5 3"/><path d="M16 4c2 0 2.5 1.5 2.5 3s.5 3.5 2 5c-1.5 1.5-2 3-2 5s-.5 3-2.5 3"/></svg>
+          Snippets
+        </button>
+        <button class="set-nav-item">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-3.5 4.5-5 8-5s6.5 1.5 8 5"/></svg>
+          Account
+        </button>
+      </nav>
+
+      <div class="settings-content">
+        <div class="set-h">Appearance</div>
+        <div class="set-sub">Theme and accent for the whole app.</div>
+
+        <div class="set-block">
+          <div class="set-label">THEME</div>
+          <div class="preset-grid" role="group" aria-label="Theme presets">
+            <button class="preset" aria-pressed="true" aria-label="Dusk theme, selected">
+              <span class="preset-swatch" aria-hidden="true" style="--pb:#191512;--ps:#221c17;--pa:#e2a35c;--pt:#f2e9dc">
+                <span class="sw-row"><span class="sw-text">Aa</span><span class="sw-accent"></span></span>
+                <span class="sw-surface"></span>
+              </span>
+              <span class="preset-top">
+                <span class="preset-name">Dusk</span>
+                <svg class="preset-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 13 4 4L19 7"/></svg>
+              </span>
+            </button>
+            <button class="preset" aria-pressed="false" aria-label="Slate theme">
+              <span class="preset-swatch" aria-hidden="true" style="--pb:#171d24;--ps:#222a33;--pa:#6cc4dc;--pt:#e4ebf2">
+                <span class="sw-row"><span class="sw-text">Aa</span><span class="sw-accent"></span></span>
+                <span class="sw-surface"></span>
+              </span>
+              <span class="preset-top">
+                <span class="preset-name">Slate</span>
+                <svg class="preset-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 13 4 4L19 7"/></svg>
+              </span>
+            </button>
+            <button class="preset" aria-pressed="false" aria-label="Ink theme">
+              <span class="preset-swatch" aria-hidden="true" style="--pb:#141414;--ps:#1e1e1e;--pa:#e0563f;--pt:#ececec">
+                <span class="sw-row"><span class="sw-text">Aa</span><span class="sw-accent"></span></span>
+                <span class="sw-surface"></span>
+              </span>
+              <span class="preset-top">
+                <span class="preset-name">Ink</span>
+                <svg class="preset-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 13 4 4L19 7"/></svg>
+              </span>
+            </button>
+            <button class="preset" aria-pressed="false" aria-label="Light theme">
+              <span class="preset-swatch" aria-hidden="true" style="--pb:#f5f1e8;--ps:#ffffff;--pa:#96571a;--pt:#26201a">
+                <span class="sw-row"><span class="sw-text">Aa</span><span class="sw-accent"></span></span>
+                <span class="sw-surface"></span>
+              </span>
+              <span class="preset-top">
+                <span class="preset-name">Light</span>
+                <svg class="preset-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 13 4 4L19 7"/></svg>
+              </span>
+            </button>
+          </div>
+        </div>
+
+        <div class="set-block">
+          <div class="set-label">ACCENT COLOR</div>
+          <div class="accent-row">
+            <div class="color-well">
+              <input type="color" id="accent-input" value="#e2a35c" aria-label="Custom accent color">
+              <span class="color-hex" id="accent-hex">#e2a35c</span>
+            </div>
+            <div class="chip-row" role="group" aria-label="Quick accent picks">
+              <button class="accent-chip" data-accent="#e2a35c" aria-pressed="true" aria-label="Honey amber, current accent" title="Honey amber" style="background:#e2a35c"><svg class="chip-check" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 13 4 4L19 7"/></svg></button>
+              <button class="accent-chip" data-accent="#5fbfae" aria-pressed="false" aria-label="Teal accent" title="Teal" style="background:#5fbfae"><svg class="chip-check" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 13 4 4L19 7"/></svg></button>
+              <button class="accent-chip" data-accent="#e0869b" aria-pressed="false" aria-label="Rose accent" title="Rose" style="background:#e0869b"><svg class="chip-check" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 13 4 4L19 7"/></svg></button>
+              <button class="accent-chip" data-accent="#aec267" aria-pressed="false" aria-label="Lime accent" title="Lime" style="background:#aec267"><svg class="chip-check" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 13 4 4L19 7"/></svg></button>
+              <button class="accent-chip" data-accent="#b99be3" aria-pressed="false" aria-label="Violet accent" title="Violet" style="background:#b99be3"><svg class="chip-check" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 13 4 4L19 7"/></svg></button>
+            </div>
+          </div>
+          <div class="set-note">Recolors the accent only. Surfaces, text and status colors stay with the chosen theme.</div>
+        </div>
+
+        <div class="set-block">
+          <div class="set-label">PREVIEW</div>
+          <div class="pv" id="pv-mock">
+            <div class="pv-tabs">
+              <span class="pv-tab">prod-web</span>
+              <span class="pv-tab on">db-core</span>
+            </div>
+            <div class="pv-body">
+              <span class="pv-btn">Run once</span>
+              <span class="pv-line"><span class="pv-user">mekl@prod-web</span>:~$ <span class="pv-cursor"></span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <footer class="settings-foot">
+      <button class="btn-text" id="accent-reset">Reset to Dusk default</button>
+      <span class="foot-spacer"></span>
+      <button class="btn-primary" id="settings-done">Done</button>
+    </footer>
+  </section>
+</div>
+
+<script>
+(function () {
+  var drawers = {
+    terminal: null,
+    snippets: document.querySelector('.drawer-snippets'),
+    ai: document.querySelector('.drawer-ai')
+  };
+  var btns = Array.prototype.slice.call(document.querySelectorAll('.mode-btn'));
+  btns.forEach(function (b) {
+    b.addEventListener('click', function () {
+      btns.forEach(function (x) {
+        x.setAttribute('aria-pressed', x === b ? 'true' : 'false');
+      });
+      Object.keys(drawers).forEach(function (k) {
+        if (drawers[k]) drawers[k].classList.toggle('open', k === b.dataset.panel);
+      });
+    });
+  });
+  document.querySelectorAll('.copy-btn').forEach(function (b) {
+    b.addEventListener('click', function () {
+      b.classList.add('done');
+      setTimeout(function () { b.classList.remove('done'); }, 900);
+    });
+  });
+})();
+
+(function () {
+  var scrim = document.getElementById('settings-scrim');
+  var panel = document.getElementById('settings-panel');
+  var pv = document.getElementById('pv-mock');
+  var colorInput = document.getElementById('accent-input');
+  var hexLabel = document.getElementById('accent-hex');
+  var gearBtn = document.getElementById('open-settings');
+
+  function openSettings() {
+    scrim.hidden = false;
+    panel.focus();
+  }
+  function closeSettings() {
+    scrim.hidden = true;
+  }
+  function setAccent(hex) {
+    if (!/^#[0-9a-fA-F]{6}$/.test(hex)) return;
+    pv.style.setProperty('--pa', hex);
+    colorInput.value = hex;
+    hexLabel.textContent = hex;
+    document.querySelectorAll('.accent-chip').forEach(function (c) {
+      c.setAttribute('aria-pressed', c.dataset.accent.toLowerCase() === hex.toLowerCase() ? 'true' : 'false');
+    });
+  }
+
+  gearBtn.addEventListener('click', openSettings);
+  document.getElementById('settings-close').addEventListener('click', closeSettings);
+  document.getElementById('settings-done').addEventListener('click', closeSettings);
+  scrim.addEventListener('click', function (e) {
+    if (e.target === scrim) closeSettings();
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && !scrim.hidden) closeSettings();
+  });
+  document.querySelectorAll('.accent-chip').forEach(function (c) {
+    c.addEventListener('click', function () { setAccent(c.dataset.accent); });
+  });
+  colorInput.addEventListener('input', function () { setAccent(colorInput.value); });
+  document.getElementById('accent-reset').addEventListener('click', function () { setAccent('#e2a35c'); });
+})();
+</script>
+</body>
+</html>
