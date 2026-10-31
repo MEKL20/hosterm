@@ -31,6 +31,9 @@
           <button id="btn-reload" class="icon" aria-label="Reload config" title="Reload config">
             <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8a5 5 0 1 1-1.7-3.75"/><polyline points="13,1.5 13,4.5 10,4.5"/></svg>
           </button>
+          <button id="open-settings" class="icon" aria-label="Open settings" title="Open settings" aria-haspopup="dialog" aria-controls="settings-panel">
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.2"/><path d="M6.8 1.8h2.4l.5 1.7 1.2.7 1.7-.5 1.2 2.1-1.2 1.2v1.4l1.2 1.2-1.2 2.1-1.7-.5-1.2.7-.5 1.7H6.8l-.5-1.7-1.2-.7-1.7.5-1.2-2.1 1.2-1.2V7L2.2 5.8l1.2-2.1 1.7.5 1.2-.7z"/></svg>
+          </button>
         </div>
       </aside>
 
@@ -55,6 +58,111 @@
           </span>
         </div>
       </main>
+    </div>
+
+    <div id="settings-scrim" class="settings-scrim hidden">
+      <section id="settings-panel" class="settings" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabindex="-1">
+        <header class="settings-head">
+          <h2 id="settings-title">Settings</h2>
+          <button id="settings-close" class="icon" aria-label="Close settings" title="Close settings">
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 3l10 10M13 3 3 13"/></svg>
+          </button>
+        </header>
+
+        <div class="settings-body">
+          <nav class="settings-nav" aria-label="Settings sections">
+            <button class="set-nav set-nav-item" data-section="general">General</button>
+            <button class="set-nav set-nav-item" data-section="appearance" aria-current="page">Appearance</button>
+            <button class="set-nav set-nav-item" data-section="terminal">Terminal</button>
+            <button class="set-nav set-nav-item" data-section="ssh">SSH &amp; Keys</button>
+            <button class="set-nav set-nav-item" data-section="ai">AI Assistant</button>
+            <button class="set-nav set-nav-item" data-section="snippets">Snippets</button>
+            <button class="set-nav set-nav-item" data-section="account">Account</button>
+          </nav>
+
+          <div class="settings-content">
+            <section id="settings-appearance" aria-labelledby="appearance-title">
+              <h3 class="set-h" id="appearance-title">Appearance</h3>
+              <p class="set-sub">Theme and accent for the whole app.</p>
+
+              <div class="set-block">
+                <div class="set-label">Theme</div>
+                <div class="preset-grid" role="group" aria-label="Theme presets">
+                  <button class="preset" data-preset="dusk" aria-pressed="true" aria-label="Dusk theme, selected">
+                    <span class="preset-swatch" aria-hidden="true" style="--pb:#191512;--ps:#221c17;--pa:#e2a35c;--pt:#f2e9dc">
+                      <span class="sw-row"><span class="sw-text">Aa</span><span class="sw-accent"></span></span>
+                      <span class="sw-surface"></span>
+                    </span>
+                    <span class="preset-top"><span class="preset-name">Dusk</span><span class="preset-check" aria-hidden="true">✓</span></span>
+                  </button>
+                  <button class="preset" data-preset="slate" aria-pressed="false" aria-disabled="true" aria-label="Slate theme, coming soon">
+                    <span class="preset-swatch" aria-hidden="true" style="--pb:#171d24;--ps:#222a33;--pa:#6cc4dc;--pt:#e4ebf2">
+                      <span class="sw-row"><span class="sw-text">Aa</span><span class="sw-accent"></span></span>
+                      <span class="sw-surface"></span>
+                    </span>
+                    <span class="preset-top"><span class="preset-name">Slate</span><span class="preset-coming">Coming</span><span class="preset-check" aria-hidden="true">✓</span></span>
+                  </button>
+                  <button class="preset" data-preset="ink" aria-pressed="false" aria-disabled="true" aria-label="Ink theme, coming soon">
+                    <span class="preset-swatch" aria-hidden="true" style="--pb:#141414;--ps:#1e1e1e;--pa:#e0563f;--pt:#ececec">
+                      <span class="sw-row"><span class="sw-text">Aa</span><span class="sw-accent"></span></span>
+                      <span class="sw-surface"></span>
+                    </span>
+                    <span class="preset-top"><span class="preset-name">Ink</span><span class="preset-coming">Coming</span><span class="preset-check" aria-hidden="true">✓</span></span>
+                  </button>
+                  <button class="preset" data-preset="light" aria-pressed="false" aria-disabled="true" aria-label="Light theme, coming soon">
+                    <span class="preset-swatch" aria-hidden="true" style="--pb:#f5f1e8;--ps:#ffffff;--pa:#96571a;--pt:#26201a">
+                      <span class="sw-row"><span class="sw-text">Aa</span><span class="sw-accent"></span></span>
+                      <span class="sw-surface"></span>
+                    </span>
+                    <span class="preset-top"><span class="preset-name">Light</span><span class="preset-coming">Coming</span><span class="preset-check" aria-hidden="true">✓</span></span>
+                  </button>
+                </div>
+              </div>
+
+              <div class="set-block">
+                <div class="set-label">Accent color</div>
+                <div class="accent-row">
+                  <div class="color-well">
+                    <input type="color" id="accent-input" value="#e2a35c" aria-label="Custom accent color" />
+                    <span class="color-hex" id="accent-hex">#e2a35c</span>
+                  </div>
+                  <div class="chip-row" role="group" aria-label="Quick accent picks">
+                    <button class="accent-chip" data-accent="#e2a35c" aria-pressed="true" aria-label="Honey amber accent" title="Honey amber" style="background:#e2a35c"><span class="chip-check" aria-hidden="true">✓</span></button>
+                    <button class="accent-chip" data-accent="#5fbfae" aria-pressed="false" aria-label="Teal accent" title="Teal" style="background:#5fbfae"><span class="chip-check" aria-hidden="true">✓</span></button>
+                    <button class="accent-chip" data-accent="#e0869b" aria-pressed="false" aria-label="Rose accent" title="Rose" style="background:#e0869b"><span class="chip-check" aria-hidden="true">✓</span></button>
+                    <button class="accent-chip" data-accent="#aec267" aria-pressed="false" aria-label="Lime accent" title="Lime" style="background:#aec267"><span class="chip-check" aria-hidden="true">✓</span></button>
+                    <button class="accent-chip" data-accent="#b99be3" aria-pressed="false" aria-label="Violet accent" title="Violet" style="background:#b99be3"><span class="chip-check" aria-hidden="true">✓</span></button>
+                  </div>
+                </div>
+                <p class="set-note">Recolors the accent only. Surfaces, text and status colors stay with the chosen theme.</p>
+              </div>
+
+              <div class="set-block">
+                <div class="set-label">Preview</div>
+                <div class="live-preview pv" id="pv-mock">
+                  <div class="pv-tabs"><span class="pv-tab">prod-web</span><span class="pv-tab on">db-core</span></div>
+                  <div class="pv-body">
+                    <span class="pv-btn">Run once</span>
+                    <span class="pv-line"><span class="pv-user">mekl@prod-web</span>:~$ <span class="pv-cursor"></span></span>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section id="settings-placeholder" class="settings-placeholder hidden" aria-live="polite">
+              <h3 class="set-h" id="settings-placeholder-title">General</h3>
+              <p>Coming soon.</p>
+            </section>
+          </div>
+        </div>
+
+        <footer class="settings-foot">
+          <button id="accent-reset" class="btn-text">Reset to Dusk default</button>
+          <span id="settings-status" class="settings-status" role="status" aria-live="polite"></span>
+          <span class="foot-spacer"></span>
+          <button id="settings-done" class="primary">Done</button>
+        </footer>
+      </section>
     </div>
 
     <!-- Host editor modal -->

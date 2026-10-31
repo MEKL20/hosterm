@@ -66,6 +66,12 @@ const HOSTILE_ENTRIES = [
 ];
 // W2-A startup ssh/sftp check state (AC-A1.5); read by the check_binaries case
 let binCheckState = { ssh_missing: false, sftp_missing: false };
+let storedSettings = {
+  version: 1,
+  theme: "dusk",
+  accent: "#e2a35c",
+  allowlist: [{ host: "prod-web", command: "sudo systemctl restart netdata", added_at: "2026-10-30T12:00:00Z" }],
+};
 const invoke = (cmd, args = {}) => {
   calls.push({ cmd, args });
   switch (cmd) {
@@ -78,6 +84,11 @@ const invoke = (cmd, args = {}) => {
         : Promise.resolve(hs);
     }
     case "check_binaries": return Promise.resolve({ ...binCheckState });
+    case "read_settings": return Promise.resolve(JSON.parse(JSON.stringify(storedSettings)));
+    case "write_settings": {
+      storedSettings = JSON.parse(JSON.stringify(args.settings));
+      return Promise.resolve(null);
+    }
     case "read_config_raw": return Promise.resolve(sampleConfig);
     case "write_config_raw": return Promise.resolve();
     case "list_identity_files": return Promise.resolve(["~/.ssh/id_test"]);
@@ -873,9 +884,8 @@ const shadowSelectors = await page.evaluate(() => {
   return out;
 });
 check("U-D1: Abyss glow box-shadow fully removed", shadowSelectors.glow.length === 0, shadowSelectors.glow.join(", "));
-// --shadow-drawer only lands on .modal-box (settings modal + dialogs share the box);
-// no sidebar/tab/row carries it. (Drawer panels arrive in U-D5/U-D7.)
-const elevationOk = shadowSelectors.elevation.every((s) => /modal-box/.test(s));
+// --shadow-drawer only lands on modal/drawer surfaces; no sidebar/tab/row carries it.
+const elevationOk = shadowSelectors.elevation.every((s) => /modal-box|\.settings\b/.test(s));
 check("U-D1: elevation (--shadow-drawer) only on modal/drawer box", elevationOk && shadowSelectors.elevation.length > 0,
   shadowSelectors.elevation.join(", "));
 // AC4 letter: inactive tab + plain button carry no box-shadow (no glow at idle/hover)
@@ -1604,6 +1614,180 @@ check("U-D2 FR-DT4: reduced-motion stops the shimmer skeleton", rmSkel === "none
 await page.evaluate(() => document.querySelectorAll(".tab .x").forEach((x) => x.click()));
 await page.waitForTimeout(200);
 // ===== end U-D2 block =====
+
+// U-D4 Settings + Appearance (FR-SET1..13, INV-23).
+check("U-D4 boot: read_settings invoked + Dusk/default accent applied",
+  calls.some((c) => c.cmd === "read_settings") &&
+  await page.evaluate(() => document.documentElement.dataset.theme === "dusk" &&
+    document.documentElement.style.getPropertyValue("--accent").trim() === "#e2a35c"));
+
+await page.locator("#open-settings").click();
+await page.waitForTimeout(150);
+const settingsMeta = await page.evaluate(() => {
+  const scrim = document.getElementById("settings-scrim");
+  const panel = document.getElementById("settings-panel");
+  const rect = panel.getBoundingClientRect();
+  return {
+    open: !scrim.classList.contains("hidden"),
+    role: panel.getAttribute("role"),
+    modal: panel.getAttribute("aria-modal"),
+    scrim: getComputedStyle(scrim).backgroundColor,
+    width: Math.round(rect.width),
+    height: Math.round(rect.height),
+    inert: document.getElementById("app").hasAttribute("inert"),
+  };
+});
+check("U-D4 FR-SET1: in-app modal + exact scrim + 900x620 geometry",
+  settingsMeta.open && settingsMeta.role === "dialog" && settingsMeta.modal === "true" &&
+  settingsMeta.scrim === "rgba(12, 9, 6, 0.55)" && settingsMeta.width === 900 && settingsMeta.height === 620 && settingsMeta.inert,
+  JSON.stringify(settingsMeta));
+
+const navState = await page.evaluate(() => ({
+  labels: [...document.querySelectorAll(".set-nav")].map((b) => b.textContent.trim()),
+  current: document.querySelector('.set-nav[aria-current="page"]')?.dataset.section,
+}));
+check("U-D4 FR-SET2: 7 nav items + Appearance default current",
+  JSON.stringify(navState.labels) === JSON.stringify(["General", "Appearance", "Terminal", "SSH & Keys", "AI Assistant", "Snippets", "Account"]) &&
+  navState.current === "appearance", JSON.stringify(navState));
+await page.locator('.set-nav[data-section="general"]').click();
+const comingState = await page.evaluate(() => ({
+  title: document.getElementById("settings-placeholder-title").textContent,
+  copy: document.getElementById("settings-placeholder").textContent,
+  appearanceHidden: document.getElementById("settings-appearance").classList.contains("hidden"),
+}));
+check("U-D4 FR-SET3: non-Appearance nav renders coming placeholder",
+  comingState.title === "General" && comingState.copy.includes("Coming soon") && comingState.appearanceHidden,
+  JSON.stringify(comingState));
+await page.locator('.set-nav[data-section="appearance"]').click();
+
+const presetState = await page.evaluate(() => ({
+  count: document.querySelectorAll(".preset").length,
+  dusk: document.querySelector('.preset[data-preset="dusk"]')?.getAttribute("aria-pressed"),
+  disabled: document.querySelectorAll('.preset[aria-disabled="true"]').length,
+}));
+check("U-D4 FR-SET4: four presets; Dusk selected; three coming presets disabled",
+  presetState.count === 4 && presetState.dusk === "true" && presetState.disabled === 3, JSON.stringify(presetState));
+const themeBeforeDisabled = await page.evaluate(() => document.documentElement.dataset.theme);
+await page.evaluate(() => document.querySelector('.preset[data-preset="slate"]').click());
+const themeAfterDisabled = await page.evaluate(() => document.documentElement.dataset.theme);
+check("U-D4 OQ-2: disabled Slate click never swaps data-theme",
+  themeBeforeDisabled === "dusk" && themeAfterDisabled === themeBeforeDisabled,
+  `${themeBeforeDisabled}->${themeAfterDisabled}`);
+
+const stableBefore = await page.evaluate(() => {
+  const cs = getComputedStyle(document.documentElement);
+  return ["--surface", "--text", "--live", "--danger"].map((k) => cs.getPropertyValue(k).trim());
+});
+await page.locator('.accent-chip[data-accent="#5fbfae"]').click();
+const tealState = await page.evaluate(() => {
+  const root = document.documentElement;
+  const preview = document.getElementById("pv-mock");
+  const cs = getComputedStyle(root);
+  return {
+    accent: root.style.getPropertyValue("--accent").trim(),
+    ink: root.style.getPropertyValue("--accent-ink").trim(),
+    pressed: document.querySelector('.accent-chip[data-accent="#5fbfae"]')?.getAttribute("aria-pressed"),
+    preview: preview.style.getPropertyValue("--pa").trim(),
+    previewButton: getComputedStyle(document.querySelector(".pv-btn")).backgroundColor,
+    stable: ["--surface", "--text", "--live", "--danger"].map((k) => cs.getPropertyValue(k).trim()),
+  };
+});
+check("U-D4 FR-SET7/8/10: teal updates inline accent + pressed chip + preview only",
+  tealState.accent === "#5fbfae" && tealState.ink === "#241404" && tealState.pressed === "true" &&
+  tealState.preview === "#5fbfae" && tealState.previewButton === "rgb(95, 191, 174)" &&
+  JSON.stringify(tealState.stable) === JSON.stringify(stableBefore), JSON.stringify(tealState));
+
+const chipContrast = await page.evaluate(() => {
+  const luminance = (hex) => {
+    const values = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map((v) => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * values[0] + 0.7152 * values[1] + 0.0722 * values[2];
+  };
+  const ratio = (a, b) => {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (hi + 0.05) / (lo + 0.05);
+  };
+  return [...document.querySelectorAll(".accent-chip")].map((chip) => ({
+    accent: chip.dataset.accent,
+    ratio: ratio(chip.dataset.accent, "#241404"),
+  }));
+});
+check("U-D4 INV-23: all five quick chips contrast >=4.5 with #241404",
+  chipContrast.length === 5 && chipContrast.every((x) => x.ratio >= 4.5), JSON.stringify(chipContrast));
+
+await page.locator("#accent-input").evaluate((input) => {
+  input.value = "#101010";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+});
+const darkFree = await page.evaluate(() => {
+  const luminance = (hex) => {
+    const values = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map((v) => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * values[0] + 0.7152 * values[1] + 0.0722 * values[2];
+  };
+  const root = document.documentElement;
+  const accent = root.style.getPropertyValue("--accent").trim();
+  const ink = root.style.getPropertyValue("--accent-ink").trim();
+  const [hi, lo] = [luminance(accent), luminance(ink)].sort((x, y) => y - x);
+  return { accent, ink, ratio: (hi + 0.05) / (lo + 0.05), pressed: document.querySelectorAll('.accent-chip[aria-pressed="true"]').length };
+});
+check("U-D4 INV-23: dark free color auto-switches to light ink at >=4.5",
+  darkFree.accent === "#101010" && darkFree.ink === "#f2e9dc" && darkFree.ratio >= 4.5 && darkFree.pressed === 0,
+  JSON.stringify(darkFree));
+
+await page.locator("#accent-reset").click();
+const resetState = await page.evaluate(() => ({
+  theme: document.documentElement.dataset.theme,
+  accent: document.documentElement.style.getPropertyValue("--accent").trim(),
+  dusk: document.querySelector('.preset[data-preset="dusk"]')?.getAttribute("aria-pressed"),
+}));
+check("U-D4 FR-SET11: reset restores Dusk + #e2a35c", resetState.theme === "dusk" && resetState.accent === "#e2a35c" && resetState.dusk === "true", JSON.stringify(resetState));
+
+await page.locator('.accent-chip[data-accent="#5fbfae"]').click();
+const writesBeforeDone = calls.filter((c) => c.cmd === "write_settings").length;
+await page.locator("#settings-done").click();
+await page.waitForTimeout(200);
+const writeCall = calls.filter((c) => c.cmd === "write_settings").at(-1);
+check("U-D4 FR-SET12/13: Done closes + write_settings persists explicit full shape",
+  await page.locator("#settings-scrim").evaluate((el) => el.classList.contains("hidden")) &&
+  calls.filter((c) => c.cmd === "write_settings").length === writesBeforeDone + 1 &&
+  writeCall?.args?.settings?.version === 1 && writeCall.args.settings.theme === "dusk" &&
+  writeCall.args.settings.accent === "#5fbfae" && writeCall.args.settings.allowlist.length === 1,
+  JSON.stringify(writeCall?.args));
+
+const readsBeforeReload = calls.filter((c) => c.cmd === "read_settings").length;
+await page.reload();
+await page.waitForTimeout(400);
+const bootApplied = await page.evaluate(() => ({
+  theme: document.documentElement.dataset.theme,
+  accent: document.documentElement.style.getPropertyValue("--accent").trim(),
+  teal: document.querySelector('.accent-chip[data-accent="#5fbfae"]')?.getAttribute("aria-pressed"),
+}));
+check("U-D4 FR-SET13 boot: persisted theme/accent read and applied",
+  calls.filter((c) => c.cmd === "read_settings").length === readsBeforeReload + 1 &&
+  bootApplied.theme === "dusk" && bootApplied.accent === "#5fbfae" && bootApplied.teal === "true",
+  JSON.stringify(bootApplied));
+
+await page.locator("#open-settings").click();
+await page.waitForTimeout(100);
+await page.evaluate(() => document.getElementById("settings-scrim").click());
+await page.waitForTimeout(100);
+check("U-D4 FR-SET12: scrim click closes modal", await page.locator("#settings-scrim").evaluate((el) => el.classList.contains("hidden")));
+await page.locator("#open-settings").click();
+await page.waitForTimeout(100);
+await page.keyboard.press("Escape");
+await page.waitForTimeout(100);
+check("U-D4 FR-SET12: Escape closes + restores gear focus",
+  await page.locator("#settings-scrim").evaluate((el) => el.classList.contains("hidden")) &&
+  await page.evaluate(() => document.activeElement?.id === "open-settings"));
+
+// Restore the Dusk default so the remaining legacy checks keep their canonical palette.
+await page.locator("#open-settings").click();
+await page.locator("#accent-reset").click();
+await page.locator("#settings-done").click();
+await page.waitForTimeout(150);
+// End U-D4 checks.
+
 // (b) sidebar narrative copy byte-identical (empty / error / no-match) + empty CTA formalized
 const sbState = () => page.evaluate(() => {
   const s = document.querySelector("#host-list .list-state");

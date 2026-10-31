@@ -18,6 +18,21 @@ interface HostDto {
   options: [string, string][];
 }
 
+type ThemePreset = "dusk" | "slate" | "ink" | "light";
+
+interface AllowEntry {
+  host: string;
+  command: string;
+  added_at: string;
+}
+
+interface AppSettings {
+  version: number;
+  theme: ThemePreset;
+  accent: string;
+  allowlist: AllowEntry[];
+}
+
 // xterm cannot read CSS custom properties; keep this identical to --font-mono in styles.css
 const FONT_MONO = '"JetBrains Mono", "Geist Mono", "Cascadia Code", "SF Mono", ui-monospace, "DejaVu Sans Mono", monospace';
 
@@ -84,6 +99,20 @@ let hosts: HostDto[] = [];
 let editingName: string | null = null; // null => adding new
 let identityFiles: string[] = [];
 
+const DEFAULT_SETTINGS: AppSettings = {
+  version: 1,
+  theme: "dusk",
+  accent: "#e2a35c",
+  allowlist: [],
+};
+const QUICK_ACCENTS = new Set(["#e2a35c", "#5fbfae", "#e0869b", "#aec267", "#b99be3"]);
+const DARK_ACCENT_INK = "#241404";
+const LIGHT_ACCENT_INK = "#f2e9dc";
+let appSettings: AppSettings = { ...DEFAULT_SETTINGS, allowlist: [] };
+let settingsDirty = false;
+let settingsClosing = false;
+let settingsReady: Promise<void> = Promise.resolve();
+
 interface Session {
   id: number;
   ptyId: number | null;
@@ -138,6 +167,7 @@ function onOverlayEscape() {
   else if (top.el.id === "raw-modal") cancelRaw();
   else if (top.el.id === "key-modal") closeKey();
   else if (top.el.id === "ssh-modal") closeOverlay("#ssh-modal"); // Escape = Continue anyway
+  else if (top.el.id === "settings-scrim") void closeSettings();
 }
 
 function openOverlay(sel: string, focusTarget?: HTMLElement) {
@@ -228,6 +258,168 @@ function resolveDialog(id: string) {
   dialogResolve = null;
   closeOverlay("#dialog");
   r(id);
+}
+
+// Settings and appearance.
+function validAccent(value: string): boolean {
+  return /^#[0-9a-fA-F]{6}$/.test(value);
+}
+
+function relativeLuminance(hex: string): number {
+  const channel = (offset: number) => {
+    const value = parseInt(hex.slice(offset, offset + 2), 16) / 255;
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5);
+}
+
+function contrastRatio(a: string, b: string): number {
+  const [lighter, darker] = [relativeLuminance(a), relativeLuminance(b)].sort((x, y) => y - x);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function guardedAccentInk(accent: string): string {
+  return contrastRatio(accent, DARK_ACCENT_INK) >= contrastRatio(accent, LIGHT_ACCENT_INK)
+    ? DARK_ACCENT_INK
+    : LIGHT_ACCENT_INK;
+}
+
+function applyTheme(preset: ThemePreset, markDirty: boolean) {
+  document.documentElement.setAttribute("data-theme", preset);
+  document.querySelectorAll<HTMLButtonElement>(".preset").forEach((button) => {
+    button.setAttribute("aria-pressed", String(button.dataset.preset === preset));
+  });
+  appSettings.theme = preset;
+  if (markDirty) settingsDirty = true;
+}
+
+function applyAccent(hex: string, source: "chip" | "free", markDirty: boolean) {
+  if (!validAccent(hex)) return;
+  const accent = hex.toLowerCase();
+  const ink = source === "chip" ? DARK_ACCENT_INK : guardedAccentInk(accent);
+  const root = document.documentElement;
+  root.style.setProperty("--accent", accent);
+  root.style.setProperty("--accent-ink", ink);
+  ($("#accent-input") as HTMLInputElement).value = accent;
+  $("#accent-hex").textContent = accent;
+  const preview = $("#pv-mock");
+  preview.style.setProperty("--pa", accent);
+  preview.style.setProperty("--pi", ink);
+  document.querySelectorAll<HTMLButtonElement>(".accent-chip").forEach((button) => {
+    button.setAttribute("aria-pressed", String(button.dataset.accent?.toLowerCase() === accent));
+  });
+  appSettings.accent = accent;
+  if (markDirty) settingsDirty = true;
+}
+
+function selectSettingsSection(section: string) {
+  document.querySelectorAll<HTMLButtonElement>(".set-nav").forEach((button) => {
+    if (button.dataset.section === section) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  });
+  const appearance = $("#settings-appearance");
+  const placeholder = $("#settings-placeholder");
+  const showingAppearance = section === "appearance";
+  appearance.classList.toggle("hidden", !showingAppearance);
+  placeholder.classList.toggle("hidden", showingAppearance);
+  if (!showingAppearance) {
+    const active = document.querySelector<HTMLButtonElement>(`.set-nav[data-section="${section}"]`);
+    $("#settings-placeholder-title").textContent = active?.textContent?.trim() || "Settings";
+  }
+}
+
+async function readAndApplySettings() {
+  let loaded = DEFAULT_SETTINGS;
+  try {
+    loaded = await invoke<AppSettings>("read_settings");
+  } catch {
+    loaded = DEFAULT_SETTINGS;
+  }
+  const theme: ThemePreset = ["dusk", "slate", "ink", "light"].includes(loaded.theme)
+    ? loaded.theme
+    : "dusk";
+  const accent = validAccent(loaded.accent) ? loaded.accent.toLowerCase() : DEFAULT_SETTINGS.accent;
+  appSettings = {
+    version: 1,
+    theme,
+    accent,
+    allowlist: Array.isArray(loaded.allowlist) ? loaded.allowlist : [],
+  };
+  applyTheme(theme, false);
+  applyAccent(accent, QUICK_ACCENTS.has(accent) ? "chip" : "free", false);
+  settingsDirty = false;
+}
+
+async function persistSettings(): Promise<boolean> {
+  if (!settingsDirty) return true;
+  const status = $("#settings-status");
+  const panel = $("#settings-panel");
+  const controls = [...panel.querySelectorAll<HTMLButtonElement | HTMLInputElement>("button, input")];
+  status.textContent = "";
+  panel.setAttribute("aria-busy", "true");
+  controls.forEach((control) => { control.disabled = true; });
+  try {
+    await invoke("write_settings", {
+      settings: {
+        version: 1,
+        theme: appSettings.theme,
+        accent: appSettings.accent,
+        allowlist: appSettings.allowlist,
+      },
+    });
+    settingsDirty = false;
+    return true;
+  } catch (e) {
+    status.textContent = `Could not save settings: ${msg(e)}. Try again.`;
+    return false;
+  } finally {
+    panel.removeAttribute("aria-busy");
+    controls.forEach((control) => { control.disabled = false; });
+  }
+}
+
+async function openSettings() {
+  await settingsReady;
+  selectSettingsSection("appearance");
+  $("#settings-status").textContent = "";
+  openOverlay("#settings-scrim", $("#settings-panel"));
+}
+
+async function closeSettings() {
+  if (settingsClosing) return;
+  settingsClosing = true;
+  const saved = await persistSettings();
+  settingsClosing = false;
+  if (saved) closeOverlay("#settings-scrim");
+}
+
+function initSettings() {
+  $("#open-settings").addEventListener("click", () => void openSettings());
+  $("#settings-close").addEventListener("click", () => void closeSettings());
+  $("#settings-done").addEventListener("click", () => void closeSettings());
+  $("#settings-scrim").addEventListener("click", (event) => {
+    if (event.target === event.currentTarget) void closeSettings();
+  });
+  document.querySelectorAll<HTMLButtonElement>(".set-nav").forEach((button) => {
+    button.addEventListener("click", () => selectSettingsSection(button.dataset.section || "appearance"));
+  });
+  document.querySelectorAll<HTMLButtonElement>(".preset").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (button.getAttribute("aria-disabled") === "true") return;
+      applyTheme((button.dataset.preset || "dusk") as ThemePreset, true);
+    });
+  });
+  document.querySelectorAll<HTMLButtonElement>(".accent-chip").forEach((button) => {
+    button.addEventListener("click", () => applyAccent(button.dataset.accent || "", "chip", true));
+  });
+  ($("#accent-input") as HTMLInputElement).addEventListener("input", (event) => {
+    applyAccent((event.target as HTMLInputElement).value, "free", true);
+  });
+  $("#accent-reset").addEventListener("click", () => {
+    applyTheme("dusk", true);
+    applyAccent(DEFAULT_SETTINGS.accent, "chip", true);
+  });
+  settingsReady = readAndApplySettings();
 }
 
 // ---------- startup ssh/sftp check + install guide (FR-W2-1..4) ----------
@@ -2076,6 +2268,7 @@ window.addEventListener("DOMContentLoaded", () => {
   $("#btn-add").addEventListener("click", () => openEditor(null));
   $("#btn-reload").addEventListener("click", loadHosts);
   $("#btn-raw").addEventListener("click", openRaw);
+  initSettings();
   ($("#host-search") as HTMLInputElement).addEventListener("input", renderHostList);
   // Ctrl+K focuses host search (redesign §5); overlays keep their focus trap
   window.addEventListener("keydown", (ev) => {
