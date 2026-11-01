@@ -1,0 +1,23 @@
+name: Backfill v0.12.0 release notes
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  backfill:
+    if: "${{ github.event.head_commit.message == 'ci: backfill v0.12.0 release notes' }}"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Extract curated notes
+        run: python3 scripts/extract-release-notes.py v0.12.0 release-notes.md
+
+      - name: Update existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit v0.12.0 --repo "$GITHUB_REPOSITORY" --notes-file release-notes.md
