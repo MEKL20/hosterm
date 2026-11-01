@@ -875,14 +875,13 @@ const colorScheme = await page.evaluate(() =>
   getComputedStyle(document.documentElement).getPropertyValue("color-scheme").trim());
 check("theme color-scheme: dark", colorScheme === "dark", colorScheme);
 // (c) offline fonts: no @import / url(http in stylesheet + index.html (source files)
-const cssSrc = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
 const htmlSrc = readFileSync(new URL("../index.html", import.meta.url), "utf8");
-const netFont = [cssSrc, htmlSrc].join("\n").match(/@import|url\(http|<link[^>]+href="http/g) || [];
+const netFont = [cssU4, htmlSrc].join("\n").match(/@import|url\(http|<link[^>]+href="http/g) || [];
 check("no font CDN (@import / url(http) in styles.css + index.html", netFont.length === 0, netFont.slice(0, 2).join(" | "));
 // (c) grep gate INV-21: ZERO Abyss-Emerald literal survives in src/ (acceptance kritis)
 const mainSrc = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");
 const abyssLiterals = ["#08080a", "#050507", "#00d992", "#818cf8", "#0e2a20", "var(--glow)"];
-const abyssHits = abyssLiterals.filter((lit) => (cssSrc + "\n" + mainSrc + "\n" + htmlSrc).includes(lit));
+const abyssHits = abyssLiterals.filter((lit) => (cssU4 + "\n" + mainSrc + "\n" + htmlSrc).includes(lit));
 check("U-D1 INV-21: zero Abyss literal in src/ (grep gate)", abyssHits.length === 0, abyssHits.join(", "));
 // (d) elevation: --shadow-drawer (box-shadow via that var) ONLY on floating
 //     drawer/modal/popover surfaces; glow remains forbidden everywhere.
@@ -1006,7 +1005,7 @@ await page.keyboard.press("Control+Shift+w");
 await page.waitForTimeout(400);
 check("U3: Ctrl+Shift+W closes all but active", (await page.locator(".tab").count()) === 1);
 // AC6 split stays manual-mouse; drop-zone static affordance lights --accent while dragging
-const u3src = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");
+const u3src = mainSrc;
 check("U3: no draggable attribute (grep = 0)", !/draggable/i.test(u3src) &&
   (await page.evaluate(() => document.querySelectorAll("[draggable]").length)) === 0);
 check("U3: drop-zone rests --border (Dusk)",
@@ -1514,7 +1513,7 @@ await page.waitForTimeout(200);
 // ---- U9 audit: cross-feature invariants + narrative copy + hostile bytes (EPIC-TSD §U9) ----
 // (a) no `draggable` anywhere under src/ (every file, not just main.ts) + index.html + live DOM
 const srcDir = new URL("../src/", import.meta.url);
-const u9Files = readdirSync(srcDir, { recursive: true }).filter((f) => /\.(ts|css|svg|html)$/.test(f));
+const u9Files = readdirSync(srcDir, { recursive: true }).filter((f) => /\.(ts|css|svg|html|json)$/.test(f));
 const dragHits = u9Files.filter((f) => /draggable/i.test(readFileSync(new URL(f, srcDir), "utf8")));
 check("U9 (a): grep draggable in src/ = 0", u9Files.length >= 3 && dragHits.length === 0, `files=${u9Files.length} hits=${dragHits.join(",")}`);
 check("U9 (a): no draggable in index.html + 0 [draggable] in live DOM",
@@ -2539,6 +2538,91 @@ check("no console/page errors", errors.length === 0, errors.slice(0, 3).join(" |
 const cspViolations = await page.evaluate(() => window.__cspViolations || []);
 check("CSP violations == 0 across suite (AC R1.4)", cspViolations.length === 0, cspViolations.slice(0, 3).join(" | "));
 check("served CSP == tauri.conf.json policy", servedCsp === CSP.trim(), servedCsp.slice(0, 80));
+
+// U-D8 canon: explicit U-D1..U-D7 ledger + seven cross-feature audit gates.
+// Baseline at dispatch was 313; this block adds exactly 30 named runtime checks.
+check("U-D3 IPC: read_settings mock is exercised by boot and reload paths",
+  calls.filter((c) => c.cmd === "read_settings").length >= 2);
+check("U-D3 IPC: write_settings mock receives the complete settings shape",
+  calls.filter((c) => c.cmd === "write_settings").some((c) =>
+    c.args?.settings?.version === 1 && typeof c.args.settings.theme === "string" &&
+    /^#[0-9a-f]{6}$/.test(c.args.settings.accent) && Array.isArray(c.args.settings.allowlist)));
+check("U-D3 IPC: read_snippets mock is exercised with the bundled grouped fixture",
+  calls.some((c) => c.cmd === "read_snippets") && sampleSnippets.length === 3 &&
+  sampleSnippets.every((group) => group.category && Array.isArray(group.items) && group.items.length > 0));
+
+for (const unit of ["U-D1", "U-D2", "U-D3", "U-D4", "U-D5", "U-D6", "U-D7"]) {
+  const unitResults = results.filter((result) => result.slice(5).startsWith(unit));
+  check(`U-D8 canon: ${unit} has explicit smoke coverage and every check PASS`,
+    unitResults.length > 0 && unitResults.every((result) => result.startsWith("PASS")),
+    `${unitResults.length} checks`);
+}
+
+const allSrcText = u9Files.map((file) => readFileSync(new URL(file, srcDir), "utf8")).join("\n");
+check("U-D8 (a) NFR-DK4/INV-6: grep draggable in every src/ file = 0",
+  u9Files.length >= 3 && dragHits.length === 0 && !/draggable/i.test(allSrcText), dragHits.join(","));
+check("U-D8 (a) NFR-DK4/INV-6: index.html and live DOM have zero draggable attributes",
+  !/draggable/i.test(htmlSrc) && await page.evaluate(() => document.querySelectorAll("[draggable]").length === 0));
+
+check("U-D8 (b) copy canon: remote empty state is byte-identical", u6Empty.r === "Empty directory.", JSON.stringify(u6Empty.r));
+check("U-D8 (b) copy canon: local empty state is byte-identical", u6Empty.l === "Empty directory.", JSON.stringify(u6Empty.l));
+check("U-D8 (b) copy canon: remote error state is byte-identical",
+  u6Err.text === "Failed to list /boom: sftp boom (mock). Fix the path and press Go, or go up one level.", u6Err.text);
+check("U-D8 (b) copy canon: local error state is byte-identical",
+  u6ErrL.text === "Failed to read /boom: permission denied (mock-local). Fix the path and press Go.", u6ErrL.text);
+check("U-D8 (b) copy canon: sidebar empty state is byte-identical",
+  sbEmpty?.text === "No hosts in ~/.ssh/config yet. Click + to add one." && sbEmpty?.btn === "Add host", JSON.stringify(sbEmpty));
+check("U-D8 (b) copy canon: sidebar error and no-match states are byte-identical",
+  sbErr?.text === "Could not read ~/.ssh/config: permission denied (mock). Check the file, then press Reload." &&
+  sbNone?.text === 'No host matches "zzz".', JSON.stringify({ sbErr, sbNone }));
+
+const reducedMotionCss = (cssU4.match(/@media \(prefers-reduced-motion: reduce\)\s*\{([\s\S]*?)\n\}/) || [])[1] || "";
+check("U-D8 (c) NFR-DK5: reduced-motion CSS is a universal animation kill-switch",
+  reducedMotionCss.includes("*, *::before, *::after") && /animation:\s*none\s*!important/.test(reducedMotionCss));
+check("U-D8 (c) NFR-DK5: reduced-motion CSS disables all transitions too",
+  /transition:\s*none\s*!important/.test(reducedMotionCss));
+check("U-D8 (c) NFR-DK5: runtime spinner and shimmer both resolve to animation-name none",
+  rmAnim === "none" && rmSkel === "none", JSON.stringify({ spinner: rmAnim, shimmer: rmSkel }));
+
+check("U-D8 (d) NFR-DK9/INV-11: hostile snippet name and command stay inert with CSP 0",
+  hostileSnippet.nameKids === 0 && hostileSnippet.nameText === HOSTILE &&
+  hostileSnippet.commandKids === 0 && hostileSnippet.commandText === HOSTILE &&
+  hostileSnippet.pwn === "undefined" && hostileSnippet.csp === 0, JSON.stringify(hostileSnippet));
+check("U-D8 (d) NFR-DK9/INV-11: hostile AI text stays inert across submit and template rerenders",
+  [hostileThread, hostileAfterRun, hostileAfterAlways, hostileFinal].every((frame) =>
+    frame.text === HOSTILE && frame.children === 0 && frame.pwn === "undefined" && frame.csp === 0));
+check("U-D8 (d) NFR-DK9/INV-11: hostile SFTP fixture leaves zero executable DOM and zero CSP violations",
+  xssList.length === HOSTILE_ENTRIES.length && xssList.every((row) => row.kids === 0) &&
+  cspViolations.length === 0 && await page.evaluate(() => typeof window.__pwn === "undefined"));
+
+const inv21Hits = abyssLiterals.flatMap((literal) =>
+  u9Files.filter((file) => readFileSync(new URL(file, srcDir), "utf8").includes(literal)).map((file) => `${literal}:${file}`));
+check("U-D8 (e) INV-21 anti-Abyss: forbidden literal vector has zero src/ hits",
+  inv21Hits.length === 0 && abyssHits.length === 0, inv21Hits.join(","));
+check("U-D8 (e) INV-21 anti-Abyss: rendered Dusk token vector is byte-exact",
+  tokMismatch.length === 0 && Object.keys(rootTokens).length === Object.keys(DUSK_ROOT).length,
+  tokMismatch.map(([key, value]) => `${key}=${value}`).join(","));
+
+const inv23ExpectedAccents = [
+  "#e2a35c", "#5fbfae", "#e0869b", "#aec267", "#b99be3", "#000000", "#101010",
+  "#6f6f6f", "#757575", "#766cb5", "#cf0dcc", "#767676", "#777777", "#ffffff",
+];
+check("U-D8 (f) INV-23: frozen SDD §13.2.1 vector is complete and ordered",
+  JSON.stringify(inv23Vectors.map((vector) => vector.accent)) === JSON.stringify(inv23ExpectedAccents));
+const inv23Results = results.filter((result) => result.slice(5).startsWith("U-D4 INV-23 vector "));
+check("U-D8 (f) INV-23: all 14 rendered vectors PASS with independently computed ratio >= 4.5",
+  inv23Results.length === 14 && inv23Results.every((result) => result.startsWith("PASS")) &&
+  inv23Vectors.every((vector) => vector.ratio >= 4.5), `${inv23Results.length}/14`);
+
+const primaryCss = (cssU4.match(/\.btn-primary\s*\{([^}]*)\}/s) || [])[1] || "";
+const secondaryCss = (cssU4.match(/\.btn-secondary\s*\{([^}]*)\}/s) || [])[1] || "";
+check("U-D8 (g) INV-25: approval classes keep Run once primary and Always allow secondary",
+  awaitingMeta.classes[0].split(/\s+/).includes("btn-primary") &&
+  awaitingMeta.classes[1].split(/\s+/).includes("btn-secondary") &&
+  !awaitingMeta.classes[1].split(/\s+/).includes("btn-primary"), JSON.stringify(awaitingMeta.classes));
+check("U-D8 (g) INV-25: primary uses accent fill while secondary stays on raised surface",
+  /background:\s*var\(--accent\)/.test(primaryCss) && /color:\s*var\(--accent-ink\)/.test(primaryCss) &&
+  /background:\s*var\(--raised\)/.test(secondaryCss) && !/var\(--accent\)/.test(secondaryCss));
 
 console.log(results.join("\n"));
 const fails = results.filter((r) => r.startsWith("FAIL")).length;
