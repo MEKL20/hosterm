@@ -8,6 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Windows releases are currently **unsigned** (Authenticode signing postponed —
 see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
+## [0.12.0] - 2026-11-01
+
+Dusk replaces Arus as hosterm's active visual identity and adds the first
+settings, snippets, and exact-command AI approval surfaces.
+
+### Added
+- Persistent app-data settings and bundled command snippets, isolated from SSH config and the secrets sidecar.
+- In-app Settings/Appearance panel with a custom accent and contrast-safe derived ink.
+- Searchable command snippets drawer with clipboard feedback.
+- Visual Google account mock with no OAuth, session, or network behavior.
+- Visual AI assistant with Run once, exact `(host, command)` Always allow, and Settings revoke flow; approved commands still run through the existing real-ssh PTY.
+
+### Changed
+- Replaced the Abyss Emerald/Arus skin with the Dusk token system and shell geometry.
+- Reorganized product documentation around canonical PRD, SDD, TSD, STATE, and Dusk design artifacts.
+- Expanded the canonical headless smoke suite to 343 checks.
+
+### Security
+- Removed a dynamic `innerHTML` sink from the Google account chip.
+- Added host-alias rejection for leading `-`, carriage return, and line feed before approval persistence or PTY execution.
+- Added frozen contrast, store-isolation, corrupt-settings, visual-weight, and anti-Abyss invariants.
+
 ## [0.11.0] - 2026-10-22
 
 UX redesign "Arus" (Abyss Emerald theme) reaches the dialog + audit units.
@@ -76,6 +98,7 @@ xterm.js terminal tabs, SFTP file browser, remote text editor, add/edit/delete
 hosts with round-trip-safe config writes, key and password auth, paste-to-create
 identity keys, raw config editor. See the git tag history for details.
 
+[0.12.0]: https://github.com/MEKL20/hosterm/releases/tag/v0.12.0
 [0.11.0]: https://github.com/MEKL20/hosterm/releases/tag/v0.11.0
 [0.10.0]: https://github.com/MEKL20/hosterm/releases/tag/v0.10.0
 [0.9.0]: https://github.com/MEKL20/hosterm/releases/tag/v0.9.0
