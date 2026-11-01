@@ -43,6 +43,17 @@ interface SnippetGroup {
   items: Snippet[];
 }
 
+interface AiProposal {
+  id: string;
+  prompt: string;
+  response: string;
+  host: string;
+  command: string;
+  description: string;
+}
+
+type AiDecision = "proposed" | "ran" | "rejected" | "refused";
+
 // xterm cannot read CSS custom properties; keep this identical to --font-mono in styles.css
 const FONT_MONO = '"JetBrains Mono", "Geist Mono", "Cascadia Code", "SF Mono", ui-monospace, "DejaVu Sans Mono", monospace';
 
@@ -128,6 +139,27 @@ let snippetGroups: SnippetGroup[] = [];
 const snippetCopyTimers = new WeakMap<HTMLButtonElement, number>();
 const MOCK_GOOGLE_USER = { name: "Morgan Reyes" } as const;
 let googleMockSignedIn = false;
+const AI_PROPOSALS: AiProposal[] = [
+  {
+    id: "restart-netdata",
+    prompt: "restart the metrics agent on prod-web",
+    response: "This host-scoped command follows the exact-match approval contract shown below.",
+    host: "prod-web",
+    command: "sudo systemctl restart netdata",
+    description: "Restarts the Netdata service on prod-web. Monitoring briefly pauses while the service restarts.",
+  },
+  {
+    id: "prune-docker",
+    prompt: "free up disk space on prod-web",
+    response: "Docker cleanup can reclaim unused disk space. Review the exact command before it reaches the host terminal.",
+    host: "prod-web",
+    command: "docker system prune -af",
+    description: "Removes stopped containers, unused networks, dangling images, and build cache. Running containers are not touched.",
+  },
+];
+const aiDecisions = new Map<string, AiDecision>();
+const aiResults = new Map<string, string>();
+const aiExtraMessages: { role: "user" | "ai"; text: string }[] = [];
 
 interface Session {
   id: number;
@@ -162,6 +194,82 @@ function esc(s: string): string {
 function escAttr(s: string): string {
   return esc(s).replace(/"/g, "&quot;");
 }
+
+// Frontend mirror of the backend sftp_safe argv guard; it must run before pty_spawn.
+function sftpSafe(value: string): boolean {
+  return !value.startsWith("-") && !value.includes("\n") && !value.includes("\r");
+}
+
+function staticElement<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  className = "",
+  text?: string,
+): HTMLElementTagNameMap[K] {
+  const element = document.createElement(tag);
+  if (className) element.className = className;
+  if (text !== undefined) element.textContent = text;
+  return element;
+}
+
+function staticTemplate(...children: Node[]): HTMLTemplateElement {
+  const template = document.createElement("template");
+  template.content.append(...children);
+  return template;
+}
+
+const APPROVAL_ITEM_TEMPLATE = (() => {
+  const item = staticElement("div", "approval-item");
+  const host = staticElement("span", "approval-host");
+  const command = staticElement("code", "approval-command");
+  const revoke = staticElement("button", "approval-revoke", "Revoke");
+  revoke.setAttribute("type", "button");
+  revoke.setAttribute("data-index", "");
+  revoke.setAttribute("aria-label", "Revoke approval");
+  item.append(host, command, revoke);
+  return staticTemplate(item);
+})();
+
+const AI_PROPOSAL_TEMPLATE = (() => {
+  const user = staticElement("div", "msg msg-user");
+  const assistant = staticElement("div", "msg msg-ai");
+  const response = staticElement("p");
+  const card = staticElement("div", "cmd-card");
+  card.setAttribute("data-ai-id", "");
+
+  const head = staticElement("div", "cmd-head");
+  const scope = staticElement("span", "cmd-scope");
+  const state = staticElement("span", "cmd-state");
+  state.setAttribute("aria-live", "polite");
+  head.append(scope, state);
+
+  const command = staticElement("code", "cmd-line");
+  const description = staticElement("p", "cmd-desc");
+  const actions = staticElement("div", "cmd-actions");
+  const run = staticElement("button", "btn-primary approval-run", "Run once");
+  run.setAttribute("type", "button");
+  const always = staticElement("button", "btn-secondary approval-always", "Always allow");
+  always.setAttribute("type", "button");
+  const reject = staticElement("button", "btn-ghost approval-reject", "Reject");
+  reject.setAttribute("type", "button");
+  actions.append(run, always, reject);
+
+  const foot = staticElement(
+    "div",
+    "cmd-foot",
+    "Allowlist stores this exact command only. Review patterns in Settings > Approvals.",
+  );
+  const output = staticElement("pre", "cmd-output");
+  card.append(head, command, description, actions, foot, output);
+  assistant.append(response, card);
+  return staticTemplate(user, assistant);
+})();
+
+const AI_EXTRA_USER_TEMPLATE = staticTemplate(staticElement("div", "msg msg-user"));
+const AI_EXTRA_RESPONSE_TEMPLATE = (() => {
+  const assistant = staticElement("div", "msg msg-ai");
+  assistant.append(staticElement("p"));
+  return staticTemplate(assistant);
+})();
 
 // This account state is an in-memory UI preview; it never invokes OAuth or persistence.
 function mockGoogleInitials(name: string): string {
@@ -405,11 +513,17 @@ function selectSettingsSection(section: string) {
     else button.removeAttribute("aria-current");
   });
   const appearance = $("#settings-appearance");
+  const approvals = $("#settings-approvals");
   const placeholder = $("#settings-placeholder");
   const showingAppearance = section === "appearance";
+  const showingApprovals = section === "ai";
   appearance.classList.toggle("hidden", !showingAppearance);
-  placeholder.classList.toggle("hidden", showingAppearance);
-  if (!showingAppearance) {
+  approvals.classList.toggle("hidden", !showingApprovals);
+  placeholder.classList.toggle("hidden", showingAppearance || showingApprovals);
+  if (showingApprovals) {
+    renderApprovals();
+    void refreshApprovals();
+  } else if (!showingAppearance) {
     const active = document.querySelector<HTMLButtonElement>(`.set-nav[data-section="${section}"]`);
     $("#settings-placeholder-title").textContent = active?.textContent?.trim() || "Settings";
   }
@@ -462,6 +576,83 @@ async function persistSettings(): Promise<boolean> {
   } finally {
     panel.removeAttribute("aria-busy");
     controls.forEach((control) => { control.disabled = false; });
+  }
+}
+
+function settingsSnapshot(allowlist: AllowEntry[]): AppSettings {
+  return {
+    version: 1,
+    theme: appSettings.theme,
+    accent: appSettings.accent,
+    allowlist,
+  };
+}
+
+async function persistAllowlist(allowlist: AllowEntry[]) {
+  await invoke("write_settings", { settings: settingsSnapshot(allowlist) });
+  appSettings.allowlist = allowlist;
+  try {
+    const stored = await invoke<AppSettings>("read_settings");
+    if (Array.isArray(stored.allowlist)) appSettings.allowlist = stored.allowlist;
+  } catch { /* the write succeeded; keep the submitted list until the next read */ }
+}
+
+function renderApprovals() {
+  const list = $("#approvals-list");
+  const empty = $("#approvals-empty");
+  const rendered = document.createDocumentFragment();
+  appSettings.allowlist.forEach((entry, index) => {
+    const item = APPROVAL_ITEM_TEMPLATE.content.cloneNode(true) as DocumentFragment;
+    item.querySelector<HTMLElement>(".approval-host")!.textContent = entry.host;
+    item.querySelector<HTMLElement>(".approval-command")!.textContent = entry.command;
+    item.querySelector<HTMLButtonElement>(".approval-revoke")!.setAttribute("data-index", String(index));
+    rendered.append(item);
+  });
+  list.replaceChildren(rendered);
+  empty.hidden = appSettings.allowlist.length !== 0;
+  list.querySelectorAll<HTMLButtonElement>(".approval-revoke").forEach((button) => {
+    button.addEventListener("click", () => {
+      const index = Number(button.dataset.index);
+      if (Number.isInteger(index)) void revokeApproval(index, button);
+    });
+  });
+}
+
+async function refreshApprovals() {
+  const status = $("#approvals-status");
+  const section = $("#settings-approvals");
+  section.setAttribute("aria-busy", "true");
+  status.classList.remove("ok");
+  status.textContent = "";
+  try {
+    const loaded = await invoke<AppSettings>("read_settings");
+    appSettings.allowlist = Array.isArray(loaded.allowlist) ? loaded.allowlist : [];
+    renderApprovals();
+    renderAiThread();
+  } catch (e) {
+    status.textContent = `Could not load approvals: ${msg(e)}. Try again.`;
+  } finally {
+    section.removeAttribute("aria-busy");
+  }
+}
+
+async function revokeApproval(index: number, button: HTMLButtonElement) {
+  const status = $("#approvals-status");
+  const next = appSettings.allowlist.slice();
+  if (index < 0 || index >= next.length) return;
+  next.splice(index, 1);
+  button.disabled = true;
+  status.classList.remove("ok");
+  status.textContent = "";
+  try {
+    await persistAllowlist(next);
+    status.classList.add("ok");
+    status.textContent = "Approval revoked.";
+    renderApprovals();
+    renderAiThread();
+  } catch (e) {
+    button.disabled = false;
+    status.textContent = `Could not revoke approval: ${msg(e)}. Try again.`;
   }
 }
 
@@ -520,14 +711,246 @@ function fitActiveSessions() {
   }
 }
 
-function setSnippetDrawer(open: boolean) {
-  const drawer = $("#snippet-drawer");
-  drawer.hidden = !open;
-  drawer.classList.toggle("open", open);
-  $("#mode-terminal").setAttribute("aria-pressed", String(!open));
-  $("#mode-snippets").setAttribute("aria-pressed", String(open));
-  $("#mode-snippets").setAttribute("aria-expanded", String(open));
+type SidePanelMode = "terminal" | "snippets" | "ai";
+
+function setSidePanel(mode: SidePanelMode) {
+  const snippetOpen = mode === "snippets";
+  const aiOpen = mode === "ai";
+  const snippetDrawer = $("#snippet-drawer");
+  const aiDrawer = $("#ai-drawer");
+  snippetDrawer.hidden = !snippetOpen;
+  snippetDrawer.classList.toggle("open", snippetOpen);
+  aiDrawer.hidden = !aiOpen;
+  aiDrawer.classList.toggle("open", aiOpen);
+  $("#mode-terminal").setAttribute("aria-pressed", String(mode === "terminal"));
+  $("#mode-snippets").setAttribute("aria-pressed", String(snippetOpen));
+  $("#mode-snippets").setAttribute("aria-expanded", String(snippetOpen));
+  $("#mode-ai").setAttribute("aria-pressed", String(aiOpen));
+  $("#mode-ai").setAttribute("aria-expanded", String(aiOpen));
   setTimeout(fitActiveSessions, 0);
+}
+
+function setSnippetDrawer(open: boolean) {
+  setSidePanel(open ? "snippets" : "terminal");
+}
+
+function setAiDrawer(open: boolean) {
+  setSidePanel(open ? "ai" : "terminal");
+}
+
+function aiAllowlisted(host: string, command: string): boolean {
+  return appSettings.allowlist.some((entry) => entry.host === host && entry.command === command);
+}
+
+function aiCardState(proposal: AiProposal) {
+  const allowed = aiAllowlisted(proposal.host, proposal.command);
+  const decision = aiDecisions.get(proposal.id) ?? "proposed";
+  const result = aiResults.get(proposal.id) ?? "";
+  let cardClass = "";
+  let stateClass = "warn";
+  let stateLabel = "AWAITING APPROVAL";
+  let showActions = true;
+
+  if (allowed) {
+    stateClass = "ok";
+    stateLabel = "ALWAYS ALLOWED";
+    showActions = false;
+  } else if (decision === "ran") {
+    stateClass = "ok";
+    stateLabel = "RAN ONCE";
+    showActions = false;
+  } else if (decision === "rejected") {
+    cardClass = " rejected";
+    stateClass = "danger";
+    stateLabel = "REJECTED";
+    showActions = false;
+  } else if (decision === "refused") {
+    cardClass = " refused";
+    stateClass = "danger";
+    stateLabel = "REFUSED";
+    showActions = false;
+  } else {
+    cardClass = " awaiting";
+  }
+
+  return { cardClass, stateClass, stateLabel, showActions, result };
+}
+
+function renderAiThread() {
+  const thread = $("#ai-thread");
+  const rendered = document.createDocumentFragment();
+  AI_PROPOSALS.forEach((proposal) => {
+    const content = AI_PROPOSAL_TEMPLATE.content.cloneNode(true) as DocumentFragment;
+    const cardState = aiCardState(proposal);
+    content.querySelector<HTMLElement>(".msg-user")!.textContent = proposal.prompt;
+    content.querySelector<HTMLElement>(".msg-ai > p")!.textContent = proposal.response;
+
+    const card = content.querySelector<HTMLElement>(".cmd-card")!;
+    card.setAttribute("class", `cmd-card${cardState.cardClass}`);
+    card.setAttribute("data-ai-id", proposal.id);
+    card.querySelector<HTMLElement>(".cmd-scope")!.textContent = proposal.host;
+    const state = card.querySelector<HTMLElement>(".cmd-state")!;
+    state.setAttribute("class", `cmd-state ${cardState.stateClass}`);
+    state.textContent = cardState.stateLabel;
+    card.querySelector<HTMLElement>(".cmd-line")!.textContent = proposal.command;
+    card.querySelector<HTMLElement>(".cmd-desc")!.textContent = proposal.description;
+    if (!cardState.showActions) {
+      card.querySelector(".cmd-actions")!.remove();
+      card.querySelector(".cmd-foot")!.remove();
+    }
+    const output = card.querySelector<HTMLElement>(".cmd-output")!;
+    if (cardState.result) output.textContent = cardState.result;
+    else output.remove();
+    rendered.append(content);
+  });
+
+  aiExtraMessages.forEach((message) => {
+    const template = message.role === "user" ? AI_EXTRA_USER_TEMPLATE : AI_EXTRA_RESPONSE_TEMPLATE;
+    const content = template.content.cloneNode(true) as DocumentFragment;
+    content.querySelector<HTMLElement>(message.role === "user" ? ".msg-user" : ".msg-ai > p")!.textContent = message.text;
+    rendered.append(content);
+  });
+  thread.replaceChildren(rendered);
+
+  thread.querySelectorAll<HTMLElement>(".cmd-card").forEach((card) => {
+    const id = card.dataset.aiId;
+    if (!id) return;
+    card.querySelector<HTMLButtonElement>(".approval-run")?.addEventListener("click", () => void runAiOnce(id, card));
+    card.querySelector<HTMLButtonElement>(".approval-always")?.addEventListener("click", () => void alwaysAllowAi(id, card));
+    card.querySelector<HTMLButtonElement>(".approval-reject")?.addEventListener("click", () => rejectAi(id));
+  });
+}
+
+function visibleAiCommand(card: HTMLElement): { host: string; command: string } {
+  return {
+    host: card.querySelector(".cmd-scope")?.textContent ?? "",
+    command: card.querySelector(".cmd-line")?.textContent ?? "",
+  };
+}
+
+function setAiCardBusy(card: HTMLElement, label: string) {
+  card.setAttribute("aria-busy", "true");
+  card.querySelectorAll<HTMLButtonElement>("button").forEach((button) => { button.disabled = true; });
+  const state = card.querySelector(".cmd-state");
+  if (state) {
+    state.className = "cmd-state warn";
+    state.textContent = label;
+  }
+}
+
+function refuseAiCommand(id: string) {
+  aiDecisions.set(id, "refused");
+  aiResults.set(id, "Host alias failed the argv safety check. Nothing was executed or saved.");
+  renderAiThread();
+}
+
+function liveTerminalForHost(host: string): Session | null {
+  return [...sessions.values()].reverse().find((session) => session.host === host && session.ptyId != null)
+    ?? [...splitSessions.values()].reverse().find((session) => session.host === host && session.ptyId != null)
+    ?? null;
+}
+
+async function executeAiCommand(host: string, command: string) {
+  if (!sftpSafe(host)) throw new Error("unsafe host alias");
+  let session = liveTerminalForHost(host);
+  if (!session) session = await openTerminal(host);
+  if (!session || session.ptyId == null) throw new Error("SSH terminal did not start");
+  activateTab(session.id);
+  await invoke("pty_write", { id: session.ptyId, data: `${command}\r` });
+}
+
+async function runAiOnce(id: string, card: HTMLElement) {
+  const { host, command } = visibleAiCommand(card);
+  if (!sftpSafe(host)) {
+    refuseAiCommand(id);
+    return;
+  }
+  setAiCardBusy(card, "RUNNING ONCE");
+  try {
+    await executeAiCommand(host, command);
+    aiDecisions.set(id, "ran");
+    aiResults.set(id, "Command sent once to the real-ssh terminal.");
+  } catch (e) {
+    aiDecisions.set(id, "proposed");
+    aiResults.set(id, `Could not run command: ${msg(e)}. Review the terminal and try again.`);
+  }
+  renderAiThread();
+}
+
+async function alwaysAllowAi(id: string, card: HTMLElement) {
+  const { host, command } = visibleAiCommand(card);
+  if (!sftpSafe(host)) {
+    refuseAiCommand(id);
+    return;
+  }
+  setAiCardBusy(card, "SAVING APPROVAL");
+  let alreadyAllowed = aiAllowlisted(host, command);
+  if (!alreadyAllowed) {
+    try {
+      const stored = await invoke<AppSettings>("read_settings");
+      if (Array.isArray(stored.allowlist)) appSettings.allowlist = stored.allowlist;
+      alreadyAllowed = aiAllowlisted(host, command);
+    } catch { /* keep the current snapshot; persistAllowlist retains its existing error path */ }
+  }
+  if (!alreadyAllowed) {
+    const next = [...appSettings.allowlist, { host, command, added_at: "" }];
+    try {
+      await persistAllowlist(next);
+    } catch (e) {
+      aiDecisions.set(id, "proposed");
+      aiResults.set(id, `Could not save approval: ${msg(e)}. Nothing was executed.`);
+      renderAiThread();
+      return;
+    }
+  }
+
+  aiDecisions.delete(id);
+  try {
+    await executeAiCommand(host, command);
+    aiResults.set(id, "Approval saved. Command sent to the real-ssh terminal.");
+  } catch (e) {
+    aiResults.set(id, `Approval saved, but the command did not run: ${msg(e)}.`);
+  }
+  renderAiThread();
+}
+
+function rejectAi(id: string) {
+  aiDecisions.set(id, "rejected");
+  aiResults.set(id, "Rejected. Nothing was executed or saved.");
+  renderAiThread();
+}
+
+function sendAiStub() {
+  const input = $("#ai-input") as HTMLInputElement;
+  if (!input.value.trim()) return;
+  aiExtraMessages.push(
+    { role: "user", text: input.value },
+    { role: "ai", text: "The AI backend is not connected. This mock did not send or execute your request." },
+  );
+  input.value = "";
+  renderAiThread();
+  $("#ai-thread").scrollTop = $("#ai-thread").scrollHeight;
+}
+
+function initAiAssistant() {
+  $("#mode-ai").addEventListener("click", () => {
+    void settingsReady.then(() => {
+      renderAiThread();
+      setAiDrawer(true);
+      ($("#ai-input") as HTMLInputElement).focus();
+    });
+  });
+  $("#ai-close").addEventListener("click", () => {
+    setAiDrawer(false);
+    $("#mode-ai").focus();
+  });
+  $("#ai-send").addEventListener("click", sendAiStub);
+  ($("#ai-input") as HTMLInputElement).addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.isComposing) return;
+    event.preventDefault();
+    sendAiStub();
+  });
+  void settingsReady.then(renderAiThread);
 }
 
 async function copySnippet(button: HTMLButtonElement, command: string) {
@@ -2249,8 +2672,8 @@ async function splitTerminal(targetTabId: number, sourceTabId: number) {
   await startPty(split_session);
 }
 
-async function openTerminal(host: string) {
-  if (binaryBlocked("ssh")) return;
+async function openTerminal(host: string): Promise<Session | null> {
+  if (binaryBlocked("ssh")) return null;
   const tabId = nextTab++;
   const term = new Terminal({
     cursorBlink: !REDUCED_MOTION,
@@ -2309,6 +2732,7 @@ async function openTerminal(host: string) {
   });
 
   await startPty(session);
+  return session.ptyId == null ? null : session;
 }
 
 // Spawn the PTY for a terminal session and wire output/exit listeners.
@@ -2471,6 +2895,7 @@ window.addEventListener("DOMContentLoaded", () => {
   $("#btn-raw").addEventListener("click", openRaw);
   initGoogleAccount();
   initSettings();
+  initAiAssistant();
   initSnippets();
   ($("#host-search") as HTMLInputElement).addEventListener("input", renderHostList);
   // Ctrl+K focuses host search (redesign §5); overlays keep their focus trap

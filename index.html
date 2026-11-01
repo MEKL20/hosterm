@@ -77,10 +77,32 @@
               <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M5.5 2.5c-1.5 0-2 1-2 2.25S3.25 7 2 8c1.25 1 1.5 2 1.5 3.25s.5 2.25 2 2.25"/><path d="M10.5 2.5c1.5 0 2 1 2 2.25S12.75 7 14 8c-1.25 1-1.5 2-1.5 3.25s-.5 2.25-2 2.25"/></svg>
               Snippets
             </button>
+            <button id="mode-ai" class="mode-btn" data-panel="ai" aria-pressed="false" aria-controls="ai-drawer" aria-expanded="false">
+              <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 8a5.5 5.5 0 0 1-5.5 5.5H2l1.6-2.3A5.5 5.5 0 1 1 14 8z"/><path d="m6 7 1.4 1.4L10.5 5"/></svg>
+              AI
+            </button>
           </div>
         </div>
         <div id="workbench">
           <div id="panels"></div>
+          <aside id="ai-drawer" class="drawer drawer-ai" aria-label="AI assistant" hidden>
+            <header class="drawer-head">
+              <h2>Assistant</h2>
+              <span class="head-tag" title="UI-only mock; no AI backend is connected">mock</span>
+              <button id="ai-close" class="icon drawer-close" aria-label="Close assistant panel" title="Close panel">
+                <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M3 3l10 10M13 3 3 13"/></svg>
+              </button>
+            </header>
+            <div id="ai-thread" class="ai-thread" aria-live="polite">
+              <div class="ai-empty">Loading approval preview…</div>
+            </div>
+            <footer class="ai-input">
+              <input id="ai-input" type="text" placeholder="Ask hosterm" aria-label="Ask the assistant" autocomplete="off" />
+              <button id="ai-send" class="send-btn" type="button" title="Send" aria-label="Send message">
+                <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 13V3M4 7l4-4 4 4"/></svg>
+              </button>
+            </footer>
+          </aside>
           <aside id="snippet-drawer" class="drawer drawer-snippets" aria-label="Command snippets" hidden>
             <header class="drawer-head">
               <h2>Snippets</h2>
@@ -201,6 +223,18 @@
                     <span class="pv-line"><span class="pv-user">mekl@prod-web</span>:~$ <span class="pv-cursor"></span></span>
                   </div>
                 </div>
+              </div>
+            </section>
+
+            <section id="settings-approvals" class="hidden" aria-labelledby="approvals-title">
+              <h3 class="set-h" id="approvals-title">AI Assistant</h3>
+              <p class="set-sub">Review standing command approvals stored on this device.</p>
+              <div class="set-block">
+                <div class="set-label">Approvals</div>
+                <p class="set-note approvals-note">Each approval matches one exact host alias and command. Revoke removes it; patterns are not editable in v1.</p>
+                <div id="approvals-list" class="approvals-list"></div>
+                <div id="approvals-empty" class="approvals-empty" role="status" hidden>No commands are always allowed.</div>
+                <div id="approvals-status" class="approvals-status" role="status" aria-live="polite"></div>
               </div>
             </section>
 

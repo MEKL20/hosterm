@@ -80,6 +80,7 @@ let storedSettings = {
   accent: "#e2a35c",
   allowlist: [{ host: "prod-web", command: "sudo systemctl restart netdata", added_at: "2026-10-30T12:00:00Z" }],
 };
+let readSettingsFailures = 0;
 const invoke = (cmd, args = {}) => {
   calls.push({ cmd, args });
   switch (cmd) {
@@ -92,7 +93,13 @@ const invoke = (cmd, args = {}) => {
         : Promise.resolve(hs);
     }
     case "check_binaries": return Promise.resolve({ ...binCheckState });
-    case "read_settings": return Promise.resolve(JSON.parse(JSON.stringify(storedSettings)));
+    case "read_settings": {
+      if (readSettingsFailures > 0) {
+        readSettingsFailures -= 1;
+        return Promise.reject("settings read failed (mock)");
+      }
+      return Promise.resolve(JSON.parse(JSON.stringify(storedSettings)));
+    }
     case "read_snippets": return Promise.resolve(JSON.parse(JSON.stringify(sampleSnippets)));
     case "write_settings": {
       storedSettings = JSON.parse(JSON.stringify(args.settings));
@@ -2071,6 +2078,317 @@ check("U-D6 a11y: Escape closes the account dialog and restores chip focus",
     document.getElementById("user-chip").getAttribute("aria-expanded") === "false" &&
     document.activeElement?.id === "user-chip"));
 // End U-D6 checks.
+
+// U-D7 AI assistant + exact-command approval contract (FR-AI1..13, INV-25/26).
+const aiCounts = () => ({
+  spawn: calls.filter((c) => c.cmd === "pty_spawn").length,
+  write: calls.filter((c) => c.cmd === "pty_write").length,
+  settings: calls.filter((c) => c.cmd === "write_settings").length,
+  readSettings: calls.filter((c) => c.cmd === "read_settings").length,
+});
+const openAi = async () => {
+  await page.locator("#mode-ai").click();
+  await page.locator('#ai-drawer.open:not([hidden])').waitFor({ timeout: 3000 });
+};
+const callsBeforeAiOpen = aiCounts();
+await openAi();
+const aiPanel = await page.evaluate(() => {
+  const drawer = document.getElementById("ai-drawer");
+  const input = document.getElementById("ai-input");
+  return {
+    width: Math.round(drawer.getBoundingClientRect().width),
+    label: drawer.getAttribute("aria-label"),
+    thread: document.querySelectorAll("#ai-thread .msg-user").length,
+    cards: document.querySelectorAll("#ai-thread .cmd-card").length,
+    placeholder: input.getAttribute("placeholder"),
+    focused: document.activeElement?.id,
+    tag: drawer.querySelector(".head-tag")?.textContent,
+    tagTitle: drawer.querySelector(".head-tag")?.getAttribute("title"),
+  };
+});
+check("U-D7 FR-AI1/12: 340px mock assistant drawer has thread, command cards, and Ask hosterm input",
+  aiPanel.width === 340 && aiPanel.label === "AI assistant" && aiPanel.thread === 2 && aiPanel.cards === 2 &&
+  aiPanel.placeholder === "Ask hosterm" && aiPanel.focused === "ai-input" && aiPanel.tag === "mock" &&
+  aiPanel.tagTitle.includes("no AI backend") && !JSON.stringify(aiPanel).includes("on-device"),
+  JSON.stringify(aiPanel));
+check("U-D7 FR-AI9: opening the mock never runs or persists a command implicitly",
+  JSON.stringify(aiCounts()) === JSON.stringify(callsBeforeAiOpen), JSON.stringify({ before: callsBeforeAiOpen, after: aiCounts() }));
+const approvalRendererSource = u3src.slice(
+  u3src.indexOf("function renderApprovals"),
+  u3src.indexOf("async function refreshApprovals"),
+);
+const threadRendererSource = u3src.slice(
+  u3src.indexOf("function renderAiThread"),
+  u3src.indexOf("function visibleAiCommand"),
+);
+check("U-D7 SEC-01: approval and thread renderers clone static templates without innerHTML assignments",
+  approvalRendererSource.startsWith("function renderApprovals") &&
+  threadRendererSource.startsWith("function renderAiThread") &&
+  !/\.innerHTML\s*=/.test(approvalRendererSource) && !/\.innerHTML\s*=/.test(threadRendererSource) &&
+  approvalRendererSource.includes("APPROVAL_ITEM_TEMPLATE.content.cloneNode(true)") &&
+  approvalRendererSource.includes("list.replaceChildren(rendered)") &&
+  threadRendererSource.includes("AI_PROPOSAL_TEMPLATE.content.cloneNode(true)") &&
+  threadRendererSource.includes("thread.replaceChildren(rendered)"));
+
+const allowedCard = page.locator('.cmd-card[data-ai-id="restart-netdata"]');
+const awaitingCard = page.locator('.cmd-card[data-ai-id="prune-docker"]');
+const allowedMeta = await allowedCard.evaluate((card) => ({
+  host: card.querySelector(".cmd-scope")?.textContent,
+  command: card.querySelector(".cmd-line")?.textContent,
+  description: card.querySelector(".cmd-desc")?.textContent,
+  state: card.querySelector(".cmd-state")?.textContent,
+  stateClass: card.querySelector(".cmd-state")?.className,
+  awaiting: card.classList.contains("awaiting"),
+  actions: card.querySelectorAll(".cmd-actions button").length,
+}));
+check("U-D7 FR-AI2/7: exact host+command allowlist match renders directly ALWAYS ALLOWED",
+  allowedMeta.host === "prod-web" && allowedMeta.command === "sudo systemctl restart netdata" &&
+  allowedMeta.description.length > 0 && allowedMeta.state === "ALWAYS ALLOWED" &&
+  allowedMeta.stateClass.includes("ok") && !allowedMeta.awaiting && allowedMeta.actions === 0,
+  JSON.stringify(allowedMeta));
+
+const awaitingMeta = await awaitingCard.evaluate((card) => ({
+  host: card.querySelector(".cmd-scope")?.textContent,
+  command: card.querySelector(".cmd-line")?.textContent,
+  description: card.querySelector(".cmd-desc")?.textContent,
+  state: card.querySelector(".cmd-state")?.textContent,
+  stateClass: card.querySelector(".cmd-state")?.className,
+  awaiting: card.classList.contains("awaiting"),
+  labels: [...card.querySelectorAll(".cmd-actions button")].map((button) => button.textContent),
+  classes: [...card.querySelectorAll(".cmd-actions button")].map((button) => button.className),
+}));
+check("U-D7 FR-AI2/3: proposed card has exact scope, mono command, impact, warn state, and three actions",
+  awaitingMeta.host === "prod-web" && awaitingMeta.command === "docker system prune -af" &&
+  awaitingMeta.description.includes("Running containers are not touched") && awaitingMeta.state === "AWAITING APPROVAL" &&
+  awaitingMeta.stateClass.includes("warn") && awaitingMeta.awaiting &&
+  JSON.stringify(awaitingMeta.labels) === JSON.stringify(["Run once", "Always allow", "Reject"]),
+  JSON.stringify(awaitingMeta));
+check("U-D7 INV-25: Run once is primary; permission-widening Always allow is secondary; Reject is ghost",
+  awaitingMeta.classes[0].split(/\s+/).includes("btn-primary") && awaitingMeta.classes[0].split(/\s+/).includes("approval-run") &&
+  awaitingMeta.classes[1].split(/\s+/).includes("btn-secondary") && awaitingMeta.classes[1].split(/\s+/).includes("approval-always") &&
+  !awaitingMeta.classes[1].split(/\s+/).includes("btn-primary") &&
+  awaitingMeta.classes[2].split(/\s+/).includes("btn-ghost") && awaitingMeta.classes[2].split(/\s+/).includes("approval-reject"),
+  JSON.stringify(awaitingMeta.classes));
+
+const hostileStubBefore = { calls: calls.length, requests: requestLog.length };
+await page.locator("#ai-input").fill(HOSTILE);
+await page.locator("#ai-send").click();
+const hostileThread = await page.locator("#ai-thread .msg-user").last().evaluate((message) => ({
+  text: message.textContent,
+  children: message.childElementCount,
+  pwn: typeof window.__pwn,
+  csp: (window.__cspViolations || []).length,
+}));
+check("U-D7 FR-AI11: hostile thread text stays raw inert text with CSP 0",
+  hostileThread.text === HOSTILE && hostileThread.children === 0 && hostileThread.pwn === "undefined" && hostileThread.csp === 0,
+  JSON.stringify(hostileThread));
+check("U-D7 ADR-22: Ask hosterm stub performs zero invoke and zero network request",
+  calls.length === hostileStubBefore.calls && requestLog.length === hostileStubBefore.requests &&
+  (await page.locator("#ai-thread .msg-ai p").last().textContent()).includes("AI backend is not connected"),
+  JSON.stringify({ before: hostileStubBefore, after: { calls: calls.length, requests: requestLog.length } }));
+
+const runBefore = aiCounts();
+const runAllowlistBefore = JSON.stringify(storedSettings.allowlist);
+const runCallOffset = calls.length;
+await awaitingCard.locator(".approval-run").click();
+await page.waitForFunction(() => document.querySelector('.cmd-card[data-ai-id="prune-docker"] .cmd-state')?.textContent === "RAN ONCE");
+const runCalls = calls.slice(runCallOffset);
+const runWrites = runCalls.filter((c) => c.cmd === "pty_write");
+check("U-D7 FR-AI5: Run once writes the exact command plus Enter exactly once through the real-ssh PTY",
+  aiCounts().spawn === runBefore.spawn + 1 && aiCounts().write === runBefore.write + 1 && runWrites.length === 1 &&
+  runWrites[0]?.args?.data === "docker system prune -af\r" &&
+  (await awaitingCard.locator(".cmd-output").textContent()) === "Command sent once to the real-ssh terminal.",
+  JSON.stringify(runCalls.filter((c) => ["pty_spawn", "pty_write"].includes(c.cmd))));
+check("U-D7 FR-AI5: Run once leaves the persisted allowlist byte-for-byte unchanged",
+  aiCounts().settings === runBefore.settings && JSON.stringify(storedSettings.allowlist) === runAllowlistBefore,
+  JSON.stringify(storedSettings.allowlist));
+const hostileAfterRun = await page.locator("#ai-thread .msg-user").last().evaluate((message) => ({
+  text: message.textContent,
+  children: message.childElementCount,
+  pwn: typeof window.__pwn,
+  csp: (window.__cspViolations || []).length,
+}));
+check("U-D7 SEC-01: hostile thread text stays inert after Run-once template re-render",
+  hostileAfterRun.text === HOSTILE && hostileAfterRun.children === 0 &&
+  hostileAfterRun.pwn === "undefined" && hostileAfterRun.csp === 0,
+  JSON.stringify(hostileAfterRun));
+
+await page.reload();
+await page.waitForTimeout(400);
+await openAi();
+const alwaysCard = page.locator('.cmd-card[data-ai-id="prune-docker"]');
+await page.locator("#ai-input").fill(HOSTILE);
+await page.locator("#ai-send").click();
+const alwaysBefore = aiCounts();
+const alwaysOffset = calls.length;
+await alwaysCard.locator(".approval-always").click();
+await page.waitForFunction(() => document.querySelector('.cmd-card[data-ai-id="prune-docker"] .cmd-state')?.textContent === "ALWAYS ALLOWED");
+const alwaysCalls = calls.slice(alwaysOffset);
+const alwaysWrite = alwaysCalls.find((c) => c.cmd === "write_settings");
+const alwaysPty = alwaysCalls.find((c) => c.cmd === "pty_write");
+const savedPrune = alwaysWrite?.args?.settings?.allowlist?.find((entry) =>
+  entry.host === "prod-web" && entry.command === "docker system prune -af");
+check("U-D7 FR-AI6/ADR-21: Always allow persists the exact tuple before one PTY execution",
+  aiCounts().settings === alwaysBefore.settings + 1 && aiCounts().spawn === alwaysBefore.spawn + 1 &&
+  aiCounts().write === alwaysBefore.write + 1 && savedPrune?.added_at === "" &&
+  alwaysCalls.findIndex((c) => c.cmd === "write_settings") < alwaysCalls.findIndex((c) => c.cmd === "pty_write") &&
+  alwaysPty?.args?.data === "docker system prune -af\r",
+  JSON.stringify(alwaysCalls.filter((c) => ["write_settings", "pty_spawn", "pty_write"].includes(c.cmd))));
+check("U-D7 FR-AI6/7: Always allow transitions to ok state with no approval actions",
+  await alwaysCard.evaluate((card) => card.querySelector(".cmd-state")?.classList.contains("ok") &&
+    card.querySelector(".cmd-state")?.textContent === "ALWAYS ALLOWED" && card.querySelectorAll(".cmd-actions").length === 0));
+const hostileAfterAlways = await page.locator("#ai-thread .msg-user").last().evaluate((message) => ({
+  text: message.textContent,
+  children: message.childElementCount,
+  pwn: typeof window.__pwn,
+  csp: (window.__cspViolations || []).length,
+}));
+check("U-D7 SEC-01: hostile thread text stays inert after Always-allow template re-render",
+  hostileAfterAlways.text === HOSTILE && hostileAfterAlways.children === 0 &&
+  hostileAfterAlways.pwn === "undefined" && hostileAfterAlways.csp === 0,
+  JSON.stringify(hostileAfterAlways));
+
+await page.locator("#open-settings").click();
+const approvalsReadBefore = aiCounts().readSettings;
+await page.locator('.set-nav[data-section="ai"]').click();
+await page.waitForFunction(() => document.querySelectorAll("#approvals-list .approval-item").length === 2);
+const approvalsMeta = await page.evaluate(() => ({
+  hidden: document.getElementById("settings-approvals").classList.contains("hidden"),
+  hosts: [...document.querySelectorAll(".approval-host")].map((el) => el.textContent),
+  commands: [...document.querySelectorAll(".approval-command")].map((el) => el.textContent),
+  revokes: document.querySelectorAll(".approval-revoke").length,
+  patternInputs: document.querySelectorAll('#settings-approvals input, #settings-approvals [contenteditable="true"]').length,
+  rows: [...document.querySelectorAll("#approvals-list .approval-item")].map((row) => ({
+    host: row.querySelector(".approval-host")?.textContent,
+    hostChildren: row.querySelector(".approval-host")?.childElementCount,
+    command: row.querySelector(".approval-command")?.textContent,
+    commandChildren: row.querySelector(".approval-command")?.childElementCount,
+    index: row.querySelector(".approval-revoke")?.getAttribute("data-index"),
+  })),
+}));
+check("U-D7 FR-AI10: Settings > AI Assistant reads an exact command+host revoke list, not a pattern editor",
+  aiCounts().readSettings === approvalsReadBefore + 1 && !approvalsMeta.hidden && approvalsMeta.revokes === 2 &&
+  approvalsMeta.patternInputs === 0 && approvalsMeta.hosts.every((host) => host === "prod-web") &&
+  approvalsMeta.commands.includes("sudo systemctl restart netdata") && approvalsMeta.commands.includes("docker system prune -af"),
+  JSON.stringify(approvalsMeta));
+check("U-D7 SEC-01: approval template preserves exact inert text and data-index values",
+  JSON.stringify(approvalsMeta.rows) === JSON.stringify([
+    { host: "prod-web", hostChildren: 0, command: "sudo systemctl restart netdata", commandChildren: 0, index: "0" },
+    { host: "prod-web", hostChildren: 0, command: "docker system prune -af", commandChildren: 0, index: "1" },
+  ]), JSON.stringify(approvalsMeta.rows));
+const revokeBefore = aiCounts();
+const pruneApproval = page.locator("#approvals-list .approval-item", { hasText: "docker system prune -af" });
+await pruneApproval.locator(".approval-revoke").click();
+await page.waitForFunction(() => document.querySelectorAll("#approvals-list .approval-item").length === 1);
+const revokeWrite = calls.filter((c) => c.cmd === "write_settings").at(-1);
+check("U-D7 FR-AI10: Revoke removes one exact tuple through write_settings",
+  aiCounts().settings === revokeBefore.settings + 1 &&
+  revokeWrite?.args?.settings?.allowlist?.length === 1 &&
+  !revokeWrite.args.settings.allowlist.some((entry) => entry.host === "prod-web" && entry.command === "docker system prune -af") &&
+  (await page.locator("#approvals-status").textContent()) === "Approval revoked.",
+  JSON.stringify(revokeWrite?.args?.settings?.allowlist));
+await page.locator("#settings-done").click();
+await page.waitForTimeout(100);
+
+const rejectCard = page.locator('.cmd-card[data-ai-id="prune-docker"]');
+const rejectBefore = aiCounts();
+await rejectCard.locator(".approval-reject").click();
+const rejectedMeta = await rejectCard.evaluate((card) => ({
+  state: card.querySelector(".cmd-state")?.textContent,
+  danger: card.querySelector(".cmd-state")?.classList.contains("danger"),
+  result: card.querySelector(".cmd-output")?.textContent,
+}));
+check("U-D7 FR-AI8: Reject changes state with no execution and no allowlist write",
+  JSON.stringify(aiCounts()) === JSON.stringify(rejectBefore) && rejectedMeta.state === "REJECTED" &&
+  rejectedMeta.danger && rejectedMeta.result === "Rejected. Nothing was executed or saved.",
+  JSON.stringify(rejectedMeta));
+
+const unsafeAiHost = async (host, action) => {
+  await page.reload();
+  await page.waitForTimeout(400);
+  await openAi();
+  const card = page.locator('.cmd-card[data-ai-id="prune-docker"]');
+  await card.locator(".cmd-scope").evaluate((scope, value) => { scope.textContent = value; }, host);
+  const before = aiCounts();
+  await card.locator(action).click();
+  await page.waitForFunction(() => document.querySelector('.cmd-card[data-ai-id="prune-docker"] .cmd-state')?.textContent === "REFUSED");
+  return { before, after: aiCounts(), output: await card.locator(".cmd-output").textContent() };
+};
+for (const unsafe of [
+  { name: "leading dash", host: "-prod-web", action: ".approval-always" },
+  { name: "CR", host: "prod\rweb", action: ".approval-run" },
+  { name: "LF", host: "prod\nweb", action: ".approval-run" },
+]) {
+  const blocked = await unsafeAiHost(unsafe.host, unsafe.action);
+  check(`U-D7 INV-26: ${unsafe.name} host alias is refused before write or execution`,
+    JSON.stringify(blocked.before) === JSON.stringify(blocked.after) && blocked.output.includes("Nothing was executed or saved"),
+    JSON.stringify(blocked));
+}
+
+const canonicalApproval = { host: "prod-web", command: "sudo systemctl restart netdata", added_at: "2026-10-30T12:00:00Z" };
+storedSettings = { ...storedSettings, allowlist: [{ ...canonicalApproval, command: `${canonicalApproval.command} ` }] };
+await page.reload();
+await page.waitForTimeout(400);
+await openAi();
+const nearMatch = await page.locator('.cmd-card[data-ai-id="restart-netdata"]').evaluate((card) => ({
+  state: card.querySelector(".cmd-state")?.textContent,
+  awaiting: card.classList.contains("awaiting"),
+  actions: card.querySelectorAll(".cmd-actions button").length,
+}));
+check("U-D7 ADR-21: trailing-space command is not an exact byte match",
+  nearMatch.state === "AWAITING APPROVAL" && nearMatch.awaiting && nearMatch.actions === 3,
+  JSON.stringify(nearMatch));
+
+storedSettings = { ...storedSettings, allowlist: [canonicalApproval] };
+await page.reload();
+await page.waitForTimeout(400);
+await openAi();
+const hostileFinalBefore = { calls: calls.length, requests: requestLog.length };
+await page.locator("#ai-input").fill(HOSTILE);
+await page.keyboard.press("Enter");
+const hostileFinal = await page.locator("#ai-thread .msg-user").last().evaluate((message) => ({
+  text: message.textContent,
+  children: message.childElementCount,
+  pwn: typeof window.__pwn,
+  csp: (window.__cspViolations || []).length,
+}));
+check("U-D7 FR-AI11: Enter-submit hostile fixture remains inert after reload",
+  hostileFinal.text === HOSTILE && hostileFinal.children === 0 && hostileFinal.pwn === "undefined" && hostileFinal.csp === 0 &&
+  calls.length === hostileFinalBefore.calls && requestLog.length === hostileFinalBefore.requests,
+  JSON.stringify(hostileFinal));
+
+storedSettings = { ...storedSettings, allowlist: [canonicalApproval] };
+readSettingsFailures = 1;
+await page.reload();
+await page.waitForTimeout(400);
+await openAi();
+const duplicateCard = page.locator('.cmd-card[data-ai-id="restart-netdata"]');
+const duplicateFallback = await duplicateCard.evaluate((card) => ({
+  state: card.querySelector(".cmd-state")?.textContent,
+  awaiting: card.classList.contains("awaiting"),
+  actions: card.querySelectorAll(".cmd-actions button").length,
+}));
+const duplicateBefore = aiCounts();
+const duplicateOffset = calls.length;
+const duplicateAllowlistBefore = JSON.stringify(storedSettings.allowlist);
+await duplicateCard.locator(".approval-always").click();
+await page.waitForFunction(() => document.querySelector('.cmd-card[data-ai-id="restart-netdata"] .cmd-state')?.textContent === "ALWAYS ALLOWED");
+const duplicateCalls = calls.slice(duplicateOffset);
+check("U-D7 SEC-03: startup fallback re-check skips duplicate write and still executes exactly once",
+  duplicateFallback.state === "AWAITING APPROVAL" && duplicateFallback.awaiting && duplicateFallback.actions === 3 &&
+  duplicateCalls.filter((c) => c.cmd === "read_settings").length === 1 &&
+  duplicateCalls.filter((c) => c.cmd === "write_settings").length === 0 &&
+  duplicateCalls.filter((c) => c.cmd === "pty_write").length === 1 &&
+  aiCounts().settings === duplicateBefore.settings && aiCounts().write === duplicateBefore.write + 1 &&
+  JSON.stringify(storedSettings.allowlist) === duplicateAllowlistBefore &&
+  storedSettings.allowlist.filter((entry) => entry.host === canonicalApproval.host && entry.command === canonicalApproval.command).length === 1,
+  JSON.stringify({ fallback: duplicateFallback, calls: duplicateCalls, allowlist: storedSettings.allowlist }));
+await page.locator("#ai-close").click();
+check("U-D7 a11y: drawer close restores the AI trigger and Terminal mode",
+  await page.evaluate(() => document.getElementById("ai-drawer").hidden &&
+    document.getElementById("mode-terminal").getAttribute("aria-pressed") === "true" &&
+    document.activeElement?.id === "mode-ai"));
+// End U-D7 checks.
 
 // (b) sidebar narrative copy byte-identical (empty / error / no-match) + empty CTA formalized
 const sbState = () => page.evaluate(() => {
