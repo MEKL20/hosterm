@@ -340,5 +340,5 @@ satu card aktif per file. Flag ke nano bila dua unit butuh file sama bersamaan.
 
 *Sources: docs/UX/prototypes/proto-a-dusk.html · proto-a-dusk-settings.html · README.md · verification-report.json ·
 docs/STATE.md (invariants, verify loop, Arus/Fleet state) · docs/PRD.md (UC8/US-8/FR-G*/NFR) ·
-docs/UX/redesign-hosterm-v1.md §6.5 (Abyss Emerald, untuk honest-diff) · /home/mekl/vault concepts/hosterm-delivery.md.
+docs/UX/redesign-hosterm-v1.md §6.5 (Abyss Emerald, untuk honest-diff).
 Read 2026-10-31.*

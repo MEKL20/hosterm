@@ -5,7 +5,7 @@
 | Author | crew-coding-lead |
 | Input | docs/PRD-security-hardening-wave-1.md (requirements + AC are authoritative; this doc does not reopen them) |
 | Status | Approved for backlog dispatch |
-| Repo | /home/mekl/src/hosterm (worktree per task; no commits by task agents without lead review) |
+| Repo | the hosterm repo (worktree per task; no commits by task agents without lead review) |
 | Decision lock | Q1–Q7 from PRD §8 are FINAL (see §2). Do not reopen. |
 
 ---

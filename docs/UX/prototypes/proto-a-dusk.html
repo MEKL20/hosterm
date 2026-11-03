@@ -535,32 +535,32 @@
     <div class="workbench">
       <section class="terminals" aria-label="Split terminals">
         <div class="term focused" aria-label="Terminal session on prod-web (focused)">
-<pre class="term-out"><span class="out">Last login: Sat Oct 31 09:12:04 2026 from 192.168.1.24</span>
-<span class="p-user">mekl@prod-web</span><span class="p-path">:~$</span> df -h /
+<pre class="term-out"><span class="out">Last login: Sat Oct 31 09:12:04 2026 from 203.0.113.24</span>
+<span class="p-user">demo@prod-web</span><span class="p-path">:~$</span> df -h /
 <span class="out">Filesystem      Size  Used Avail Use% Mounted on
 /dev/nvme0n1p2  234G  187G   35G  84% /</span>
-<span class="p-user">mekl@prod-web</span><span class="p-path">:~$</span> tail -f /var/log/nginx/access.log
-<span class="out">10.0.4.17 - - [31/Oct/2026:09:41:02] "GET /api/health HTTP/1.1" 200 15 "-" "kube-probe/1.29"
-10.0.4.18 - - [31/Oct/2026:09:41:03] "GET /assets/app.9f31c2.js HTTP/1.1" 200 184213
-10.0.4.12 - - [31/Oct/2026:09:41:05] "POST /api/v2/deploy HTTP/1.1" 202 0
-10.0.4.17 - - [31/Oct/2026:09:41:07] "GET /api/health HTTP/1.1" 200 15 "-" "kube-probe/1.29"</span>
+<span class="p-user">demo@prod-web</span><span class="p-path">:~$</span> tail -f /var/log/nginx/access.log
+<span class="out">203.0.113.17 - - [31/Oct/2026:09:41:02] "GET /api/health HTTP/1.1" 200 15 "-" "kube-probe/1.29"
+203.0.113.18 - - [31/Oct/2026:09:41:03] "GET /assets/app.9f31c2.js HTTP/1.1" 200 184213
+203.0.113.12 - - [31/Oct/2026:09:41:05] "POST /api/v2/deploy HTTP/1.1" 202 0
+203.0.113.17 - - [31/Oct/2026:09:41:07] "GET /api/health HTTP/1.1" 200 15 "-" "kube-probe/1.29"</span>
 ^C
-<span class="p-user">mekl@prod-web</span><span class="p-path">:~$</span> <span class="cursor"></span></pre>
+<span class="p-user">demo@prod-web</span><span class="p-path">:~$</span> <span class="cursor"></span></pre>
         </div>
         <div class="term-divider" role="separator" aria-orientation="vertical" aria-label="Drag to resize split" title="Drag to resize"></div>
         <div class="term" aria-label="Terminal session on db-core">
-<pre class="term-out"><span class="out">Last login: Fri Oct 30 18:02:11 2026 from 10.0.4.9</span>
-<span class="p-user">mekl@db-core</span><span class="p-path">:~$</span> psql metrics -c "select count(*) from events
+<pre class="term-out"><span class="out">Last login: Fri Oct 30 18:02:11 2026 from 203.0.113.9</span>
+<span class="p-user">demo@db-core</span><span class="p-path">:~$</span> psql metrics -c "select count(*) from events
 where ts &gt; now() - interval '1 hour'"
  <span class="out">count</span>
 <span class="out">---------
    48213
 (1 row)</span>
 
-<span class="p-user">mekl@db-core</span><span class="p-path">:~$</span> docker ps --format '{{.Names}}\t{{.Status}}'
+<span class="p-user">demo@db-core</span><span class="p-path">:~$</span> docker ps --format '{{.Names}}\t{{.Status}}'
 <span class="out">postgres-16     Up 6 days
 redis-7         Up 6 days</span>
-<span class="p-user">mekl@db-core</span><span class="p-path">:~$</span> <span class="cursor"></span></pre>
+<span class="p-user">demo@db-core</span><span class="p-path">:~$</span> <span class="cursor"></span></pre>
         </div>
       </section>
 
@@ -690,7 +690,7 @@ netdata started</pre>
       <span class="sb-left">
         <span class="dot dot-live"></span>
         <span class="sb-host">prod-web</span>
-        <span>mekl@10.2.7.13:22 · connected</span>
+        <span>demo@203.0.113.13:22 · connected</span>
       </span>
       <span class="sb-spacer"></span>
       <span class="sb-right">
