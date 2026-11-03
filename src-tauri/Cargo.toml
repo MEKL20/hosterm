@@ -19,6 +19,13 @@ serde_json = "1"
 arboard = "3"
 portable-pty = "0.8"
 dirs = "5"
+# Google OAuth (BE-OAUTH, TSD §1 — EXACT pins, rustls-only, vetted publishers).
+reqwest = { version = "=0.12.9", default-features = false, features = ["rustls-tls", "json", "blocking"] }
+keyring = { version = "=3.6.3", features = ["sync-secret-service", "crypto-rust"] }
+sha2 = "=0.10.9"
+base64 = "=0.22.1"
+rand = "=0.8.5"
+tiny_http = "=0.12.0"
 
 [profile.release]
 codegen-units = 1

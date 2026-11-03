@@ -10,6 +10,14 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
 mod fleet;
+// BE-OAUTH owns these four backend module declarations (lib.rs is a hotspot;
+// later backend cards add only their own tauri command wrappers, never
+// touch these `mod` lines). oauth is implemented here; crypto/drive/backup are
+// placeholders filled by their own cards (TSD §2).
+mod backup;
+mod crypto;
+mod drive;
+mod oauth;
 
 // ============================================================
 //  SSH CONFIG MODEL  (round-trip: preserves comments + order)
@@ -3234,6 +3242,34 @@ mod bin_check_tests {
     }
 }
 
+// ============================================================
+//  GOOGLE OAUTH — thin IPC wrappers (logic lives in oauth.rs)
+// ============================================================
+//
+// Secrets NEVER cross IPC: these return only the public GoogleAccount
+// {name,email,picture}. The access_token stays backend-side; the
+// refresh_token lives in the OS keyring (oauth.rs), never a file, never logged.
+// The heavy lifting (PKCE loopback, token exchange/refresh, keyring) is in
+// oauth.rs — no business logic here (TSD §2,§3).
+
+/// Run the Google PKCE loopback sign-in and return the account chip fields.
+#[tauri::command]
+fn google_sign_in() -> Result<oauth::GoogleAccount, String> {
+    oauth::interactive_sign_in()
+}
+
+/// Sign out: delete the keyring refresh_token (idempotent).
+#[tauri::command]
+fn google_sign_out() -> Result<(), String> {
+    oauth::sign_out()
+}
+
+/// Signed-in state on app load; None when no refresh_token is stored.
+#[tauri::command]
+fn google_account() -> Result<Option<oauth::GoogleAccount>, String> {
+    oauth::load_account()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -3265,6 +3301,9 @@ pub fn run() {
             read_settings,
             write_settings,
             read_snippets,
+            google_sign_in,
+            google_sign_out,
+            google_account,
             fleet::fleet_start,
             fleet::fleet_stop
         ])
