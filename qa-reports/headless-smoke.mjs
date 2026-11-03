@@ -535,6 +535,38 @@ await page.locator(".panel.active .sftp-download").click();
 await page.waitForTimeout(300);
 check("download without selection shows hint", (await page.locator(".panel.active .sftp-status").textContent()).includes("Select a file"));
 
+// 9f1-BUG3: native WebView context menu (and its "Reload" item) must be
+// suppressed over the SFTP pane area so an accidental right-click can never
+// reload the SPA and wipe in-memory tab state. (runs while an SFTP tab is open)
+const tabsBeforeRc = await page.locator(".tab").count();
+check("BUG3-FE precondition: tabs open before right-click", tabsBeforeRc >= 1, `tabs=${tabsBeforeRc}`);
+// (a) a contextmenu dispatched on the SFTP list / pane area is preventDefault-ed
+// by the global document-level guard (no native menu path reachable).
+const sftpRcBlocked = await page.evaluate(() => {
+  const target = document.querySelector(".panel.active .sftp-list")
+    || document.querySelector(".panel.active .sftp-pane")
+    || document.querySelector(".panel.active");
+  const ev = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+  target.dispatchEvent(ev);
+  return ev.defaultPrevented;
+});
+check("BUG3-FE AC1: right-click on SFTP pane suppresses native menu (preventDefault)", sftpRcBlocked);
+// a bare right-click on the document body (empty app surface) is also suppressed
+const bodyRcBlocked = await page.evaluate(() => {
+  const ev = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+  document.body.dispatchEvent(ev);
+  return ev.defaultPrevented;
+});
+check("BUG3-FE AC4: right-click on empty app surface suppressed (no reload path)", bodyRcBlocked);
+// (b) regression: the simulated right-click path leaves tab state intact —
+// no app menu spawned on the SFTP pane, tab count unchanged, nothing reloaded.
+await page.waitForTimeout(100);
+const noAppMenuOnSftp = (await page.locator("#tab-menu").count()) === 0 && (await page.locator("#host-menu").count()) === 0;
+check("BUG3-FE: right-click on SFTP pane opens no app menu (native + app both silent)", noAppMenuOnSftp);
+const tabsAfterRc = await page.locator(".tab").count();
+check("BUG3-FE AC2: tab state intact after simulated right-click (no reload, count unchanged)",
+  tabsAfterRc === tabsBeforeRc, `before=${tabsBeforeRc} after=${tabsAfterRc}`);
+
 // 9f2. password-host persistent session: fail-once retry, shared host cache,
 // tab isolation (one sftp session per host serves many tabs)
 sftpFailFirst = true; // first pw-host listing rejects once; retry must recover

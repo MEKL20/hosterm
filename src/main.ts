@@ -2887,6 +2887,23 @@ async function closeTab(tabId: number) {
 // resize active terminal with the window
 window.addEventListener("resize", fitActiveSessions);
 
+// BUG 3 (data-loss guard): the native WebView2 context menu carries a "Reload"
+// item; one accidental click reloads the SPA and wipes every in-memory tab
+// (terminals + SFTP sessions). Suppress the native menu everywhere by
+// preventing the default on a single document-level contextmenu listener. The
+// intentional in-app menus (tab 2464, host-row 1218, terminal paste 2690/2750)
+// register their own contextmenu handlers on the target element; those run in
+// the target phase BEFORE this bubble-phase guard and already call
+// preventDefault + show the app's own #tab-menu/#host-menu, so this guard never
+// swallows them — it only kills the native menu on non-interactive areas (the
+// SFTP pane, empty space). Singleton: registered once at module top level
+// (mirrors the resize singleton above), so it does not leak and is not torn
+// down per-tab. Idempotent re-prevent is harmless for surfaces that already
+// prevented default.
+document.addEventListener("contextmenu", (ev) => {
+  ev.preventDefault();
+});
+
 // ---------- wire up ----------
 window.addEventListener("DOMContentLoaded", () => {
   // sidebar width resizer (drag the divider; width persists in localStorage)
