@@ -26,6 +26,10 @@ sha2 = "=0.10.9"
 base64 = "=0.22.1"
 rand = "=0.8.5"
 tiny_http = "=0.12.0"
+# Zero-knowledge .htbk crypto (BE-CRYPTO, TSD §1 — EXACT pins).
+argon2 = { version = "=0.5.3", features = ["std"] }
+chacha20poly1305 = { version = "=0.10.1", features = ["std"] }
+zeroize = { version = "=1.8.1", features = ["derive"] }
 
 [profile.release]
 codegen-units = 1
