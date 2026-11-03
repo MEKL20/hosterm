@@ -1,4 +1,4 @@
-   Compiling hosterm v0.1.0 (/home/mekl/src/hosterm/src-tauri)
+   Compiling hosterm v0.1.0 (<repo>/src-tauri)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 3.98s
      Running unittests src/lib.rs (target/debug/deps/hosterm_lib-eadd952918d4fcbe)
 

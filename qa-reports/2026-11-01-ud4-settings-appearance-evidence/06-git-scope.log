@@ -16,5 +16,5 @@ M	src/styles.css
 == diff-check ==
 == working status after verify ==
 ?? qa-reports/2026-11-01-ud4-settings-appearance-evidence/
-DIFF_FILE: /home/mekl/src/hosterm/qa-reports/2026-11-01-ud4-settings-appearance-evidence/06-target-u0.diff
+DIFF_FILE: <repo>/qa-reports/2026-11-01-ud4-settings-appearance-evidence/06-target-u0.diff
 EXIT_CODE: 0

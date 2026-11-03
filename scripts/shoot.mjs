@@ -8,7 +8,7 @@ const hosts = [
   { name: "prod-web",     host_name: "203.0.113.10",         user: "deploy",   port: "22",   identity_file: "~/.ssh/id_ed25519", options: [] },
   { name: "staging",      host_name: "staging.example.com",  user: "ubuntu",   port: "2222", identity_file: "",                   options: [] },
   { name: "db-primary",   host_name: "198.51.100.42",        user: "postgres", port: "",     identity_file: "~/.ssh/id_db",       options: [] },
-  { name: "raspberry-pi", host_name: "192.168.1.50",         user: "pi",       port: "",     identity_file: "",                   options: [] },
+  { name: "raspberry-pi", host_name: "203.0.113.50",         user: "pi",       port: "",     identity_file: "",                   options: [] },
 ];
 
 const init = (hostsJson) => {

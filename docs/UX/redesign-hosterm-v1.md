@@ -129,7 +129,7 @@ Sisa arah B yang layak dicuri ke A: command palette bisa jadi wave-2 (tertatap d
 │ ● jumphost││                        │        (drag resize)   │            │
 │ + Add    │└────────────────────────┴────────────────────────┘            │
 │──────────├──────────────────────────────────────────────────────────────┤
-│ Raw cfg  │ mekl@prod-web · auth: key · 3 sesi · ⇅ idle          v0.8.1  │ status bar 24px
+│ Raw cfg  │ demo@prod-web · auth: key · 3 sesi · ⇅ idle          v0.8.1  │ status bar 24px
 └──────────┴──────────────────────────────────────────────────────────────┘
 ```
 

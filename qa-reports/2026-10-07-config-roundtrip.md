@@ -1,7 +1,7 @@
 # QA Report — hosterm ~/.ssh/config round-trip logic
 
 Date: 2026-10-07
-Target: /home/mekl/src/hosterm/src-tauri/src/lib.rs — parse_config / serialize_config / set_opt / get_opt / save_host / delete_host / read_ssh_config / read_config_raw / write_config_raw
+Target: <repo>/src-tauri/src/lib.rs — parse_config / serialize_config / set_opt / get_opt / save_host / delete_host / read_ssh_config / read_config_raw / write_config_raw
 Method: black-box via new #[cfg(test)] module `qa_roundtrip_tests` (30 tests added to src-tauri/src/lib.rs). Backend only.
 Safety: every file-touching test sets HOSTERM_CONFIG to a unique file under std::env::temp_dir(); real ~/.ssh/config never touched. Env races serialized by static ENV_LOCK mutex; tests run with --test-threads=1.
 
@@ -9,7 +9,7 @@ Safety: every file-touching test sets HOSTERM_CONFIG to a unique file under std:
 
 ```
 export PATH="$HOME/.cargo/bin:$PATH"
-cd /home/mekl/src/hosterm/src-tauri && cargo test --lib
+cd <repo>/src-tauri && cargo test --lib
 ```
 
 Result: `test result: FAILED. 25 passed; 5 failed; 0 ignored; 0 measured` (20 pre-existing + 5 added pass-tests; 5 failures are all real bugs, reproduced identically in two consecutive runs — see evidence/repro-twice.txt). Full raw output: evidence/final-full.txt.
@@ -87,4 +87,4 @@ Host staging
 - evidence/repro-twice.txt — two consecutive runs, identical failure set
 - evidence/run3.txt — intermediate run with failure details
 
-Test code: `mod qa_roundtrip_tests` in /home/mekl/src/hosterm/src-tauri/src/lib.rs (test-only; no app logic modified).
+Test code: `mod qa_roundtrip_tests` in <repo>/src-tauri/src/lib.rs (test-only; no app logic modified).

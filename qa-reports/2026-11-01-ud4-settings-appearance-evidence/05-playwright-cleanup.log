@@ -5,6 +5,6 @@ unlink node_modules/.bin/playwright
 unlink node_modules/.bin/playwright-core
 PACKAGE_DIRS_ABSENT: true
 BIN_LINKS_REMAINING: 0
-DEST: /home/mekl/.hermes/profiles/crew-coding-qa/cache/scratch/ud4-playwright-cleanup-
+DEST: <hermes-home>/profiles/crew-coding-qa/cache/scratch/ud4-playwright-cleanup-
 EXIT_CODE: 0
 END: 2026-10-31T18:50:53+00:00
