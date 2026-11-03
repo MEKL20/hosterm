@@ -2983,6 +2983,12 @@ window.addEventListener("DOMContentLoaded", () => {
     document.body.classList.toggle("sb-collapsed", c);
     $("#btn-expand").classList.toggle("hidden", !c);
     try { localStorage.setItem("hosterm.sb-collapsed", c ? "1" : ""); } catch { /* private mode */ }
+    // Collapsing/expanding changes #main's flex width, so the active terminal(s)
+    // must re-fit or xterm keeps stale cols/rows -> blank right margin (BUG-L2)
+    // and a scrollbar hit-area outside the visible column (BUG-L1). Mirror the
+    // proven setSidePanel pattern (setTimeout(fitActiveSessions,0)) so the layout
+    // settles before fit; also covers the startup restore call below (AC4).
+    setTimeout(fitActiveSessions, 0);
   };
   setCollapsed(localStorage.getItem("hosterm.sb-collapsed") === "1");
   $("#btn-collapse").addEventListener("click", () => setCollapsed(true));
