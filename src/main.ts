@@ -1592,7 +1592,10 @@ async function saveRaw() {
 // ---------- sftp browser ----------
 // unlisten: teardown for the window-level drag listener (AbortController, U4
 // invariant) + pending strip fade timers — closeTab must run it (SEC LOW t_fb1d18d6).
-type SftpSession = { host: string; path: string; unlisten: (() => void)[] };
+// loading: initial listing / session establishment still in flight. While true,
+// renderSftp paints a cancellable loading state (skeleton + Cancel) so a slow
+// login never looks frozen; closing the tab mid-load tears down cleanly (AC2).
+type SftpSession = { host: string; path: string; unlisten: (() => void)[]; loading: boolean };
 // Entries cached per host so N tabs on one host share one listing; invalidated
 // on tab close (last tab of that host drops the cache). Rendering re-fetches
 // via the persistent backend session — no extra login per tab or per refresh.
@@ -1619,6 +1622,10 @@ function baseName(p: string): string {
 }
 
 function joinRemote(dir: string, name: string): string {
+  // Belt-and-suspenders: an absolute name is the full target, not a segment to
+  // append (guards against a server emitting a rooted path). The backend
+  // parser normalizes names to basenames, so this is a secondary safeguard.
+  if (name.startsWith("/")) return name;
   const d = dir.replace(/\/+$/, "");
   return d ? `${d}/${name}` : name;
 }
@@ -1647,7 +1654,7 @@ type StatusFn = (m: string, kind?: "" | "ok" | "err") => void;
 async function openSftp(host: string) {
   if (binaryBlocked("sftp")) return;
   const tabId = nextTab++;
-  sftpSessions.set(tabId, { host, path: "", unlisten: [] });
+  sftpSessions.set(tabId, { host, path: "", unlisten: [], loading: true });
   const tab = makeTab(tabId, "sftp", host);
   $("#tab-split-zone").before(tab);
 
@@ -2146,23 +2153,51 @@ async function renderSftp(tabId: number, status: StatusFn) {
   const inp = panel.querySelector(".sftp-path") as HTMLInputElement;
   inp.value = s.path;
   (panel as any).__clearSelIf?.("remote");
+  // BUG1-FE: loading state. The skeleton rows read as "working" immediately;
+  // during the FIRST listing (session establishment / slow login) we also give
+  // the user an explicit way to bail so it never reads as a hang. The Cancel
+  // control is a panel-local button torn down with the panel on closeTab — no
+  // window listener, so no leak (SEC LOW t_fb1d18d6 posture preserved).
   skelRows(list);
+  if (s.loading) {
+    status(`Connecting to ${s.host}…`);
+    const bail = document.createElement("div");
+    bail.className = "list-state sftp-loading";
+    const label = document.createElement("span");
+    label.textContent = "Connecting…";
+    const cancel = document.createElement("button");
+    cancel.className = "sftp-cancel";
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", () => void closeTab(tabId));
+    bail.append(label, cancel);
+    list.appendChild(bail);
+  }
   let entries: SftpEntry[];
   try {
     entries = await invoke<SftpEntry[]>("sftp_list", { host: s.host, path: s.path });
+    // tab closed (Cancel) or session gone while the listing was in flight:
+    // bail before writing the shared cache or a detached DOM node (AC2 — no
+    // orphaned state / no stale cache poisoning).
+    if (sftpSessions.get(tabId) !== s || !panel.isConnected) return;
     sftpHostCache.set(s.host, entries);
   } catch (err) {
+    if (sftpSessions.get(tabId) !== s || !panel.isConnected) return;
     // stale persistent session (server timeout etc.): backend respawns it;
     // one automatic retry before showing the error
     try {
       entries = await invoke<SftpEntry[]>("sftp_list", { host: s.host, path: s.path });
+      if (sftpSessions.get(tabId) !== s || !panel.isConnected) return;
       sftpHostCache.set(s.host, entries);
     } catch (err2) {
+      if (sftpSessions.get(tabId) !== s || !panel.isConnected) return;
+      s.loading = false;
       list.innerHTML = "";
       status(`Failed to list ${s.path || "~"}: ${msg(err2)}. Fix the path and press Go, or go up one level.`, "err");
       return;
     }
   }
+  s.loading = false;
   list.innerHTML = "";
   if (entries.length === 0) {
     list.innerHTML = `<div class="list-state">Empty directory.</div>`;

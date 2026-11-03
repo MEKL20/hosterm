@@ -965,6 +965,13 @@ fn parse_sftp_ls(output: &str) -> Vec<SftpEntry> {
                 name.truncate(idx);
             }
         }
+        // Defensive basename normalization: some servers print names with a
+        // "./" prefix or a full/relative path in `ls -la` output (differs from
+        // the bare-name fixtures). The frontend joins dir + name, so a
+        // path-bearing name produces garbage like `/home//home/ubuntu`. Always
+        // emit the final path segment so the join is correct server-agnostic.
+        let normalized = name.rsplit('/').next().unwrap_or(&name).to_string();
+        name = normalized;
         if name == "." || name == ".." || name.is_empty() {
             continue;
         }
@@ -1303,16 +1310,26 @@ fn target_of(cmdline: &str) -> String {
         .to_string()
 }
 
+// The SFTP commands below are `async` so Tauri releases the IPC thread the
+// instant they're invoked; the blocking PTY work (including sftp_spawn's up-to
+// 30s password-login wait and its timeout/mismatch path) runs on the blocking
+// thread pool via spawn_blocking, so the WebView never freezes. The JS-visible
+// contract (name, args, Result/error strings) is unchanged — async commands
+// serialize to JS identically to sync ones.
 #[tauri::command]
-fn sftp_list(host: String, path: String) -> Result<Vec<SftpEntry>, String> {
-    let dir = if path.trim().is_empty() { ".".to_string() } else { path };
-    sftp_safe(&dir, "Path")?;
-    let script = format!("ls -la {}\n", dir);
-    let output = run_sftp_op(&host, &script);
-    if !output.ok {
-        return Err(format!("sftp ls failed: {}", output.stderr.trim()));
-    }
-    Ok(parse_sftp_ls(&output.stdout))
+async fn sftp_list(host: String, path: String) -> Result<Vec<SftpEntry>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = if path.trim().is_empty() { ".".to_string() } else { path };
+        sftp_safe(&dir, "Path")?;
+        let script = format!("ls -la {}\n", dir);
+        let output = run_sftp_op(&host, &script);
+        if !output.ok {
+            return Err(format!("sftp ls failed: {}", output.stderr.trim()));
+        }
+        Ok(parse_sftp_ls(&output.stdout))
+    })
+    .await
+    .map_err(|e| format!("sftp task failed: {}", e))?
 }
 
 #[tauri::command]
@@ -1365,49 +1382,57 @@ fn local_list(path: String) -> Result<Vec<LocalEntryDto>, String> {
 }
 
 #[tauri::command]
-fn sftp_upload(host: String, local_path: String, remote_path: String) -> Result<(), String> {
-    sftp_safe(&local_path, "Local path")?;
-    sftp_safe(&remote_path, "Remote path")?;
-    let local = PathBuf::from(&local_path);
-    if !local.is_file() {
-        return Err("local file does not exist".into());
-    }
-    // Aliasing guard: batch-mode `put` truncates its own source when the local
-    // and remote paths resolve to the same file (same-machine sftp). Refuse
-    // instead of destroying the file.
-    let canon_local = local.canonicalize().map_err(|e| e.to_string())?;
-    if remote_path == canon_local.display().to_string()
-        || PathBuf::from(&remote_path).canonicalize().map(|p| p == canon_local).unwrap_or(false)
-    {
-        return Err("local and remote path are the same file — refusing to overwrite the source".into());
-    }
-    let script = format!("put \"{}\" \"{}\"\n", local_path, remote_path);
-    let output = run_sftp_op(&host, &script);
-    if !output.ok {
-        return Err(format!("upload failed: {}", output.stderr.trim()));
-    }
-    Ok(())
+async fn sftp_upload(host: String, local_path: String, remote_path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        sftp_safe(&local_path, "Local path")?;
+        sftp_safe(&remote_path, "Remote path")?;
+        let local = PathBuf::from(&local_path);
+        if !local.is_file() {
+            return Err("local file does not exist".into());
+        }
+        // Aliasing guard: batch-mode `put` truncates its own source when the local
+        // and remote paths resolve to the same file (same-machine sftp). Refuse
+        // instead of destroying the file.
+        let canon_local = local.canonicalize().map_err(|e| e.to_string())?;
+        if remote_path == canon_local.display().to_string()
+            || PathBuf::from(&remote_path).canonicalize().map(|p| p == canon_local).unwrap_or(false)
+        {
+            return Err("local and remote path are the same file — refusing to overwrite the source".into());
+        }
+        let script = format!("put \"{}\" \"{}\"\n", local_path, remote_path);
+        let output = run_sftp_op(&host, &script);
+        if !output.ok {
+            return Err(format!("upload failed: {}", output.stderr.trim()));
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("sftp task failed: {}", e))?
 }
 
 #[tauri::command]
-fn sftp_download(host: String, remote_path: String, local_path: String) -> Result<(), String> {
-    sftp_safe(&remote_path, "Remote path")?;
-    sftp_safe(&local_path, "Local path")?;
-    // Aliasing guard (see sftp_upload): `get` would truncate the remote source.
-    if let Ok(canon_local) = PathBuf::from(&local_path).canonicalize() {
-        if remote_path == canon_local.display().to_string() {
-            return Err("local and remote path are the same file — refusing to overwrite the source".into());
+async fn sftp_download(host: String, remote_path: String, local_path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        sftp_safe(&remote_path, "Remote path")?;
+        sftp_safe(&local_path, "Local path")?;
+        // Aliasing guard (see sftp_upload): `get` would truncate the remote source.
+        if let Ok(canon_local) = PathBuf::from(&local_path).canonicalize() {
+            if remote_path == canon_local.display().to_string() {
+                return Err("local and remote path are the same file — refusing to overwrite the source".into());
+            }
         }
-    }
-    let script = format!("get \"{}\" \"{}\"\n", remote_path, local_path);
-    let output = run_sftp_op(&host, &script);
-    if !output.ok {
-        return Err(format!("download failed: {}", output.stderr.trim()));
-    }
-    if !PathBuf::from(&local_path).exists() {
-        return Err("download reported success but local file is missing".into());
-    }
-    Ok(())
+        let script = format!("get \"{}\" \"{}\"\n", remote_path, local_path);
+        let output = run_sftp_op(&host, &script);
+        if !output.ok {
+            return Err(format!("download failed: {}", output.stderr.trim()));
+        }
+        if !PathBuf::from(&local_path).exists() {
+            return Err("download reported success but local file is missing".into());
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("sftp task failed: {}", e))?
 }
 
 // ---------- remote file editor (text over sftp) ----------
@@ -1424,48 +1449,56 @@ fn editor_temp(tag: &str) -> PathBuf {
 }
 
 #[tauri::command]
-fn sftp_read_file(host: String, remote_path: String) -> Result<String, String> {
-    sftp_safe(&remote_path, "Remote path")?;
-    let tmp = editor_temp("get");
-    let script = format!("get \"{}\" \"{}\"\n", remote_path, tmp.display());
-    let output = run_sftp_op(&host, &script);
-    if !output.ok {
+async fn sftp_read_file(host: String, remote_path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        sftp_safe(&remote_path, "Remote path")?;
+        let tmp = editor_temp("get");
+        let script = format!("get \"{}\" \"{}\"\n", remote_path, tmp.display());
+        let output = run_sftp_op(&host, &script);
+        if !output.ok {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(format!("read failed: {}", output.stderr.trim()));
+        }
+        let meta = std::fs::metadata(&tmp).map_err(|e| format!("downloaded file missing: {}", e))?;
+        if meta.len() > EDITOR_MAX_BYTES {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(format!(
+                "file is {} bytes; text editor limit is {} bytes (use SFTP download instead)",
+                meta.len(),
+                EDITOR_MAX_BYTES
+            ));
+        }
+        let bytes = std::fs::read(&tmp).map_err(|e| e.to_string());
         let _ = std::fs::remove_file(&tmp);
-        return Err(format!("read failed: {}", output.stderr.trim()));
-    }
-    let meta = std::fs::metadata(&tmp).map_err(|e| format!("downloaded file missing: {}", e))?;
-    if meta.len() > EDITOR_MAX_BYTES {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(format!(
-            "file is {} bytes; text editor limit is {} bytes (use SFTP download instead)",
-            meta.len(),
-            EDITOR_MAX_BYTES
-        ));
-    }
-    let bytes = std::fs::read(&tmp).map_err(|e| e.to_string());
-    let _ = std::fs::remove_file(&tmp);
-    let bytes = bytes?;
-    if bytes.contains(&0) {
-        return Err("file looks binary — open it via SFTP download instead".into());
-    }
-    Ok(String::from_utf8_lossy(&bytes).to_string())
+        let bytes = bytes?;
+        if bytes.contains(&0) {
+            return Err("file looks binary — open it via SFTP download instead".into());
+        }
+        Ok(String::from_utf8_lossy(&bytes).to_string())
+    })
+    .await
+    .map_err(|e| format!("sftp task failed: {}", e))?
 }
 
 #[tauri::command]
-fn sftp_write_file(host: String, remote_path: String, content: String) -> Result<(), String> {
-    sftp_safe(&remote_path, "Remote path")?;
-    if content.len() as u64 > EDITOR_MAX_BYTES {
-        return Err("content exceeds the text editor size limit".into());
-    }
-    let tmp = editor_temp("put");
-    std::fs::write(&tmp, content.as_bytes()).map_err(|e| e.to_string())?;
-    let script = format!("put \"{}\" \"{}\"\n", tmp.display(), remote_path);
-    let result = run_sftp_op(&host, &script);
-    let _ = std::fs::remove_file(&tmp);
-    if !result.ok {
-        return Err(format!("write failed: {}", result.stderr.trim()));
-    }
-    Ok(())
+async fn sftp_write_file(host: String, remote_path: String, content: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        sftp_safe(&remote_path, "Remote path")?;
+        if content.len() as u64 > EDITOR_MAX_BYTES {
+            return Err("content exceeds the text editor size limit".into());
+        }
+        let tmp = editor_temp("put");
+        std::fs::write(&tmp, content.as_bytes()).map_err(|e| e.to_string())?;
+        let script = format!("put \"{}\" \"{}\"\n", tmp.display(), remote_path);
+        let result = run_sftp_op(&host, &script);
+        let _ = std::fs::remove_file(&tmp);
+        if !result.ok {
+            return Err(format!("write failed: {}", result.stderr.trim()));
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("sftp task failed: {}", e))?
 }
 
 // ============================================================
@@ -2981,16 +3014,21 @@ mod sftp_tests {
         std::fs::write(&local, "hosterm live sftp test\n").unwrap();
         let remote = format!("{}/landed.txt", dir.display());
 
-        // upload -> list shows it -> download to a new path -> contents match
-        sftp_upload("testbox".into(), local.display().to_string(), remote.clone()).unwrap();
-        let entries = sftp_list("testbox".into(), dir.display().to_string()).unwrap();
+        // upload -> list shows it -> download to a new path -> contents match.
+        // The sftp_* commands are async (spawn_blocking off the IPC thread);
+        // drive them from this sync test with the Tauri async runtime — no new
+        // dependency, and it proves the async command resolves to the same
+        // Result the frontend sees.
+        use tauri::async_runtime::block_on;
+        block_on(sftp_upload("testbox".into(), local.display().to_string(), remote.clone())).unwrap();
+        let entries = block_on(sftp_list("testbox".into(), dir.display().to_string())).unwrap();
         assert!(
             entries.iter().any(|e| e.name == "landed.txt" && !e.is_dir),
             "uploaded file must appear in listing: {:?}",
             entries.iter().map(|e| &e.name).collect::<Vec<_>>()
         );
         let back = dir.join("came_back.txt");
-        sftp_download("testbox".into(), remote, back.display().to_string()).unwrap();
+        block_on(sftp_download("testbox".into(), remote, back.display().to_string())).unwrap();
         assert_eq!(
             std::fs::read_to_string(&back).unwrap(),
             "hosterm live sftp test\n"
@@ -2998,18 +3036,18 @@ mod sftp_tests {
 
         // editor roundtrip: read -> write -> read-back
         let txt_path = format!("{}/editor.txt", dir.display());
-        sftp_write_file("testbox".into(), txt_path.clone(), "hello editor\nline two\n".into()).unwrap();
+        block_on(sftp_write_file("testbox".into(), txt_path.clone(), "hello editor\nline two\n".into())).unwrap();
         assert_eq!(
-            sftp_read_file("testbox".into(), txt_path.clone()).unwrap(),
+            block_on(sftp_read_file("testbox".into(), txt_path.clone())).unwrap(),
             "hello editor\nline two\n"
         );
         // binary guard: NUL byte in an uploaded file must be refused by the editor
         let bin_local = dir.join("bin.dat");
         std::fs::write(&bin_local, [0x68, 0x00, 0x69]).unwrap();
         let bin_remote = format!("{}/uploaded_bin.dat", dir.display());
-        sftp_upload("testbox".into(), bin_local.display().to_string(), bin_remote.clone()).unwrap();
+        block_on(sftp_upload("testbox".into(), bin_local.display().to_string(), bin_remote.clone())).unwrap();
         assert!(
-            sftp_read_file("testbox".into(), bin_remote).is_err(),
+            block_on(sftp_read_file("testbox".into(), bin_remote)).is_err(),
             "binary must be refused"
         );
 
@@ -3017,9 +3055,9 @@ mod sftp_tests {
         let alias_local = dir.join("alias_me.txt");
         std::fs::write(&alias_local, "precious\n").unwrap();
         let alias_remote = alias_local.display().to_string();
-        assert!(sftp_upload("testbox".into(), alias_remote.clone(), alias_remote.clone()).is_err());
+        assert!(block_on(sftp_upload("testbox".into(), alias_remote.clone(), alias_remote.clone())).is_err());
         assert_eq!(std::fs::read_to_string(&alias_local).unwrap(), "precious\n");
-        assert!(sftp_download("testbox".into(), alias_remote.clone(), alias_remote).is_err());
+        assert!(block_on(sftp_download("testbox".into(), alias_remote.clone(), alias_remote)).is_err());
         assert_eq!(std::fs::read_to_string(&alias_local).unwrap(), "precious\n");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3048,6 +3086,37 @@ lrwxrwxrwx    1 user user       11 Oct  7 10:03 link -> notes.txt\n";
         let e = parse_sftp_ls(out);
         assert_eq!(e.len(), 1);
         assert_eq!(e[0].name, "my file.txt");
+    }
+
+    #[test]
+    fn parse_ls_dotslash_prefixed_names_yield_basenames() {
+        // BUG2: some servers print "./name" in `ls -la` output. The frontend
+        // joins dir + name, so a "./" prefix produced /home//home/ubuntu-style
+        // garbage. Parser must strip it and emit a bare basename.
+        let out = "sftp> ls -la .\n\
+total 8\n\
+drwxr-xr-x    3 root root     4096 Oct  1 09:00 ./.\n\
+drwxr-xr-x    3 root root     4096 Oct  1 09:00 ./..\n\
+drwxr-xr-x    2 user user     4096 Oct  7 10:02 ./ubuntu\n\
+-rw-r--r--    1 user user      142 Oct  7 10:01 ./notes.txt\n";
+        let e = parse_sftp_ls(out);
+        let names: Vec<&str> = e.iter().map(|x| x.name.as_str()).collect();
+        assert_eq!(names, vec!["ubuntu", "notes.txt"]);
+        assert!(e[0].is_dir);
+    }
+
+    #[test]
+    fn parse_ls_path_prefixed_names_yield_basenames() {
+        // Harder variant: a server prints a full/relative path as the name.
+        // Parser must still emit the final segment, not the whole path.
+        let out = "drwxr-xr-x    2 user user     4096 Oct  7 10:02 /home/ubuntu\n\
+-rw-r--r--    1 user user      142 Oct  7 10:01 some/dir/file.txt\n\
+lrwxrwxrwx    1 user user       11 Oct  7 10:03 ./link -> /tmp/target\n";
+        let e = parse_sftp_ls(out);
+        let names: Vec<&str> = e.iter().map(|x| x.name.as_str()).collect();
+        assert_eq!(names, vec!["ubuntu", "file.txt", "link"]);
+        assert!(e[0].is_dir);
+        assert!(e[2].is_link && e[2].name == "link");
     }
 
     #[test]

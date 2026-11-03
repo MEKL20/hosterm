@@ -518,6 +518,18 @@ check("sftp single-click selects", (await page.locator(".panel.active .loc-list 
 await page.locator(".panel.active .loc-list .sftp-row").nth(1).dblclick();
 await page.waitForTimeout(400);
 check("sftp double-click navigates local dir", (await page.locator(".panel.active .loc-path").inputValue()).endsWith("/sub"));
+// BUG2: double-click a remote dir -> joined path is single-slash, no "./" prefix,
+// no doubled base. The backend parser normalizes names to basenames; this asserts
+// the frontend join produces a clean remote path in the sftp_list call args.
+const beforeNav = calls.filter((c) => c.cmd === "sftp_list").length;
+await page.locator(".panel.active .sftp-list .sftp-row", { hasText: "projects" }).first().dblclick();
+await page.waitForTimeout(400);
+const navCalls = calls.filter((c) => c.cmd === "sftp_list");
+const navPath = String(navCalls[navCalls.length - 1]?.args?.path ?? "");
+check("sftp nav path: no double slash", !navPath.includes("//"), navPath);
+check("sftp nav path: no ./ prefix or segment", !navPath.includes("./"), navPath);
+check("sftp nav path: ends with basename projects", navPath.endsWith("projects"), navPath);
+check("sftp nav issued a listing", navCalls.length > beforeNav);
 // download button guards when nothing selected in remote
 await page.locator(".panel.active .sftp-download").click();
 await page.waitForTimeout(300);
@@ -1295,6 +1307,77 @@ check("U6: listeners released after U6 tab lifecycle (AbortController, live==0)"
   sigAfterU6.live === 0 && sigAfterU6.n > sigAfterU5.n, JSON.stringify(sigAfterU6));
 // U9 hygiene (SEC INFO-3): global list delay must be back to 0 after U6
 check("U6: delayList reset to 0 (later checks assume instant listings)", delayList === 0, `delayList=${delayList}`);
+
+// ---- BUG1-FE cancellable SFTP loading state (openSftp; AC1/AC2/AC3) ----
+// A slow/failing SFTP login must never read as a frozen UI: opening a host
+// shows a loading state IMMEDIATELY (skeleton + a Cancel control) BEFORE the
+// first listing resolves, and the user can cancel/close the tab mid-load with
+// no leaked window listener and no orphaned cache write (renderSftp bails when
+// the session/panel is gone after the await). Reuses delayList to hold the
+// first sftp_list in flight.
+const b1SigBase = sigAfterU6.live; // 0 — all U6 listeners released
+const b1Errs0 = errors.length;
+delayList = 600; // keep the first listing in flight long enough to observe loading
+await page.locator(".host-item .h-sftp").first().click();
+await page.waitForTimeout(150); // mid-load: listing still pending
+const b1Mid = await page.evaluate(() => {
+  const list = document.querySelector(".panel.active .sftp-list");
+  const cancel = list.querySelector(".sftp-cancel");
+  const st = document.querySelector(".panel.active .sftp-status");
+  return {
+    skels: list.querySelectorAll(".skel").length,
+    rows: list.querySelectorAll(".sftp-row").length,
+    spinners: list.querySelectorAll(".spinner").length,
+    hasCancel: !!cancel,
+    cancelText: cancel ? cancel.textContent : null,
+    loadingText: list.querySelector(".sftp-loading span")?.textContent ?? null,
+    status: st ? st.textContent : null,
+  };
+});
+check("BUG1-FE AC1: SFTP open shows loading immediately — 3 skeleton rows, 0 list rows, 0 spinner",
+  b1Mid.skels === 3 && b1Mid.rows === 0 && b1Mid.spinners === 0, JSON.stringify(b1Mid));
+check("BUG1-FE AC1: in-flight load exposes a Cancel control + Connecting status",
+  b1Mid.hasCancel && b1Mid.cancelText === "Cancel" && b1Mid.loadingText === "Connecting…" &&
+  /^Connecting to .+…$/.test(b1Mid.status || ""), JSON.stringify(b1Mid));
+// (AC2) cancel/close WHILE the attempt is in flight: tears down listeners (no
+// leak), drops the session, and the delayed listing that resolves afterwards
+// must NOT poison the shared cache or throw against the detached panel.
+const b1TabsBefore = await page.locator(".tab").count();
+await page.locator(".panel.active .sftp-cancel").click();
+await page.waitForTimeout(100);
+const b1AfterCancel = await page.evaluate(() => ({
+  tabs: document.querySelectorAll(".tab").length,
+  loadingPanels: document.querySelectorAll(".sftp-loading").length,
+}));
+check("BUG1-FE AC2: Cancel mid-load closes the SFTP tab (one fewer tab, no loading panel left)",
+  b1AfterCancel.tabs === b1TabsBefore - 1 && b1AfterCancel.loadingPanels === 0,
+  JSON.stringify({ ...b1AfterCancel, before: b1TabsBefore }));
+// let the still-pending delayed sftp_list resolve into the void (tab is gone)
+await page.waitForTimeout(700);
+delayList = 0;
+const b1SigAfter = await page.evaluate(() => ({
+  n: window.__sigList.length,
+  live: window.__sigList.filter((e) => !e.sig.aborted).length,
+}));
+check("BUG1-FE AC2: cancel tears down window listeners (live count back to baseline, AbortController)",
+  b1SigAfter.live === b1SigBase && b1SigAfter.n > sigAfterU6.n, JSON.stringify({ ...b1SigAfter, base: b1SigBase }));
+check("BUG1-FE AC2: late-resolving listing after cancel throws no console/page error",
+  errors.length === b1Errs0, errors.slice(b1Errs0).slice(0, 3).join(" | "));
+// (AC3) no regression: a fresh open with no delay still reaches the normal
+// listing (loading state clears, real rows render, no Cancel lingering).
+await page.locator(".host-item .h-sftp").first().click();
+await page.locator(".panel.active .sftp-list .sftp-row").first().waitFor({ timeout: 5000 });
+const b1Normal = await page.evaluate(() => {
+  const list = document.querySelector(".panel.active .sftp-list");
+  return { rows: list.querySelectorAll(".sftp-row").length, cancels: list.querySelectorAll(".sftp-cancel").length, skels: list.querySelectorAll(".skel").length };
+});
+check("BUG1-FE AC3: instant open renders the listing and clears the loading/Cancel state",
+  b1Normal.rows > 0 && b1Normal.cancels === 0 && b1Normal.skels === 0, JSON.stringify(b1Normal));
+// close the BUG1-FE tab so the suite ends as it started
+await page.locator(".tab .x").first().click();
+await page.waitForTimeout(300);
+const b1SigEnd = await page.evaluate(() => window.__sigList.filter((e) => !e.sig.aborted).length);
+check("BUG1-FE: listeners released after full lifecycle (live==0)", b1SigEnd === 0, `live=${b1SigEnd}`);
 
 // ---- U7 editor: panel-level Ctrl+S + ed-bar dirty (EPIC-TSD §U7; redesign §1.5 E1–E2, §4.5) ----
 await page.locator(".host-item .h-sftp").first().click();
