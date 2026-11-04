@@ -206,8 +206,12 @@ body.sb-collapsed #sidebar > :not(#btn-expand) { display: none; }
   display: flex; gap: 8px; align-items: center;
   margin-bottom: 8px;
 }
-.sidebar-foot #btn-raw { flex: 1; }
-.sidebar-foot #btn-reload, .sidebar-foot #open-settings { width: 26px; height: 26px; }
+/* Text buttons (Raw config / Keys / Local) share the row and may shrink so the
+   foot never overflows the sidebar width and pushes #open-settings out of view. */
+.sidebar-foot #btn-raw,
+.sidebar-foot #btn-keys,
+.sidebar-foot #btn-local { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sidebar-foot #btn-reload, .sidebar-foot #open-settings { flex: 0 0 auto; width: 26px; height: 26px; }
 .user-chip {
   width: 100%; min-width: 0;
   display: flex; align-items: center; gap: 8px;

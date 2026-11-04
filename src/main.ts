@@ -185,6 +185,8 @@ interface Session {
   fit: FitAddon;
   banner?: HTMLElement;
   unlisten: UnlistenFn[];
+  // true = local shell (local_pty_spawn) rather than an ssh session to `host`.
+  local?: boolean;
 }
 const sessions = new Map<number, Session>();
 // second terminals created by Split (keyed by their tab)
@@ -3023,8 +3025,10 @@ async function splitTerminal(targetTabId: number, sourceTabId: number) {
   await startPty(split_session);
 }
 
-async function openTerminal(host: string): Promise<Session | null> {
-  if (binaryBlocked("ssh")) return null;
+async function openTerminal(host: string, opts: { local?: boolean } = {}): Promise<Session | null> {
+  const isLocal = opts.local === true;
+  // Local shell never needs ssh; only guard the remote path on a missing binary.
+  if (!isLocal && binaryBlocked("ssh")) return null;
   const tabId = nextTab++;
   const term = new Terminal({
     cursorBlink: !REDUCED_MOTION,
@@ -3035,7 +3039,7 @@ async function openTerminal(host: string): Promise<Session | null> {
   const fit = new FitAddon();
   term.loadAddon(fit);
 
-  const tab = makeTab(tabId, "terminal", host);
+  const tab = makeTab(tabId, "terminal", isLocal ? "local" : host);
   $("#tab-split-zone").before(tab);
 
   // panel
@@ -3048,7 +3052,9 @@ async function openTerminal(host: string): Promise<Session | null> {
   panel.appendChild(host_el);
   const banner = document.createElement("div");
   banner.className = "term-banner";
-  banner.innerHTML = `<span class="spinner"></span>Connecting to ${esc(host)}…`;
+  banner.innerHTML = isLocal
+    ? `<span class="spinner"></span>Starting local shell…`
+    : `<span class="spinner"></span>Connecting to ${esc(host)}…`;
   panel.appendChild(banner);
   $("#panels").appendChild(panel);
 
@@ -3079,7 +3085,7 @@ async function openTerminal(host: string): Promise<Session | null> {
       .catch(() => {});
   });
 
-  const session: Session = { id: tabId, ptyId: null, host, term, fit, banner, unlisten: [] };
+  const session: Session = { id: tabId, ptyId: null, host, term, fit, banner, unlisten: [], local: isLocal };
   sessions.set(tabId, session);
   activateTab(tabId);
 
@@ -3098,7 +3104,9 @@ async function startPty(session: Session) {
     session.fit.fit();
     const cols = session.term.cols;
     const rows = session.term.rows;
-    const ptyId = await invoke<number>("pty_spawn", { host: session.host, cols, rows });
+    const ptyId = session.local
+      ? await invoke<number>("local_pty_spawn", { cols, rows })
+      : await invoke<number>("pty_spawn", { host: session.host, cols, rows });
     session.ptyId = ptyId;
     refreshHostDots();
 
@@ -3115,7 +3123,7 @@ async function startPty(session: Session) {
     session.unlisten.push(u1, u2);
   } catch (e) {
     session.banner?.remove();
-    session.term.write(`\\r\\n\\x1b[31mFailed to start ssh: ${msg(e)}. Fix the host and reopen the tab.\\x1b[0m\\r\\n`)
+    session.term.write(`\\r\\n\\x1b[31mFailed to start ${session.local ? "local shell" : "ssh"}: ${msg(e)}. ${session.local ? "Reopen the tab to retry." : "Fix the host and reopen the tab."}\\x1b[0m\\r\\n`)
   }
 }
 
@@ -3331,6 +3339,8 @@ window.addEventListener("DOMContentLoaded", () => {
   $("#k-cancel").addEventListener("click", closeKey);
   $("#k-save").addEventListener("click", saveKey);
   $("#btn-keys").addEventListener("click", openKeysModal);
+  // Local terminal (Termius-style): open a PTY on the OS default shell.
+  $("#btn-local").addEventListener("click", () => { void openTerminal("local", { local: true }); });
   $("#keys-close").addEventListener("click", closeKeys);
   $("#keys-add").addEventListener("click", () => { keyModalReturnsToKeys = true; openKeyModal(); });
   // OpenSSH guide (FR-W2-2)

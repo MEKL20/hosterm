@@ -1661,6 +1661,93 @@ fn pty_spawn(
     Ok(id)
 }
 
+/// Default interactive login shell for the current OS. A local terminal spawns
+/// this shell DIRECTLY as a PTY child (like pty_spawn does for `ssh`); no user
+/// string is ever interpolated into `sh -c`/`cmd /C`, so this adds no local
+/// command-injection surface (INV-14 governs the fleet command path, not an
+/// interactive PTY shell the user types into).
+fn default_local_shell() -> String {
+    // Explicit override wins, for tests and power users.
+    if let Ok(s) = std::env::var("HOSTERM_LOCAL_SHELL") {
+        if !s.is_empty() {
+            return s;
+        }
+    }
+    #[cfg(windows)]
+    {
+        // Prefer PowerShell if present, else fall back to cmd via COMSPEC.
+        std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
+    }
+}
+
+/// Spawn the OS default shell as a local interactive PTY (Termius-style local
+/// terminal). Mirrors pty_spawn but runs a local shell instead of `ssh`, with
+/// no host and no password auto-fill.
+#[tauri::command]
+fn local_pty_spawn(
+    app: AppHandle,
+    state: State<PtyState>,
+    cols: u16,
+    rows: u16,
+) -> Result<u32, String> {
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| e.to_string())?;
+
+    let shell = default_local_shell();
+    let mut cmd = CommandBuilder::new(&shell);
+    // Start the shell in the user's home directory, like a fresh terminal.
+    if let Some(home) = std::env::var("USERPROFILE")
+        .ok()
+        .or_else(|| std::env::var("HOME").ok())
+    {
+        if !home.is_empty() {
+            cmd.cwd(home);
+        }
+    }
+
+    let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+    drop(pair.slave);
+
+    let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
+    let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+
+    let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+    let writer = Arc::new(Mutex::new(writer));
+
+    let app_r = app.clone();
+    let w_inject = writer.clone();
+    thread::spawn(move || {
+        // No password auto-fill for a local shell.
+        pump_pty(reader, w_inject, None, |s| {
+            let _ = app_r.emit(&format!("pty://output/{}", id), s.to_string());
+        });
+        let _ = app_r.emit(&format!("pty://exit/{}", id), ());
+    });
+
+    state
+        .sessions
+        .lock()
+        .unwrap()
+        .insert(id, PtySession { master: pair.master, writer });
+
+    thread::spawn(move || {
+        let _ = child.wait();
+    });
+
+    Ok(id)
+}
+
 #[tauri::command]
 fn pty_write(state: State<PtyState>, id: u32, data: String) -> Result<(), String> {
     let map = state.sessions.lock().unwrap();
@@ -2269,6 +2356,29 @@ mod auth_key_tests {
             auth_method: method.into(),
             password: "".into(),
         }
+    }
+
+    // Local-terminal shell resolution (INV-27): explicit override wins, else the
+    // OS default. A plain shell name — never a user string joined into sh -c.
+    #[test]
+    fn default_local_shell_honors_override_then_os_default() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // explicit override wins
+        std::env::set_var("HOSTERM_LOCAL_SHELL", "/opt/weird/fish");
+        assert_eq!(default_local_shell(), "/opt/weird/fish");
+        // empty override is ignored -> OS default
+        std::env::set_var("HOSTERM_LOCAL_SHELL", "");
+        let d = default_local_shell();
+        std::env::remove_var("HOSTERM_LOCAL_SHELL");
+        #[cfg(windows)]
+        assert!(
+            d.to_lowercase().ends_with("cmd.exe") || d.to_lowercase().contains("powershell") || d.to_lowercase().contains("\\"),
+            "windows default shell looked wrong: {d}"
+        );
+        #[cfg(not(windows))]
+        assert!(d.starts_with('/'), "unix default shell should be an absolute path: {d}");
+        // the resolved value is a bare program path, never a shell -c invocation
+        assert!(!d.contains("-c"), "local shell must not be an -c command string: {d}");
     }
 
     #[test]
@@ -3390,6 +3500,7 @@ pub fn run() {
             sftp_read_file,
             sftp_write_file,
             pty_spawn,
+            local_pty_spawn,
             pty_write,
             pty_resize,
             pty_kill,

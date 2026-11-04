@@ -50,6 +50,7 @@ Founding technical principle (product-visible): hosterm spawns the OS's **real `
 | UC8 | Operator sees the app in the Abyss Emerald theme: single-line grouped sidebar, kind-colored tabs, terminal well + status bar, SFTP transfer strip | Full UI (redesign Arus) | **Shipped v0.11.0 — visual identity SUPERSEDED by Dusk (UC10)** |
 | UC9 | Operator clicks "Check for updates"; the app verifies the downloaded installer against a baked minisign key before installing | Update flow (wave 2 M3) | Speced (docs/archive/FEATURE-SPEC-wave-2-draft.md §4/B) |
 | UC10 | Operator sees the app in the warm "Dusk" theme; opens Settings → Appearance to pick a preset (Dusk/Slate/Ink/Light) or a custom accent with live preview; uses the AI assistant that proposes a command and only runs it after explicit approval (Run once / Always allow exact-command / Reject); copies from the snippet cheatsheet; signs in with Google | Full UI (redesign Dusk) + Settings + Google login + Snippets + AI approval | Speced (docs/FEATURE-SPEC-redesign-dusk-v1.md) |
+| UC11 | Operator opens a LOCAL shell tab (Termius-style) — the OS default shell (PowerShell/cmd on Windows, `$SHELL` on macOS/Linux) in a PTY, no SSH — to run local commands beside the remote host tabs in the same window | Sidebar "Local" button → terminal tab | Shipped |
 
 ---
 
@@ -153,6 +154,19 @@ helper that never runs anything without my say-so, so that the tool feels its ow
 - WHEN the Dusk UI renders THE SYSTEM SHALL meet WCAG AA on all normal text (prototype-verified, NFR-DK1) and
   respect `prefers-reduced-motion` (NFR-DK5).
 
+### US-12: Local terminal (Termius-style local shell) (SSH operator)
+As an operator I want to open a shell on my OWN machine inside hosterm, beside the remote tabs, so that I can
+run local commands without leaving the app or opening a separate terminal.
+- WHEN the operator clicks the sidebar "Local" button THE SYSTEM SHALL open a terminal tab running the OS
+  default shell (Windows: `%COMSPEC%`/cmd or PowerShell; macOS/Linux: `$SHELL`, fallback `/bin/bash`) in a PTY,
+  started in the user's home directory (FR-LT1).
+- WHEN a local shell is spawned THE SYSTEM SHALL spawn the shell program DIRECTLY as a PTY child and SHALL NOT
+  interpolate any user string into `sh -c`/`bash -c`/`cmd /C` (INV-27; same posture class as INV-14 for fleet).
+- WHEN a local shell tab is open THE SYSTEM SHALL label the tab "local", never auto-fill a password, and never
+  touch `~/.ssh/config` (FR-LT2).
+- WHEN the environment variable `HOSTERM_LOCAL_SHELL` is set THE SYSTEM SHALL use it verbatim as the shell
+  program, overriding the OS default (FR-LT3, for tests/power users).
+
 ---
 
 ## 4. Functional Requirements
@@ -169,6 +183,9 @@ helper that never runs anything without my say-so, so that the tool feels its ow
 | FR-B1 | WHEN a host is clicked THE SYSTEM SHALL open an embedded xterm.js tab; ≥ 3 concurrent tabs supported in smoke | must |
 | FR-B2 | WHEN a terminal spawns THE SYSTEM SHALL exec the OS's real `ssh` binary in a PTY (portable-pty); config directives honored | must |
 | FR-B3 | WHEN text is pasted into a PTY THE SYSTEM SHALL normalize CRLF→LF (`pasteNormalize`) | must |
+| FR-LT1 | WHEN the "Local" button is clicked THE SYSTEM SHALL open a terminal tab running the OS default shell (`%COMSPEC%`/cmd or PowerShell on Windows; `$SHELL`, fallback `/bin/bash` on macOS/Linux) in a PTY, cwd = home | must (shipped) |
+| FR-LT2 | WHEN a local shell spawns THE SYSTEM SHALL exec the shell program DIRECTLY as a PTY child, never via `sh -c`/`cmd /C` with a user string (INV-27), label the tab "local", and touch no `~/.ssh/config` or password sidecar | must (shipped) |
+| FR-LT3 | WHEN `HOSTERM_LOCAL_SHELL` is set THE SYSTEM SHALL use it verbatim as the shell program (override for tests/power users) | should (shipped) |
 | FR-C1 | WHEN a SFTP tab opens THE SYSTEM SHALL render directory listings via the real `sftp` binary | must |
 | FR-C2 | WHEN a transfer runs on key/agent auth THE SYSTEM SHALL use batch `sftp -b -` | must |
 | FR-C3 | WHEN drag/copy interactions occur THE SYSTEM SHALL use manual mouse events only (`draggable` grep = 0 in `src/`) | must |
