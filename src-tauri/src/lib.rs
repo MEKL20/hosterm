@@ -872,6 +872,66 @@ fn read_snippets() -> Vec<SnippetGroup> {
     serde_json::from_str::<Vec<SnippetGroup>>(SNIPPETS_DEFAULT_JSON).unwrap_or_default()
 }
 
+/// A user-created snippet (CRUD). Unlike the bundled set (read-only, ADR-19),
+/// these live in an app-data JSON file and can be added/edited/deleted. `id` is
+/// a backend-assigned stable key so edit/delete target one row unambiguously.
+#[derive(Serialize, Deserialize, Clone)]
+struct UserSnippet {
+    id: String,
+    name: String,
+    command: String,
+    #[serde(default)]
+    category: String,
+}
+
+fn user_snippets_path() -> PathBuf {
+    data_dir().join("snippets.user.json")
+}
+
+/// Read the user's CRUD snippet store. NEVER throws: a missing or corrupt file
+/// yields an empty list (same posture as read_settings). This path never reads
+/// ~/.ssh/config or the secrets sidecar (INV-22).
+#[tauri::command]
+fn read_user_snippets() -> Vec<UserSnippet> {
+    match std::fs::read_to_string(user_snippets_path()) {
+        Ok(s) => serde_json::from_str::<Vec<UserSnippet>>(&s).unwrap_or_default(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Persist the full user snippet list atomically. Validates each row
+/// (name + command non-empty after trim) and backend-assigns an id to any row
+/// that arrives without one, so the frontend can send a new row with id="".
+#[tauri::command]
+fn write_user_snippets(snippets: Vec<UserSnippet>) -> Result<(), String> {
+    let mut out: Vec<UserSnippet> = Vec::with_capacity(snippets.len());
+    for s in snippets {
+        if s.name.trim().is_empty() {
+            return Err("snippets:empty-name".into());
+        }
+        if s.command.trim().is_empty() {
+            return Err("snippets:empty-command".into());
+        }
+        let id = if s.id.trim().is_empty() {
+            format!("us-{}", now_rfc3339_utc().replace([':', '.', '-'], "") )
+                + &format!("-{}", out.len())
+        } else {
+            s.id
+        };
+        out.push(UserSnippet {
+            id,
+            name: s.name.trim().to_string(),
+            command: s.command.trim().to_string(),
+            category: {
+                let c = s.category.trim();
+                if c.is_empty() { "Custom".to_string() } else { c.to_string() }
+            },
+        });
+    }
+    let body = serde_json::to_string_pretty(&out).map_err(|_| "snippets:write-failed".to_string())?;
+    write_store_atomic(&user_snippets_path(), &body).map_err(|_| "snippets:write-failed".to_string())
+}
+
 /// Atomic whole-file write for the store (sibling temp → rename), 0600-class
 /// where the OS supports it. Same discipline as write_config_file but scoped to
 /// the app-data dir so it can never be confused with the ssh config path.
@@ -1681,6 +1741,24 @@ fn default_local_shell() -> String {
     #[cfg(not(windows))]
     {
         std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
+    }
+}
+
+/// Info for the Settings → General pane: which shell a local terminal will
+/// launch, and whether an explicit HOSTERM_LOCAL_SHELL override is in effect.
+/// Read-only; the override is an env var, not a persisted setting.
+#[derive(Serialize)]
+struct LocalShellInfo {
+    shell: String,
+    overridden: bool,
+}
+
+#[tauri::command]
+fn local_shell_info() -> LocalShellInfo {
+    let overridden = std::env::var("HOSTERM_LOCAL_SHELL").map(|s| !s.is_empty()).unwrap_or(false);
+    LocalShellInfo {
+        shell: default_local_shell(),
+        overridden,
     }
 }
 
@@ -2906,6 +2984,65 @@ mod store_tests {
         p
     }
 
+    // ---- User-snippet CRUD store: roundtrip, id-assign, validation ----
+    #[test]
+    fn user_snippets_crud_roundtrip_and_validation() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = data_root("usersnip");
+        std::env::set_var("HOSTERM_DATA_DIR", &root);
+
+        // missing file → empty list, read creates nothing
+        assert!(read_user_snippets().is_empty());
+        assert!(!root.join("hosterm").join("snippets.user.json").exists());
+
+        // write a new row with empty id → backend assigns an id, defaults category
+        let r = write_user_snippets(vec![UserSnippet {
+            id: "".into(),
+            name: "  tail log  ".into(),
+            command: "  tail -f /var/log/syslog  ".into(),
+            category: "".into(),
+        }]);
+        assert!(r.is_ok(), "valid snippet should save: {:?}", r.err());
+
+        let got = read_user_snippets();
+        assert_eq!(got.len(), 1);
+        assert!(!got[0].id.trim().is_empty(), "backend must assign a non-empty id");
+        assert_eq!(got[0].name, "tail log", "name must be trimmed");
+        assert_eq!(got[0].command, "tail -f /var/log/syslog", "command must be trimmed");
+        assert_eq!(got[0].category, "Custom", "empty category defaults to Custom");
+
+        // update: keep the id, change command (edit), add a second row (create)
+        let id0 = got[0].id.clone();
+        let r2 = write_user_snippets(vec![
+            UserSnippet { id: id0.clone(), name: "tail log".into(), command: "tail -n 100 x".into(), category: "Logs".into() },
+            UserSnippet { id: "".into(), name: "disk".into(), command: "df -h".into(), category: "Disk".into() },
+        ]);
+        assert!(r2.is_ok());
+        let got2 = read_user_snippets();
+        assert_eq!(got2.len(), 2);
+        assert_eq!(got2[0].id, id0, "edit must preserve the id");
+        assert_eq!(got2[0].command, "tail -n 100 x");
+        assert_eq!(got2[0].category, "Logs");
+
+        // delete: write the list without row 0 → only the second remains
+        let r3 = write_user_snippets(vec![got2[1].clone()]);
+        assert!(r3.is_ok());
+        assert_eq!(read_user_snippets().len(), 1);
+
+        // validation: empty name and empty command are rejected
+        assert_eq!(
+            write_user_snippets(vec![UserSnippet { id: "".into(), name: "  ".into(), command: "x".into(), category: "".into() }]).err().as_deref(),
+            Some("snippets:empty-name")
+        );
+        assert_eq!(
+            write_user_snippets(vec![UserSnippet { id: "".into(), name: "x".into(), command: "  ".into(), category: "".into() }]).err().as_deref(),
+            Some("snippets:empty-command")
+        );
+
+        std::env::remove_var("HOSTERM_DATA_DIR");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     fn entry(host: &str, cmd: &str) -> AllowEntry {
         AllowEntry { host: host.into(), command: cmd.into(), added_at: String::new() }
     }
@@ -3509,6 +3646,9 @@ pub fn run() {
             read_settings,
             write_settings,
             read_snippets,
+            read_user_snippets,
+            write_user_snippets,
+            local_shell_info,
             google_sign_in,
             google_sign_out,
             google_account,

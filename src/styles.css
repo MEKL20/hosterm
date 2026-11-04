@@ -689,6 +689,45 @@ body.sb-collapsed #sidebar > :not(#btn-expand) { display: none; }
   word-break: break-all;
 }
 .snip-empty { padding: 24px 4px; color: var(--faint); font-size: 12px; line-height: 1.6; }
+
+/* Snippet CRUD: per-row edit/delete + the create/edit form. */
+.snip-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+.snip-top .snip-actions .copy-btn { margin-left: 0; }
+.snip-edit, .snip-del {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0;
+  border: 1px solid transparent; border-radius: 6px;
+  background: none; color: var(--dim); cursor: pointer;
+}
+.snip-edit:hover { color: var(--text); background: var(--raised); }
+.snip-del:hover { color: var(--danger, #e06c6c); background: var(--raised); }
+.snip-new-btn { margin-left: auto; }
+.btn-sm {
+  padding: 4px 10px; font-size: 12px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--raised); color: var(--text); cursor: pointer;
+}
+.btn-sm:hover { border-color: var(--accent); }
+.btn-sm.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+.snip-form {
+  display: flex; flex-direction: column; gap: 8px;
+  margin: 0 0 10px; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--panel, var(--raised));
+}
+.snip-form-title { font-size: 12.5px; font-weight: 600; color: var(--text); }
+.snip-field { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--dim); }
+.snip-field input, .snip-field textarea {
+  font-size: 12.5px; color: var(--text); background: var(--base, var(--bg));
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px;
+}
+.snip-field textarea { font-family: var(--font-mono); resize: vertical; }
+.snip-form-err { color: var(--danger, #e06c6c); font-size: 11.5px; }
+.snip-form-actions { display: flex; gap: 8px; }
+
+/* Settings → General key/value rows. */
+.gen-row { display: flex; align-items: baseline; gap: 12px; padding: 4px 0; font-size: 12.5px; }
+.gen-k { flex: 0 0 90px; color: var(--dim); }
+.gen-v { color: var(--text); word-break: break-all; }
+code.gen-v { font-family: var(--font-mono); font-size: 12px; }
 #tab-menu, #host-menu {
   position: fixed; z-index: 1000;
   min-width: 140px; padding: 4px;

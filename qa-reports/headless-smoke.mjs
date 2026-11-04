@@ -98,6 +98,7 @@ const GOOGLE_ACCT = {
   picture: "https://lh3.googleusercontent.com/a/mock-avatar",
 };
 let googleStored = null;       // what google_account returns on load (null = signed out)
+let storedUserSnippets = [];   // user-snippet CRUD store (read/write_user_snippets)
 let googleSignInFail = false;  // flip to exercise the auth-failed error path
 const invoke = (cmd, args = {}) => {
   calls.push({ cmd, args });
@@ -119,6 +120,18 @@ const invoke = (cmd, args = {}) => {
       return Promise.resolve(JSON.parse(JSON.stringify(storedSettings)));
     }
     case "read_snippets": return Promise.resolve(JSON.parse(JSON.stringify(sampleSnippets)));
+    // User-snippet CRUD store (mirrors the backend: a mutable in-memory list).
+    case "read_user_snippets": return Promise.resolve(JSON.parse(JSON.stringify(storedUserSnippets)));
+    case "write_user_snippets": {
+      storedUserSnippets = (args.snippets || []).map((s, i) => ({
+        id: (s.id && String(s.id).trim()) || `us-mock-${i}-${Date.now()}`,
+        name: String(s.name || "").trim(),
+        command: String(s.command || "").trim(),
+        category: String(s.category || "").trim() || "Custom",
+      }));
+      return Promise.resolve(null);
+    }
+    case "local_shell_info": return Promise.resolve({ shell: "/bin/bash", overridden: false });
     case "write_settings": {
       storedSettings = JSON.parse(JSON.stringify(args.settings));
       return Promise.resolve(null);

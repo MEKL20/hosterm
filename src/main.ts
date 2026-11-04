@@ -71,6 +71,7 @@ const ICONS = {
   terminal: svg('<rect x="1.5" y="2.5" width="13" height="11" rx="2"/><polyline points="4,6 6,8 4,10"/><line x1="8" y1="10" x2="11" y2="10"/>'),
   arrows: svg('<line x1="5" y1="3" x2="5" y2="13"/><polyline points="3,5 5,3 7,5"/><line x1="11" y1="13" x2="11" y2="3"/><polyline points="9,11 11,13 13,11"/>'),
   pencil: svg('<line x1="3" y1="13" x2="12" y2="4"/><line x1="10.5" y1="5.5" x2="12" y2="7"/>'),
+  trash: svg('<polyline points="3,4 13,4"/><path d="M4.5,4 V13 h7 V4"/><line x1="6.5" y1="6.5" x2="6.5" y2="11"/><line x1="9.5" y1="6.5" x2="9.5" y2="11"/><path d="M6,4 V2.5 h4 V4"/>'),
   close: svg('<line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/>'),
   folder: svg('<path d="M1.5,4 h4 l1.5,2 h7.5 v7 h-13 z"/>'),
   file: svg('<path d="M3.5,1.5 h6 l3,3 v10 h-9 z"/><polyline points="9.5,1.5 9.5,4.5 12.5,4.5"/>'),
@@ -136,6 +137,13 @@ let settingsDirty = false;
 let settingsClosing = false;
 let settingsReady: Promise<void> = Promise.resolve();
 let snippetGroups: SnippetGroup[] = [];
+// User-created snippets (CRUD) — persisted via read/write_user_snippets. Kept
+// separate from the read-only bundled set (snippetGroups) so bundled snippets
+// stay immutable (ADR-19) while user rows can be edited/deleted.
+interface UserSnippet { id: string; name: string; command: string; category: string; }
+let userSnippets: UserSnippet[] = [];
+// id of the row being edited; "" = creating a new one when the form is open.
+let snippetEditId: string | null = null;
 const snippetCopyTimers = new WeakMap<HTMLButtonElement, number>();
 // Real Google account state (BE-OAUTH: google_sign_in/out/account). The chip
 // hydrates from google_account on load; sign-in runs the PKCE loopback flow
@@ -741,18 +749,43 @@ function selectSettingsSection(section: string) {
   });
   const appearance = $("#settings-appearance");
   const approvals = $("#settings-approvals");
+  const general = $("#settings-general");
   const placeholder = $("#settings-placeholder");
   const showingAppearance = section === "appearance";
   const showingApprovals = section === "ai";
+  const showingGeneral = section === "general";
   appearance.classList.toggle("hidden", !showingAppearance);
   approvals.classList.toggle("hidden", !showingApprovals);
-  placeholder.classList.toggle("hidden", showingAppearance || showingApprovals);
+  general.classList.toggle("hidden", !showingGeneral);
+  placeholder.classList.toggle("hidden", showingAppearance || showingApprovals || showingGeneral);
   if (showingApprovals) {
     renderApprovals();
     void refreshApprovals();
+  } else if (showingGeneral) {
+    void populateGeneral();
   } else if (!showingAppearance) {
     const active = document.querySelector<HTMLButtonElement>(`.set-nav[data-section="${section}"]`);
     $("#settings-placeholder-title").textContent = active?.textContent?.trim() || "Settings";
+  }
+}
+
+// Fill Settings → General: detected local shell + app/platform info.
+async function populateGeneral() {
+  $("#gen-version").textContent = APP_VERSION;
+  $("#gen-platform").textContent = navigator.userAgent.includes("Windows")
+    ? "Windows"
+    : navigator.userAgent.includes("Mac")
+      ? "macOS"
+      : "Linux";
+  try {
+    const info = await invoke<{ shell: string; overridden: boolean }>("local_shell_info");
+    $("#gen-shell").textContent = info.shell || "—";
+    $("#gen-shell-src").textContent = info.overridden
+      ? "HOSTERM_LOCAL_SHELL override"
+      : "OS default";
+  } catch {
+    $("#gen-shell").textContent = "unavailable";
+    $("#gen-shell-src").textContent = "—";
   }
 }
 
@@ -1205,12 +1238,27 @@ async function copySnippet(button: HTMLButtonElement, command: string) {
   snippetCopyTimers.set(button, timer);
 }
 
+// Group user snippets by category, preserving first-seen category order so the
+// list is stable across edits.
+function groupUserSnippets(rows: UserSnippet[]): { category: string; items: UserSnippet[] }[] {
+  const order: string[] = [];
+  const byCat = new Map<string, UserSnippet[]>();
+  for (const r of rows) {
+    const cat = r.category.trim() || "Custom";
+    if (!byCat.has(cat)) { byCat.set(cat, []); order.push(cat); }
+    byCat.get(cat)!.push(r);
+  }
+  return order.map((category) => ({ category, items: byCat.get(category)! }));
+}
+
 function renderSnippets() {
   const query = ($("#snippet-filter") as HTMLInputElement).value;
   const needle = query.toLowerCase();
   const commands: string[] = [];
   let visibleCount = 0;
-  const markup = snippetGroups.map((group) => {
+
+  // Bundled, read-only groups (no edit/delete — ADR-19).
+  const bundledMarkup = snippetGroups.map((group) => {
     const items = group.items.filter((item) =>
       item.name.toLowerCase().includes(needle) || item.command.toLowerCase().includes(needle)
     );
@@ -1227,7 +1275,29 @@ function renderSnippets() {
     return `<div class="snip-group-label">${esc(group.category.toUpperCase())}</div>${rows}`;
   }).join("");
 
-  $("#snippet-list").innerHTML = markup;
+  // User groups (CRUD): copy + edit + delete per row.
+  const userMarkup = groupUserSnippets(userSnippets).map((group) => {
+    const items = group.items.filter((item) =>
+      item.name.toLowerCase().includes(needle) || item.command.toLowerCase().includes(needle)
+    );
+    if (items.length === 0) return "";
+    visibleCount += items.length;
+    const rows = items.map((item) => {
+      commands.push(item.command);
+      return `<div class="snippet-item" data-user-id="${esc(item.id)}">` +
+        `<div class="snip-top"><span class="snip-name">${esc(item.name)}</span>` +
+        `<span class="snip-actions">` +
+        `<button class="copy-btn" title="Copy command" aria-label="Copy command">${ICONS.copy}</button>` +
+        `<button class="snip-edit" title="Edit snippet" aria-label="Edit snippet">${ICONS.pencil}</button>` +
+        `<button class="snip-del" title="Delete snippet" aria-label="Delete snippet">${ICONS.trash}</button>` +
+        `</span></div>` +
+        `<code class="snip-cmd">${esc(item.command)}</code>` +
+        `</div>`;
+    }).join("");
+    return `<div class="snip-group-label">${esc(group.category.toUpperCase())}</div>${rows}`;
+  }).join("");
+
+  $("#snippet-list").innerHTML = bundledMarkup + userMarkup;
   $("#snippet-count").textContent = String(visibleCount);
   const empty = $("#snippet-empty");
   empty.hidden = visibleCount !== 0;
@@ -1235,11 +1305,85 @@ function renderSnippets() {
     ? ""
     : query
       ? `No snippets match "${esc(query)}"`
-      : "No snippets available.";
+      : "No snippets yet. Use + New to create one.";
   document.querySelectorAll<HTMLButtonElement>("#snippet-list .copy-btn").forEach((button, index) => {
     const command = commands[index];
     if (command !== undefined) button.addEventListener("click", () => void copySnippet(button, command));
   });
+  // Wire edit/delete for user rows.
+  document.querySelectorAll<HTMLElement>("#snippet-list .snippet-item[data-user-id]").forEach((row) => {
+    const id = row.getAttribute("data-user-id") ?? "";
+    row.querySelector<HTMLButtonElement>(".snip-edit")?.addEventListener("click", () => openSnippetForm(id));
+    row.querySelector<HTMLButtonElement>(".snip-del")?.addEventListener("click", () => void deleteSnippet(id));
+  });
+}
+
+// ---- Snippet CRUD form (create/edit) ----
+function openSnippetForm(editId: string | null) {
+  snippetEditId = editId;
+  const form = $("#snippet-form") as HTMLFormElement;
+  const nameEl = $("#snippet-f-name") as HTMLInputElement;
+  const cmdEl = $("#snippet-f-cmd") as HTMLTextAreaElement;
+  const catEl = $("#snippet-f-cat") as HTMLInputElement;
+  const errEl = $("#snippet-form-err");
+  errEl.hidden = true; errEl.textContent = "";
+  if (editId) {
+    const row = userSnippets.find((s) => s.id === editId);
+    $("#snippet-form-title").textContent = "Edit snippet";
+    nameEl.value = row?.name ?? "";
+    cmdEl.value = row?.command ?? "";
+    catEl.value = row?.category ?? "";
+  } else {
+    $("#snippet-form-title").textContent = "New snippet";
+    nameEl.value = ""; cmdEl.value = ""; catEl.value = "";
+  }
+  form.hidden = false;
+  nameEl.focus();
+}
+
+function closeSnippetForm() {
+  snippetEditId = null;
+  ($("#snippet-form") as HTMLFormElement).hidden = true;
+}
+
+async function saveSnippetForm() {
+  const name = ($("#snippet-f-name") as HTMLInputElement).value.trim();
+  const command = ($("#snippet-f-cmd") as HTMLTextAreaElement).value.trim();
+  const category = ($("#snippet-f-cat") as HTMLInputElement).value.trim();
+  const errEl = $("#snippet-form-err");
+  if (!name) { errEl.textContent = "Name is required."; errEl.hidden = false; return; }
+  if (!command) { errEl.textContent = "Command is required."; errEl.hidden = false; return; }
+
+  let next: UserSnippet[];
+  if (snippetEditId) {
+    next = userSnippets.map((s) => s.id === snippetEditId ? { ...s, name, command, category } : s);
+  } else {
+    next = [...userSnippets, { id: "", name, command, category }];
+  }
+  try {
+    await invoke("write_user_snippets", { snippets: next });
+    userSnippets = await invoke<UserSnippet[]>("read_user_snippets");
+    closeSnippetForm();
+    renderSnippets();
+  } catch (e) {
+    errEl.textContent = `Could not save: ${msg(e)}`;
+    errEl.hidden = false;
+  }
+}
+
+async function deleteSnippet(id: string) {
+  const row = userSnippets.find((s) => s.id === id);
+  if (!row) return;
+  if (!confirm(`Delete snippet "${row.name}"?`)) return;
+  const next = userSnippets.filter((s) => s.id !== id);
+  try {
+    await invoke("write_user_snippets", { snippets: next });
+    userSnippets = await invoke<UserSnippet[]>("read_user_snippets");
+    if (snippetEditId === id) closeSnippetForm();
+    renderSnippets();
+  } catch {
+    /* keep the row on failure; the list reflects last-known-good state */
+  }
 }
 
 async function openSnippetDrawer() {
@@ -1253,11 +1397,16 @@ async function openSnippetDrawer() {
   empty.textContent = "Loading snippets…";
   ($("#snippet-filter") as HTMLInputElement).focus();
   try {
-    const loaded = await invoke<SnippetGroup[]>("read_snippets");
+    const [loaded, loadedUser] = await Promise.all([
+      invoke<SnippetGroup[]>("read_snippets"),
+      invoke<UserSnippet[]>("read_user_snippets"),
+    ]);
     snippetGroups = Array.isArray(loaded) ? loaded : [];
+    userSnippets = Array.isArray(loadedUser) ? loadedUser : [];
     renderSnippets();
   } catch {
     snippetGroups = [];
+    userSnippets = [];
     empty.hidden = false;
     empty.textContent = "Could not load snippets. Close the panel and try again.";
   } finally {
@@ -1273,6 +1422,13 @@ function initSnippets() {
     $("#mode-snippets").focus();
   });
   ($("#snippet-filter") as HTMLInputElement).addEventListener("input", renderSnippets);
+  // CRUD form wiring.
+  $("#snippet-new").addEventListener("click", () => openSnippetForm(null));
+  $("#snippet-f-cancel").addEventListener("click", () => closeSnippetForm());
+  ($("#snippet-form") as HTMLFormElement).addEventListener("submit", (e) => {
+    e.preventDefault();
+    void saveSnippetForm();
+  });
   window.addEventListener("keydown", (event) => {
     if (event.key !== "/" || !$("#snippet-drawer").classList.contains("open")) return;
     const target = event.target as HTMLElement;

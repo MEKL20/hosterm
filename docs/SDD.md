@@ -623,7 +623,7 @@ Structural verdict for the spec's Clarifying Q3 / R-FL-1: a spawn has exactly on
 
 ## 13. Redesign Dusk v1 (addendum — token-system architecture + app-data store + AI approval contract)
 
-> Architect addendum (card t_60df4386, 31 Okt 2026), derived FROM `docs/FEATURE-SPEC-redesign-dusk-v1.md` (pm, FR/NFR/OQ) with the **visual truth** taken verbatim from the MEKL-approved prototypes `docs/UX/prototypes/proto-a-dusk.html` + `proto-a-dusk-settings.html` (+ `verification-report.json`). This extends — does not replace — §§1–12. New decisions: **ADR-18..22**; new invariants: **INV-21..26**; IPC inventory **24 → 27** (`read_settings`, `write_settings`, `read_snippets`). The §12 Fleet IPC table stays frozen; nothing here touches it.
+> Architect addendum (card t_60df4386, 31 Okt 2026), derived FROM `docs/FEATURE-SPEC-redesign-dusk-v1.md` (pm, FR/NFR/OQ) with the **visual truth** taken verbatim from the MEKL-approved prototypes `docs/UX/prototypes/proto-a-dusk.html` + `proto-a-dusk-settings.html` (+ `verification-report.json`). This extends — does not replace — §§1–12. New decisions: **ADR-18..22**; new invariants: **INV-21..27** (INV-27 = local-terminal direct PTY spawn). IPC inventory **24 → 27** at spec time (`read_settings`, `write_settings`, `read_snippets`), since grown to **31** by shipped follow-ups: `local_pty_spawn` (local terminal), `read_user_snippets` + `write_user_snippets` (snippet CRUD), `local_shell_info` (Settings → General). The §12 Fleet IPC table stays frozen; nothing here touches it.
 >
 > **INV-23 correction (card t_4575ff90, 1 Nov 2026; ADR-20 Rev. 2).** U-D4 QA at `ca3e86b` proved the original free-accent endpoints `#241404` / `#f2e9dc` leave a luminance gap where neither reaches `4.5:1` (`#777777` → `3.9848605473:1`; `#6f6f6f` → `4.1788873680:1`). §13.2.1 below supersedes only that endpoint rule. No IPC, store schema, or other ADR changes.
 >
@@ -764,7 +764,7 @@ Quick-pick accent chips (FR-SET6): amber `#e2a35c`, teal `#5fbfae`, rose `#e0869
   { "category": "systemd","items": [ … ] } ]
 ```
 
-`read_snippets` returns the bundled set in v1. A user-editable overlay (`snippets.user.json` in the same app-data dir) is the forward path but **out of v1 scope** (FR-SN6 "v1 read"); designing the merge/dedup is deferred with `[ASSUME-OQ-5]`.
+`read_snippets` returns the bundled set (still read-only, ADR-19 intact). **The user-editable overlay is now SHIPPED** (resolves `[ASSUME-OQ-5]` toward "bundled stays read-only, user rows are CRUD"): `snippets.user.json` in the same app-data dir holds user snippets, read via `read_user_snippets` and persisted via `write_user_snippets` (atomic whole-file, same discipline as `write_settings`). Each `UserSnippet` is `{ id, name, command, category }`; `id` is backend-assigned (stable key for edit/delete), name+command are validated non-empty (trimmed), empty category defaults to `"Custom"`. The frontend renders bundled groups first (no edit/delete), then user groups with per-row copy/edit/delete. Merge is concatenation, not dedup — bundled and user rows are distinct namespaces.
 
 **Write posture (INV-22/24).** `write_settings` is **atomic + whole-file** (sibling temp → rename), identical to the config/sidecar write discipline (§5.1). No partial writes, no self-heal of `~/.ssh/*`. An unreadable/corrupt `settings.json` → the backend returns defaults (theme=dusk, accent=#e2a35c, allowlist=[]) and does **not** overwrite until the next legitimate `write_settings`, so a hand-corrupted file is never silently clobbered on read (mirrors "unreadable config refuses edit", ADR-4).
 
@@ -796,9 +796,20 @@ invoke("write_settings", { settings: Settings }): Promise<null>
 // NEVER reads/writes ~/.ssh/config or the sidecar on this path (INV-22).
 
 invoke("read_snippets"): Promise<SnippetGroup[]>
-// v1 = bundled read-only default set; never throws (empty array on read failure).
+// Bundled read-only default set; never throws (empty array on read failure).
 interface SnippetGroup { category: string; items: Snippet[] }
 interface Snippet { name: string; command: string }
+
+invoke("read_user_snippets"): Promise<UserSnippet[]>
+// User CRUD snippet store (snippets.user.json); never throws (empty array on missing/corrupt).
+invoke("write_user_snippets", { snippets: UserSnippet[] }): Promise<null>
+// Atomic whole-file write; validates name+command non-empty (trimmed), assigns id to new rows,
+// defaults empty category to "Custom". Rejects "snippets:empty-name" | "snippets:empty-command" | "snippets:write-failed".
+interface UserSnippet { id: string; name: string; command: string; category: string }
+
+invoke("local_shell_info"): Promise<{ shell: string; overridden: boolean }>
+// Read-only info for Settings → General: the shell a Local terminal launches and whether
+// HOSTERM_LOCAL_SHELL is overriding the OS default. No persistence, no ssh-config/sidecar access.
 ```
 
 Rejection strings (frontend maps prefix → copy; 0 file write on any): `settings:invalid-accent`, `settings:invalid-theme`, `settings:write-failed`.

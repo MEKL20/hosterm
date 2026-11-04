@@ -114,10 +114,28 @@
             <header class="drawer-head">
               <h2>Snippets</h2>
               <span id="snippet-count" class="head-count" aria-live="polite">0</span>
+              <button id="snippet-new" class="btn-sm snip-new-btn" title="Create a snippet" aria-label="Create a new snippet">+ New</button>
               <button id="snippet-close" class="icon drawer-close" aria-label="Close snippets panel" title="Close panel">
                 <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M3 3l10 10M13 3 3 13"/></svg>
               </button>
             </header>
+            <form id="snippet-form" class="snip-form" hidden aria-label="Snippet editor">
+              <div class="snip-form-title" id="snippet-form-title">New snippet</div>
+              <label class="snip-field"><span>Name</span>
+                <input id="snippet-f-name" type="text" maxlength="80" placeholder="e.g. Tail syslog" autocomplete="off" required />
+              </label>
+              <label class="snip-field"><span>Command</span>
+                <textarea id="snippet-f-cmd" rows="2" placeholder="e.g. tail -f /var/log/syslog" required></textarea>
+              </label>
+              <label class="snip-field"><span>Category</span>
+                <input id="snippet-f-cat" type="text" maxlength="40" placeholder="Custom" autocomplete="off" />
+              </label>
+              <div class="snip-form-err" id="snippet-form-err" role="alert" hidden></div>
+              <div class="snip-form-actions">
+                <button type="submit" id="snippet-f-save" class="btn-sm primary">Save</button>
+                <button type="button" id="snippet-f-cancel" class="btn-sm">Cancel</button>
+              </div>
+            </form>
             <div class="snip-filter">
               <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/></svg>
               <input id="snippet-filter" type="search" placeholder="Filter snippets" aria-label="Filter snippets" />
@@ -242,6 +260,24 @@
                 <div id="approvals-list" class="approvals-list"></div>
                 <div id="approvals-empty" class="approvals-empty" role="status" hidden>No commands are always allowed.</div>
                 <div id="approvals-status" class="approvals-status" role="status" aria-live="polite"></div>
+              </div>
+            </section>
+
+            <section id="settings-general" class="hidden" aria-labelledby="general-title">
+              <h3 class="set-h" id="general-title">General</h3>
+              <p class="set-sub">App info and the local terminal shell.</p>
+
+              <div class="set-block">
+                <div class="set-label">Local terminal shell</div>
+                <p class="set-note">The shell a new Local terminal tab launches. Override it by setting the <code>HOSTERM_LOCAL_SHELL</code> environment variable before starting hosterm.</p>
+                <div class="gen-row"><span class="gen-k">Shell</span><code class="gen-v" id="gen-shell">—</code></div>
+                <div class="gen-row"><span class="gen-k">Source</span><span class="gen-v" id="gen-shell-src">—</span></div>
+              </div>
+
+              <div class="set-block">
+                <div class="set-label">About</div>
+                <div class="gen-row"><span class="gen-k">Version</span><span class="gen-v" id="gen-version">—</span></div>
+                <div class="gen-row"><span class="gen-k">Platform</span><span class="gen-v" id="gen-platform">—</span></div>
               </div>
             </section>
 
