@@ -81,6 +81,18 @@ let storedSettings = {
   allowlist: [{ host: "prod-web", command: "sudo systemctl restart netdata", added_at: "2026-10-30T12:00:00Z" }],
 };
 let readSettingsFailures = 0;
+// FE-AUTH Google OAuth mock state. Name carries a hostile <img> byte so the
+// smoke can assert the chip escapes remote-origin strings (ADR-8). picture is
+// a remote https URL that must NEVER be fetched (CSP img-src 'self' + NFR-3).
+const GOOGLE_ACCT = {
+  name: "Ada Lovelace",
+  // Hostile byte in the remote email proves esc() on remote-origin strings (ADR-8):
+  // it must render as inert text (0 child nodes), never inject a DOM node.
+  email: 'ada+<img src=x onerror=alert(1)>@example.com',
+  picture: "https://lh3.googleusercontent.com/a/mock-avatar",
+};
+let googleStored = null;       // what google_account returns on load (null = signed out)
+let googleSignInFail = false;  // flip to exercise the auth-failed error path
 const invoke = (cmd, args = {}) => {
   calls.push({ cmd, args });
   switch (cmd) {
@@ -143,6 +155,17 @@ const invoke = (cmd, args = {}) => {
     // U8 AC2: forget the stored sidecar password (frontend-only unit; the real
     // backend command is tracked in its own card — smoke asserts the invoke)
     case "forget_secret": return Promise.resolve();
+    // FE-AUTH: real Google OAuth chip. google_account hydrates signed-in state
+    // on load (null = signed out); google_sign_in runs the PKCE loopback flow
+    // backend-side; google_sign_out clears the keyring refresh_token. The name
+    // carries a hostile byte to assert esc() on the remote-origin string.
+    case "google_account": return Promise.resolve(googleStored);
+    case "google_sign_in": {
+      if (googleSignInFail) return Promise.reject("network unreachable (mock)");
+      googleStored = { ...GOOGLE_ACCT };
+      return new Promise((r) => setTimeout(() => r({ ...GOOGLE_ACCT }), 40));
+    }
+    case "google_sign_out": { googleStored = null; return Promise.resolve(); }
     default: return Promise.reject(`unmocked: ${cmd}`);
   }
 };
@@ -2088,21 +2111,32 @@ check("U-D5: close returns Terminal mode and restores trigger focus",
   }));
 // End U-D5 checks.
 
-// U-D6 Google account visual mock (FR-GL1..5, ADR-22).
+// U-D6 / FE-AUTH Google account REAL sign-in/out state machine
+// (prd discovery-gdrive-backup-v1 §D, tsd gdrive-backup-v1 §3). The chip is no
+// longer a mock: it hydrates from google_account on load, runs google_sign_in
+// (PKCE loopback, backend-side) with a pending state, shows the real
+// {name,email,picture}, and google_sign_out returns to signed-out. Remote
+// name/email are escaped (ADR-8); the picture URL is retained but NEVER fetched
+// (CSP img-src 'self' + NFR-3). googleStored starts null → load is signed-out.
 const googleSignedOut = await page.locator("#user-chip").evaluate((chip) => ({
   state: chip.dataset.state,
   hasPopup: chip.getAttribute("aria-haspopup"),
   expanded: chip.getAttribute("aria-expanded"),
+  label: chip.getAttribute("aria-label"),
   name: chip.querySelector(".user-name")?.textContent,
   avatar: chip.querySelectorAll(".avatar").length,
   gmark: chip.querySelectorAll(".gmark").length,
   caret: chip.querySelectorAll(".chip-caret").length,
 }));
-check("U-D6 FR-GL1: signed-out user-chip exposes the Google dialog",
+check("U-D6 FR-GL1: google_account hydrates a signed-out chip exposing the dialog",
   googleSignedOut.state === "signed-out" && googleSignedOut.hasPopup === "dialog" &&
   googleSignedOut.expanded === "false" && googleSignedOut.name === "Google account" &&
+  googleSignedOut.label === "Sign in with Google" &&
   googleSignedOut.avatar === 0 && googleSignedOut.gmark === 1 && googleSignedOut.caret === 1,
   JSON.stringify(googleSignedOut));
+check("U-D6 FE-AUTH: google_account invoked on load to hydrate state",
+  calls.some((c) => c.cmd === "google_account"),
+  JSON.stringify(calls.filter((c) => c.cmd === "google_account")));
 
 await page.locator("#user-chip").click();
 const googleSignin = await page.evaluate(() => {
@@ -2114,6 +2148,7 @@ const googleSignin = await page.evaluate(() => {
     role: popover.getAttribute("role"),
     expanded: document.getElementById("user-chip").getAttribute("aria-expanded"),
     title: document.getElementById("google-pop-title").textContent,
+    sub: document.getElementById("google-pop-sub").textContent,
     button: button.textContent.trim().replace(/\s+/g, " "),
     surface: style.backgroundColor,
     text: style.color,
@@ -2124,14 +2159,25 @@ const googleSignin = await page.evaluate(() => {
 check("U-D6 FR-GL1: popover + Google-brand sign-in button match the approved visual",
   !googleSignin.hidden && googleSignin.role === "dialog" && googleSignin.expanded === "true" &&
   googleSignin.title === "Use hosterm with Google" && googleSignin.button === "Sign in with Google" &&
+  googleSignin.sub === "Connect a Google account to back up to Drive." &&
   googleSignin.surface === "rgb(255, 255, 255)" && googleSignin.text === "rgb(31, 31, 31)" &&
   googleSignin.radius === "4px" && googleSignin.focused === "signin-btn",
   JSON.stringify(googleSignin));
 
-const googleCallsBefore = calls.length;
-const googleRequestsBefore = requestLog.length;
+// Real sign-in: the 40ms mock delay lets us observe the pending state before
+// the account resolves (signed-out → pending → signed-in).
+const googleSigninCallsBefore = calls.length;
+const googleReqBefore = requestLog.length;
 await page.locator("#signin-btn").click();
-await page.waitForTimeout(50);
+const googlePending = await page.evaluate(() => {
+  const btn = document.getElementById("signin-btn");
+  return { disabled: btn.disabled, label: btn.querySelector(".signin-label")?.textContent };
+});
+check("U-D6 FE-AUTH: sign-in shows a pending state (button disabled, 'Signing in…')",
+  googlePending.disabled === true && googlePending.label === "Signing in…",
+  JSON.stringify(googlePending));
+
+await page.waitForTimeout(120);
 const googleSignedIn = await page.locator("#user-chip").evaluate((chip) => {
   const avatar = chip.querySelector(".avatar");
   const name = chip.querySelector(".user-name");
@@ -2141,6 +2187,7 @@ const googleSignedIn = await page.locator("#user-chip").evaluate((chip) => {
     expanded: chip.getAttribute("aria-expanded"),
     avatar: avatar?.textContent,
     avatarKids: avatar?.childElementCount,
+    picture: avatar?.getAttribute("data-picture"),
     name: name?.textContent,
     nameKids: name?.childElementCount,
     gmark: chip.querySelectorAll(".gmark").length,
@@ -2148,31 +2195,44 @@ const googleSignedIn = await page.locator("#user-chip").evaluate((chip) => {
     popoverHidden: document.getElementById("signin-popover").hidden,
   };
 });
-check("U-D6 FR-GL2: mock signed-in chip renders escaped initials + name + G mark + caret",
-  googleSignedIn.state === "mock-signed-in" && googleSignedIn.avatar === "MR" && googleSignedIn.avatarKids === 0 &&
-  googleSignedIn.name === "Morgan Reyes" && googleSignedIn.nameKids === 0 &&
-  googleSignedIn.gmark === 1 && googleSignedIn.caret === 1 && googleSignedIn.expanded === "false" &&
-  googleSignedIn.popoverHidden && googleSignedIn.label.includes("UI preview") && googleSignedIn.label.includes("no session connected"),
+check("U-D6 FE-AUTH: google_sign_in invoked exactly once",
+  calls.filter((c) => c.cmd === "google_sign_in").length === 1,
+  JSON.stringify(calls.slice(googleSigninCallsBefore).map((c) => c.cmd)));
+check("U-D6 FE-AUTH: signed-in chip renders real initials + name + G mark + caret",
+  googleSignedIn.state === "signed-in" && googleSignedIn.avatar === "AL" && googleSignedIn.avatarKids === 0 &&
+  googleSignedIn.name === "Ada Lovelace" && googleSignedIn.nameKids === 0 &&
+  googleSignedIn.label === "Signed in to Google as Ada Lovelace" &&
+  googleSignedIn.gmark === 1 && googleSignedIn.caret === 1,
   JSON.stringify(googleSignedIn));
-check("U-D6 FR-GL3/ADR-22: sign-in toggle performs zero invoke and zero network requests",
-  calls.length === googleCallsBefore && requestLog.length === googleRequestsBefore,
-  JSON.stringify({ calls: calls.slice(googleCallsBefore), requests: requestLog.slice(googleRequestsBefore) }));
+check("U-D6 FE-AUTH/NFR-3: remote avatar picture URL retained but NEVER fetched",
+  googleSignedIn.picture === "https://lh3.googleusercontent.com/a/mock-avatar" &&
+  !requestLog.slice(googleReqBefore).some((u) => u.includes("googleusercontent")),
+  JSON.stringify({ picture: googleSignedIn.picture, reqs: requestLog.slice(googleReqBefore) }));
 
-await page.locator("#user-chip").click();
-const googleMockPopover = await page.evaluate(() => ({
+// The popover stays open after sign-in; inspect it in place (no re-click).
+const googlePopover = await page.evaluate(() => ({
+  open: !document.getElementById("signin-popover").hidden,
   title: document.getElementById("google-pop-title").textContent,
   sub: document.getElementById("google-pop-sub").textContent,
+  subKids: document.getElementById("google-pop-sub").childElementCount,
   signinHidden: document.getElementById("signin-btn").hidden,
   signoutHidden: document.getElementById("signout-btn").hidden,
   signout: document.getElementById("signout-btn").textContent,
 }));
-check("U-D6 FR-GL3/4: account popover labels the state UI-only and offers Sign out",
-  googleMockPopover.title === "Google account preview" &&
-  googleMockPopover.sub === "UI-only mock. No Google session is connected." &&
-  googleMockPopover.signinHidden && !googleMockPopover.signoutHidden && googleMockPopover.signout === "Sign out",
-  JSON.stringify(googleMockPopover));
+check("U-D6 FE-AUTH/ADR-8: signed-in popover shows real name + escaped email (inert, 0 child nodes) + Sign out",
+  googlePopover.open && googlePopover.title === "Ada Lovelace" &&
+  googlePopover.sub === 'ada+<img src=x onerror=alert(1)>@example.com' && googlePopover.subKids === 0 &&
+  googlePopover.signinHidden && !googlePopover.signoutHidden && googlePopover.signout === "Sign out",
+  JSON.stringify(googlePopover));
+check("U-D6 FE-AUTH: no 'UI-only mock' / 'UI preview' text remains anywhere in the account surface",
+  await page.evaluate(() => {
+    const t = document.querySelector("aside")?.textContent || "";
+    return !t.includes("UI-only") && !t.includes("UI preview") && !t.includes("No Google session");
+  }));
 
+// Real sign-out: invoke google_sign_out, return to signed-out.
 await page.locator("#signout-btn").click();
+await page.waitForTimeout(20);
 const googleReturned = await page.locator("#user-chip").evaluate((chip) => ({
   state: chip.dataset.state,
   expanded: chip.getAttribute("aria-expanded"),
@@ -2180,12 +2240,34 @@ const googleReturned = await page.locator("#user-chip").evaluate((chip) => ({
   avatar: chip.querySelectorAll(".avatar").length,
   popoverHidden: document.getElementById("signin-popover").hidden,
 }));
-check("U-D6 FR-GL4: Sign out returns to the signed-out chip",
+check("U-D6 FE-AUTH: google_sign_out invoked and chip returns to signed-out",
+  calls.some((c) => c.cmd === "google_sign_out") &&
   googleReturned.state === "signed-out" && googleReturned.expanded === "false" &&
   googleReturned.name === "Google account" && googleReturned.avatar === 0 && googleReturned.popoverHidden,
   JSON.stringify(googleReturned));
 
+// Error path: a failed sign-in surfaces an error sub-line and stays signed-out.
+googleSignInFail = true;
 await page.locator("#user-chip").click();
+await page.locator("#signin-btn").click();
+await page.waitForTimeout(60);
+const googleError = await page.evaluate(() => {
+  const chip = document.getElementById("user-chip");
+  const sub = document.getElementById("google-pop-sub");
+  return {
+    state: chip.dataset.state,
+    sub: sub.textContent,
+    tone: sub.dataset.tone,
+    signinHidden: document.getElementById("signin-btn").hidden,
+    signinDisabled: document.getElementById("signin-btn").disabled,
+  };
+});
+check("U-D6 FE-AUTH: failed sign-in surfaces an error, stays signed-out, re-enables the button",
+  googleError.state === "signed-out" && googleError.sub.startsWith("Sign-in failed:") &&
+  googleError.tone === "error" && !googleError.signinHidden && googleError.signinDisabled === false,
+  JSON.stringify(googleError));
+googleSignInFail = false;
+
 await page.keyboard.press("Escape");
 check("U-D6 a11y: Escape closes the account dialog and restores chip focus",
   await page.evaluate(() => document.getElementById("signin-popover").hidden &&

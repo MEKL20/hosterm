@@ -137,8 +137,16 @@ let settingsClosing = false;
 let settingsReady: Promise<void> = Promise.resolve();
 let snippetGroups: SnippetGroup[] = [];
 const snippetCopyTimers = new WeakMap<HTMLButtonElement, number>();
-const MOCK_GOOGLE_USER = { name: "Morgan Reyes" } as const;
-let googleMockSignedIn = false;
+// Real Google account state (BE-OAUTH: google_sign_in/out/account). The chip
+// hydrates from google_account on load; sign-in runs the PKCE loopback flow
+// backend-side. {name,email,picture} are remote-origin strings — every render
+// routes through esc()/escAttr() (ADR-8). The picture URL is NOT fetched: CSP
+// pins img-src 'self' and NFR-3 forbids idle network, so the avatar shows
+// escaped initials and the URL is retained on a data-attribute only.
+interface GoogleAccount { name: string; email: string; picture: string }
+let googleAccount: GoogleAccount | null = null;
+let googlePending = false;
+let googleError = "";
 const AI_PROPOSALS: AiProposal[] = [
   {
     id: "restart-netdata",
@@ -271,36 +279,56 @@ const AI_EXTRA_RESPONSE_TEMPLATE = (() => {
   return staticTemplate(assistant);
 })();
 
-// This account state is an in-memory UI preview; it never invokes OAuth or persistence.
-function mockGoogleInitials(name: string): string {
+// Initials from the remote account name; a safe DOM-escaped fallback for the
+// avatar (the picture URL is never fetched — CSP img-src 'self' + NFR-3).
+function googleInitials(name: string): string {
   return name.trim().split(/\s+/).filter(Boolean).slice(0, 2)
     .map((part) => part.charAt(0)).join("").toUpperCase() || "?";
 }
 
 function renderGoogleAccount() {
   const chip = $("#user-chip");
-  const name = MOCK_GOOGLE_USER.name;
-  const template = $<HTMLTemplateElement>(googleMockSignedIn
+  const signedIn = googleAccount !== null;
+  const template = $<HTMLTemplateElement>(signedIn
     ? "#google-chip-signed-in-template"
     : "#google-chip-signed-out-template");
   chip.replaceChildren(template.content.cloneNode(true));
   const chipName = chip.querySelector<HTMLElement>(".user-name");
-  if (chipName) chipName.textContent = googleMockSignedIn ? name : "Google account";
+  // textContent assignment escapes the remote name (ADR-8); never innerHTML.
+  if (chipName) chipName.textContent = signedIn ? googleAccount!.name : "Google account";
   const avatar = chip.querySelector<HTMLElement>(".avatar");
-  if (avatar) avatar.textContent = mockGoogleInitials(name);
-  chip.dataset.state = googleMockSignedIn ? "mock-signed-in" : "signed-out";
-  chip.setAttribute("aria-label", googleMockSignedIn
-    ? `Google account UI preview for ${name}; no session connected`
-    : "Google account preview, signed out");
+  if (avatar && signedIn) {
+    avatar.textContent = googleInitials(googleAccount!.name);
+    // Retain the remote picture URL without fetching it; escAttr guards the attr.
+    avatar.setAttribute("data-picture", escAttr(googleAccount!.picture));
+  }
+  chip.dataset.state = signedIn ? "signed-in" : "signed-out";
+  chip.setAttribute("aria-label", signedIn
+    ? `Signed in to Google as ${googleAccount!.name}`
+    : "Sign in with Google");
 
-  $("#google-pop-title").textContent = googleMockSignedIn
-    ? "Google account preview"
+  $("#google-pop-title").textContent = signedIn
+    ? googleAccount!.name
     : "Use hosterm with Google";
-  $("#google-pop-sub").textContent = googleMockSignedIn
-    ? "UI-only mock. No Google session is connected."
-    : "UI-only preview. No Google session is connected.";
-  ($("#signin-btn") as HTMLButtonElement).hidden = googleMockSignedIn;
-  ($("#signout-btn") as HTMLButtonElement).hidden = !googleMockSignedIn;
+  // Popover sub-line: email when signed in, error when a flow failed, else prompt.
+  const sub = $("#google-pop-sub");
+  if (signedIn) {
+    sub.textContent = googleAccount!.email;
+    sub.dataset.tone = "";
+  } else if (googleError) {
+    sub.textContent = googleError;
+    sub.dataset.tone = "error";
+  } else {
+    sub.textContent = "Connect a Google account to back up to Drive.";
+    sub.dataset.tone = "";
+  }
+
+  const signin = $("#signin-btn") as HTMLButtonElement;
+  signin.hidden = signedIn;
+  signin.disabled = googlePending;
+  const signinLabel = signin.querySelector<HTMLElement>(".signin-label");
+  if (signinLabel) signinLabel.textContent = googlePending ? "Signing in…" : "Sign in with Google";
+  ($("#signout-btn") as HTMLButtonElement).hidden = !signedIn;
 }
 
 function setGooglePopover(open: boolean, restoreFocus = false) {
@@ -308,26 +336,58 @@ function setGooglePopover(open: boolean, restoreFocus = false) {
   $("#signin-popover").hidden = !open;
   chip.setAttribute("aria-expanded", String(open));
   if (open) {
-    $(googleMockSignedIn ? "#signout-btn" : "#signin-btn").focus();
+    const signedIn = googleAccount !== null;
+    $(signedIn ? "#signout-btn" : "#signin-btn").focus();
   } else if (restoreFocus) {
     chip.focus();
   }
 }
 
+async function googleSignIn() {
+  if (googlePending) return;
+  googlePending = true;
+  googleError = "";
+  renderGoogleAccount();
+  try {
+    const acct = await invoke<GoogleAccount>("google_sign_in");
+    googleAccount = acct;
+    googleError = "";
+  } catch (e) {
+    googleAccount = null;
+    googleError = `Sign-in failed: ${msg(e)}`;
+  } finally {
+    googlePending = false;
+    renderGoogleAccount();
+  }
+}
+
+async function googleSignOut() {
+  try {
+    await invoke("google_sign_out");
+  } catch (e) {
+    // Sign-out is idempotent backend-side; surface a failure but still clear UI.
+    googleError = `Sign-out failed: ${msg(e)}`;
+  }
+  googleAccount = null;
+  renderGoogleAccount();
+}
+
 function initGoogleAccount() {
   const chip = $("#user-chip");
   renderGoogleAccount();
+  // Hydrate from the stored account (keyring refresh_token) on load.
+  invoke<GoogleAccount | null>("google_account")
+    .then((acct) => { googleAccount = acct ?? null; })
+    .catch((e) => { googleAccount = null; googleError = `Account check failed: ${msg(e)}`; })
+    .finally(renderGoogleAccount);
   chip.addEventListener("click", () => {
     setGooglePopover($("#signin-popover").hasAttribute("hidden"));
   });
   $("#signin-btn").addEventListener("click", () => {
-    googleMockSignedIn = true;
-    renderGoogleAccount();
-    setGooglePopover(false, true);
+    void googleSignIn();
   });
   $("#signout-btn").addEventListener("click", () => {
-    googleMockSignedIn = false;
-    renderGoogleAccount();
+    void googleSignOut();
     setGooglePopover(false, true);
   });
   document.addEventListener("click", (event) => {

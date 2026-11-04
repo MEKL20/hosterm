@@ -240,7 +240,9 @@ body.sb-collapsed #sidebar > :not(#btn-expand) { display: none; }
   transform: rotate(45deg);
 }
 .pop-title { margin-bottom: 3px; font-size: 12.5px; font-weight: 600; }
-.pop-sub { margin-bottom: 11px; color: var(--dim); font-size: 11.5px; }
+.pop-sub { margin-bottom: 11px; color: var(--dim); font-size: 11.5px; word-break: break-word; }
+.pop-sub[data-tone="error"] { color: var(--danger); }
+.signin-btn:disabled { opacity: 0.6; cursor: default; }
 .signin-btn {
   width: 100%; height: 34px;
   display: flex; align-items: center; justify-content: center; gap: 9px;
