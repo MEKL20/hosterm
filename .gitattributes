@@ -1,0 +1,19 @@
+# Normalize line endings to LF on checkout for every platform.
+# Without this, Windows checks out text files as CRLF (core.autocrlf), which
+# breaks the headless smoke's byte-exact source assertions (e.g. the
+# pasteNormalize body pin) that compare against LF control strings — the suite
+# passes on Linux but fails on the windows-latest CI runner.
+* text=auto eol=lf
+
+# Binaries must never be touched.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.icns binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.msi binary
+*.exe binary
