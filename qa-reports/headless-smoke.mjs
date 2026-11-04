@@ -300,7 +300,12 @@ await page.goto("http://localhost:4199/");
 // flat 400ms left the modal mid-transition, so it still intercepted the row click
 // at line 303 and the whole suite timed out.
 await page.locator(".host-item").first().waitFor({ state: "visible", timeout: 10000 });
-await page.locator("#ssh-modal.hidden").waitFor({ state: "attached", timeout: 10000 });
+// Poll for the modal to settle hidden (class toggled by app JS post-reload).
+// A CSS "#ssh-modal.hidden" waitFor timed out on the Windows runner; evaluate
+// the class in a polled loop instead, which is robust to how it is hidden.
+await page.waitForFunction(
+  () => { const m = document.querySelector("#ssh-modal"); return !m || m.classList.contains("hidden"); },
+  null, { timeout: 10000 });
 check("missing (Linux): guide skipped, app usable",
   (await page.locator("#ssh-modal").evaluate((el) => el.classList.contains("hidden"))) &&
   (await page.locator(".host-item").count()) === 3);
