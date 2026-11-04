@@ -3286,22 +3286,14 @@ mod store_tests {
         let _ = std::fs::remove_dir_all(&store_root);
     }
 
-    // ---- AC5: read_snippets returns the bundled set (≥3 categories), 0 network ----
+    // ---- read_snippets: no bundled defaults (MEKL: "ga perlu snippet bawaan").
+    // The command still parses the embedded asset and NEVER throws; with the
+    // asset emptied to [], the bundled set is simply empty. User snippets come
+    // from the separate read_user_snippets CRUD store.
     #[test]
-    fn read_snippets_returns_bundled_categories() {
+    fn read_snippets_returns_empty_bundled_set() {
         let groups = read_snippets();
-        assert!(groups.len() >= 3, "bundled set must have ≥3 categories, got {}", groups.len());
-        let names: Vec<&str> = groups.iter().map(|g| g.category.as_str()).collect();
-        assert!(names.contains(&"Docker"));
-        assert!(names.contains(&"Git"));
-        assert!(names.contains(&"systemd"));
-        // every group has at least one item with non-empty name+command
-        for g in &groups {
-            assert!(!g.items.is_empty(), "category {} has no items", g.category);
-            for it in &g.items {
-                assert!(!it.name.is_empty() && !it.command.is_empty());
-            }
-        }
+        assert!(groups.is_empty(), "bundled set must be empty, got {}", groups.len());
     }
 }
 

@@ -186,9 +186,12 @@ run local commands without leaving the app or opening a separate terminal.
 | FR-LT1 | WHEN the "Local" button is clicked THE SYSTEM SHALL open a terminal tab running the OS default shell (`%COMSPEC%`/cmd or PowerShell on Windows; `$SHELL`, fallback `/bin/bash` on macOS/Linux) in a PTY, cwd = home | must (shipped) |
 | FR-LT2 | WHEN a local shell spawns THE SYSTEM SHALL exec the shell program DIRECTLY as a PTY child, never via `sh -c`/`cmd /C` with a user string (INV-27), label the tab "local", and touch no `~/.ssh/config` or password sidecar | must (shipped) |
 | FR-LT3 | WHEN `HOSTERM_LOCAL_SHELL` is set THE SYSTEM SHALL use it verbatim as the shell program (override for tests/power users) | should (shipped) |
-| FR-SN7 | WHEN the operator uses the Snippets drawer THE SYSTEM SHALL support full CRUD on user snippets (create/edit/delete, stored in `snippets.user.json`), rendered after the read-only bundled groups; bundled snippets stay immutable (ADR-19) | must (shipped) |
+| FR-SN7 | WHEN the operator uses the Snippets drawer THE SYSTEM SHALL support full CRUD on user snippets (create/edit/delete, stored in `snippets.user.json`); the bundled-group render path stays (read-only, ADR-19) but ships empty per FR-SN9 | must (shipped) |
 | FR-SN8 | WHEN a user snippet is saved THE SYSTEM SHALL require a non-empty name and command, assign a stable backend id, and default an empty category to "Custom" | must (shipped) |
 | FR-GEN1 | WHEN the operator opens Settings → General THE SYSTEM SHALL show real content (not "coming soon"): the detected local-terminal shell + whether `HOSTERM_LOCAL_SHELL` overrides it, plus app version and platform | must (shipped) |
+| FR-THM1 | WHEN the operator clicks Slate, Ink, or Light THE SYSTEM SHALL swap `data-theme`, apply that preset's AA-proven token palette (SDD §729-731), and persist the choice — all four presets are functional (no "coming"/disabled) | must (shipped) |
+| FR-THM2 | WHEN a non-Dusk preset is active THE SYSTEM MAY leave the xterm/CodeMirror palettes at Dusk values (documented limitation); the shell chrome/surfaces/text repaint via CSS tokens | known limitation |
+| FR-SN9 | WHEN snippets load THE SYSTEM SHALL ship NO bundled default snippets (`read_snippets` returns an empty set); all snippets are user-created via the CRUD store | must (shipped) |
 | FR-C1 | WHEN a SFTP tab opens THE SYSTEM SHALL render directory listings via the real `sftp` binary | must |
 | FR-C2 | WHEN a transfer runs on key/agent auth THE SYSTEM SHALL use batch `sftp -b -` | must |
 | FR-C3 | WHEN drag/copy interactions occur THE SYSTEM SHALL use manual mouse events only (`draggable` grep = 0 in `src/`) | must |

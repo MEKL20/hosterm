@@ -1862,14 +1862,27 @@ const navState = await page.evaluate(() => ({
 check("U-D4 FR-SET2: 7 nav items + Appearance default current",
   JSON.stringify(navState.labels) === JSON.stringify(["General", "Appearance", "Terminal", "SSH & Keys", "AI Assistant", "Snippets", "Account"]) &&
   navState.current === "appearance", JSON.stringify(navState));
+// General is now a real section (local shell info + about), not a placeholder.
 await page.locator('.set-nav[data-section="general"]').click();
+const generalState = await page.evaluate(() => ({
+  generalShown: !document.getElementById("settings-general").classList.contains("hidden"),
+  placeholderHidden: document.getElementById("settings-placeholder").classList.contains("hidden"),
+  shell: document.getElementById("gen-shell").textContent,
+  appearanceHidden: document.getElementById("settings-appearance").classList.contains("hidden"),
+}));
+check("U-D4 FR-GEN1: General renders a real pane (local shell info), not a placeholder",
+  generalState.generalShown && generalState.placeholderHidden && generalState.appearanceHidden &&
+  generalState.shell === "/bin/bash",
+  JSON.stringify(generalState));
+// A still-placeholder section (Terminal) keeps the "coming" copy.
+await page.locator('.set-nav[data-section="terminal"]').click();
 const comingState = await page.evaluate(() => ({
   title: document.getElementById("settings-placeholder-title").textContent,
   copy: document.getElementById("settings-placeholder").textContent,
-  appearanceHidden: document.getElementById("settings-appearance").classList.contains("hidden"),
+  placeholderShown: !document.getElementById("settings-placeholder").classList.contains("hidden"),
 }));
-check("U-D4 FR-SET3: non-Appearance nav renders coming placeholder",
-  comingState.title === "General" && comingState.copy.includes("Coming soon") && comingState.appearanceHidden,
+check("U-D4 FR-SET3: a still-unbuilt nav renders the coming placeholder",
+  comingState.title === "Terminal" && comingState.copy.includes("Coming soon") && comingState.placeholderShown,
   JSON.stringify(comingState));
 await page.locator('.set-nav[data-section="appearance"]').click();
 
@@ -1878,14 +1891,23 @@ const presetState = await page.evaluate(() => ({
   dusk: document.querySelector('.preset[data-preset="dusk"]')?.getAttribute("aria-pressed"),
   disabled: document.querySelectorAll('.preset[aria-disabled="true"]').length,
 }));
-check("U-D4 FR-SET4: four presets; Dusk selected; three coming presets disabled",
-  presetState.count === 4 && presetState.dusk === "true" && presetState.disabled === 3, JSON.stringify(presetState));
-const themeBeforeDisabled = await page.evaluate(() => document.documentElement.dataset.theme);
-await page.evaluate(() => document.querySelector('.preset[data-preset="slate"]').click());
-const themeAfterDisabled = await page.evaluate(() => document.documentElement.dataset.theme);
-check("U-D4 OQ-2: disabled Slate click never swaps data-theme",
-  themeBeforeDisabled === "dusk" && themeAfterDisabled === themeBeforeDisabled,
-  `${themeBeforeDisabled}->${themeAfterDisabled}`);
+check("U-D4 FR-SET4: four presets; Dusk selected; all presets enabled (Slate/Ink/Light shipped)",
+  presetState.count === 4 && presetState.dusk === "true" && presetState.disabled === 0, JSON.stringify(presetState));
+// Slate/Ink/Light now functional: selecting one swaps data-theme AND changes
+// the --bg token (the CSS preset block applies), then returns to Dusk so the
+// accent checks below keep their canonical Dusk base.
+const slateSwap = await page.evaluate(() => {
+  const before = { theme: document.documentElement.dataset.theme, bg: getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() };
+  document.querySelector('.preset[data-preset="slate"]').click();
+  const after = { theme: document.documentElement.dataset.theme, bg: getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() };
+  return { before, after };
+});
+check("U-D4 FR-SET4: Slate click swaps data-theme + applies its --bg token",
+  slateSwap.before.theme === "dusk" && slateSwap.after.theme === "slate" &&
+  slateSwap.after.bg.toLowerCase() === "#171d24" && slateSwap.after.bg !== slateSwap.before.bg,
+  JSON.stringify(slateSwap));
+// restore Dusk for the accent-preview checks that follow
+await page.evaluate(() => document.querySelector('.preset[data-preset="dusk"]').click());
 
 const stableBefore = await page.evaluate(() => {
   const cs = getComputedStyle(document.documentElement);

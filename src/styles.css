@@ -35,6 +35,72 @@
   --font-mono: "JetBrains Mono", "Geist Mono", "Cascadia Code", "SF Mono", ui-monospace, "DejaVu Sans Mono", monospace;
 }
 
+/* Theme presets (ADR-20, SDD §13.3 §729-731). Each block overrides only the
+   surface/line/text/accent/status tokens; radius/geometry/fonts inherit from
+   :root. Anchor values (--bg/--surface/--accent/--text) are the SDD AA-proven
+   palette; intermediate surfaces are derived to keep Dusk's elevation order
+   (bg < sidebar < surface < raised; term = deepest well). */
+
+/* Slate — cool blue-grey. SDD: text 14.11:1, accent 8.54:1. */
+:root[data-theme="slate"] {
+  color-scheme: dark;
+  --bg: #171d24;
+  --sidebar: #1b222a;
+  --surface: #222a33;
+  --raised: #2b3540;
+  --term: #11161c;
+  --border: #313d49;
+  --hairline: rgba(108, 196, 220, .14);
+  --text: #e4ebf2;
+  --dim: #a6b4c2;
+  --faint: #7e8b9c;
+  --accent: #6cc4dc;
+  --accent-ink: #06212a;
+  --accent-soft: rgba(108, 196, 220, .12);
+  --live: #8fd0a8;
+  --danger: #e0806a;
+}
+
+/* Ink — near-neutral charcoal. SDD: text 15.59:1, accent 4.89:1. */
+:root[data-theme="ink"] {
+  color-scheme: dark;
+  --bg: #141414;
+  --sidebar: #191919;
+  --surface: #1e1e1e;
+  --raised: #282828;
+  --term: #0e0e0e;
+  --border: #2e2e2e;
+  --hairline: rgba(224, 86, 63, .14);
+  --text: #ececec;
+  --dim: #aaaaaa;
+  --faint: #808080;
+  --accent: #e0563f;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(224, 86, 63, .12);
+  --live: #86c98a;
+  --danger: #e0563f;
+}
+
+/* Light — warm paper. SDD: text 14.29:1, accent 5.07:1. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f5f1e8;
+  --sidebar: #efe9dc;
+  --surface: #ffffff;
+  --raised: #f0eadd;
+  --term: #faf7f0;
+  --border: #ddd4c4;
+  --hairline: rgba(150, 87, 26, .16);
+  --text: #26201a;
+  --dim: #5f564a;
+  --faint: #8a8070;
+  --accent: #96571a;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(150, 87, 26, .10);
+  --live: #3f7d4a;
+  --danger: #b3442a;
+}
+
 /* Active-state accent emphasis (§6.5, Dusk FR-DT2): fill/underline on the 3
    active selectors only (.tab.active underline, .term-side.focused border,
    button.primary fill) — NOT hover/idle. The old Abyss glow box-shadow is gone;

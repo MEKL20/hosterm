@@ -695,7 +695,7 @@ Frozen regression vectors (ratios use the formula above; expected ink is byte-ex
 | free QA failure | `#777777` | `#000000` | `4.68949989000882:1` |
 | free extreme | `#ffffff` | `#000000` | `21:1` |
 
-Preset readiness gate (NFR-DK2): a preset may be **exposed as functional** only after full-shell AA is proven for *every* text pair in that preset, not just the swatch/accent pair in the verification report. Until then it renders as a **disabled "coming" entry** in the picker (`[ASSUME-OQ-2]` default = Dusk-only functional; Slate/Ink/Light = placeholders). The picker markup already exists in the prototype; "coming" = `aria-disabled="true"` + no `data-theme` swap on click.
+Preset readiness gate (NFR-DK2): a preset may be **exposed as functional** only after full-shell AA is proven for *every* text pair in that preset. **Slate/Ink/Light are now SHIPPED as functional** (MEKL, 2026-11-04; resolves `[ASSUME-OQ-2]` toward "ship all four"): each is a `:root[data-theme="…"]` CSS block (styles.css) overriding the surface/line/text/accent/status tokens with the §729-731 AA-proven palette; the `aria-disabled` + "coming" badge are removed, so clicking swaps `data-theme` and persists via `write_settings`. **Known limitation (unchanged, §13.3 item 5):** the xterm/CodeMirror JS-literal palettes are still Dusk-only — the terminal well and editor do not repaint per preset. Making those preset-aware is the remaining follow-up.
 
 ### 13.3 Dusk tokens (verbatim from prototype `:root`) — FR-DT1
 
