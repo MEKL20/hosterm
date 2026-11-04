@@ -166,6 +166,30 @@ jobs:
       - name: Install frontend deps
         run: npm install
 
+      # Rust lib tests on a real Windows host (the bin target has 0 tests;
+      # the suite lives in hosterm_lib). A red test fails the build before
+      # any installer is produced.
+      - name: Rust lib tests (cargo test --lib)
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+        shell: bash
+
+      # Headless DOM smoke: build the frontend first (the harness serves
+      # ../dist and mocks the Tauri IPC), install Playwright + its Chromium,
+      # then run the smoke suite on Windows. A failing check exits non-zero
+      # and fails the build.
+      - name: Build frontend for smoke
+        run: npm run build
+
+      - name: Install Playwright Chromium
+        run: |
+          npm install --no-save playwright@1.63.0
+          npx playwright install chromium
+        shell: bash
+
+      - name: Headless DOM smoke
+        run: node qa-reports/headless-smoke.mjs
+        shell: bash
+
       - name: Build Tauri app (produces .msi and NSIS .exe)
         run: npm run tauri build
 
