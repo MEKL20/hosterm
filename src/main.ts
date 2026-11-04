@@ -1378,9 +1378,12 @@ function renderHostList() {
   const list = $("#host-list");
   list.innerHTML = "";
   const q = ($("#host-search") as HTMLInputElement).value.trim().toLowerCase();
-  const visible = hosts.filter(
-    (h) => !h.name.includes("*") && !h.name.includes("?") && (!q || h.name.toLowerCase().includes(q))
-  );
+  const visible = hosts
+    .filter(
+      (h) => !h.name.includes("*") && !h.name.includes("?") && (!q || h.name.toLowerCase().includes(q))
+    )
+    // Alphabetical A–Z, case-insensitive, so groups and rows read tidy.
+    .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
   if (hosts.length === 0) {
     const empty = document.createElement("div");
     empty.className = "list-state";

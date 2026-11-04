@@ -479,7 +479,9 @@ check("expand: class removed", await page.evaluate(() => !document.body.classLis
 // 9d. Edit/Delete left the row (fix #4) -> context menu; Delete uses in-app dialog (not native confirm)
 check("edit/delete buttons gone from rows",
   (await page.locator(".host-item .h-edit, .host-item .h-del").count()) === 0);
-await page.locator(".host-item").first().click({ button: "right" });
+// Right-click prod-web explicitly (not .first(), which is db-core under A-Z sort)
+// so the delete-dialog host-name check below is deterministic.
+await page.locator(".host-item", { hasText: "prod-web" }).first().click({ button: "right" });
 await page.waitForTimeout(200);
 check("right-click row opens in-app host menu", (await page.locator("#host-menu").count()) === 1);
 const menuItems = await page.locator("#host-menu button").allTextContents();
@@ -863,10 +865,11 @@ const rowH = await page.locator(".host-item").first().evaluate((el) => el.offset
 check("U-D2 §13.3: host row is exactly 34px (single line)", rowH === 34, `h=${rowH}`);
 check("no second-line subtitle element", (await page.locator(".host-item .h-sub").count()) === 0);
 const rowTitle = await page.locator(".host-item").first().getAttribute("title");
-check("subtitle lives in title tooltip", !!rowTitle && rowTitle.includes("deploy@203.0.113.10"), rowTitle || "");
-// (2) group headers = alias prefix before "-"; wildcard Host * never rendered
+// Hosts render A-Z, so the first row is db-core (admin@203.0.113.20).
+check("subtitle lives in title tooltip", !!rowTitle && rowTitle.includes("admin@203.0.113.20"), rowTitle || "");
+// (2) group headers = alias prefix before "-", A-Z order; wildcard Host * never rendered
 const groups = await page.locator(".h-group").allTextContents();
-check("group headers from '-' prefix", JSON.stringify(groups) === JSON.stringify(["PROD", "DB", "PW"]), groups.join("|"));
+check("group headers from '-' prefix", JSON.stringify(groups) === JSON.stringify(["DB", "PROD", "PW"]), groups.join("|"));
 const prodRow = page.locator(".host-item", { hasText: "prod-web" }).first();
 check("prod-web sits under PROD header",
   (await prodRow.evaluate((el) => el.previousElementSibling?.textContent)) === "PROD");
@@ -878,15 +881,22 @@ check("non-pw rows have no lock", (await pwKey.count()) === 0);
 const pwRowKey = page.locator(".host-item", { hasText: "pw-host" }).first().locator(".h-key");
 check("pw-host shows lock marker", (await pwRowKey.count()) === 1);
 check("lock uses --accent token (Dusk)", (await pwRowKey.evaluate((el) => getComputedStyle(el).color)) === "rgb(226, 163, 92)");
-// (4) Ctrl+K focuses search; ArrowDown + Enter opens terminal (§5)
+// (4) Ctrl+K focuses search; ArrowDown + Enter opens terminal (§5).
+// Filter to a single host first so the first visible row is deterministic
+// regardless of the A-Z sort order (otherwise it would be db-core, not prod-web),
+// keeping the opened terminal / dot / tab chain consistent for the checks below.
 await page.keyboard.press("Control+k");
 check("Ctrl+K focuses #host-search", await page.evaluate(() => document.activeElement?.id === "host-search"));
+await page.locator("#host-search").fill("prod-web");
+await page.waitForTimeout(150);
 await page.keyboard.press("ArrowDown");
 check("ArrowDown moves focus to first row", await page.evaluate(() => document.activeElement?.classList.contains("host-item")));
 const spawnsU2 = calls.filter((c) => c.cmd === "pty_spawn").length;
 await page.keyboard.press("Enter");
 await page.waitForTimeout(400);
 check("Enter on row opens terminal", calls.filter((c) => c.cmd === "pty_spawn").length === spawnsU2 + 1);
+await page.locator("#host-search").fill("");
+await page.waitForTimeout(150);
 // (5) live-session dot: --ok while terminal tab open, --muted after close
 const dot = prodRow.locator(".h-dot");
 check("dot goes live with live terminal", (await dot.evaluate((el) => el.classList.contains("live"))) === true);
@@ -1042,7 +1052,10 @@ await page.setViewportSize({ width: 1280, height: 720 });
 // AC4 context menu: Close others + Close host (+ shortcut tooltips)
 await page.locator(".host-item", { hasText: "db-core" }).first().locator(".h-name").click();
 await page.waitForTimeout(300);
-await page.locator(".tab").first().click({ button: "right" });
+// Right-click a prod-web tab explicitly (tab-bar order follows open order, not
+// the host-list sort, but we must not depend on which tab lands first in the
+// DOM): "Close host" then closes every prod-web tab and leaves only db-core.
+await page.locator(".tab", { hasText: "prod-web" }).first().click({ button: "right" });
 await page.waitForTimeout(200);
 const menuLabels = await page.locator("#tab-menu button").allTextContents();
 check("U3: menu = Close/Close others/Close host/Close all",
@@ -1051,11 +1064,21 @@ const menuTips = await page.evaluate(() => [...document.querySelectorAll("#tab-m
 check("U3: menu tooltips name new shortcuts", menuTips[0] === "Ctrl+W" && menuTips[1] === "Ctrl+Shift+W", menuTips.join("|"));
 await page.locator("#tab-menu button", { hasText: "Close host" }).click();
 await page.waitForTimeout(500);
-check("U3: Close host keeps only other hosts' tabs", (await page.locator(".tab").count()) === 1 &&
-  (await page.locator(".tab .t-label").first().textContent()) === "db-core");
-// AC5 Ctrl+W / Ctrl+Shift+W; skipped while typing in a text field
+// "Close host" must drop every prod-web tab and keep the other host's tab(s).
+// Assert on the invariant (no prod-web left, only db-core remains) rather than a
+// hardcoded count — earlier blocks may legitimately have left >1 db-core tab, and
+// the tab-bar order is independent of the host-list A-Z sort.
+const u3Labels = await page.locator(".tab .t-label").allTextContents();
+check("U3: Close host keeps only other hosts' tabs",
+  u3Labels.length >= 1 && u3Labels.every((l) => l === "db-core"), u3Labels.join("|"));
+// AC5 Ctrl+W / Ctrl+Shift+W; skipped while typing in a text field.
+// Normalise to a known tab count first: earlier blocks + the A-Z sort can leave
+// a variable number of db-core tabs, so close them all, then rebuild exactly the
+// state each check needs (don't assume a specific residual count).
 await page.evaluate(() => { const a = document.activeElement; if (a instanceof HTMLElement) a.blur(); });
-await page.keyboard.press("Control+w");
+await page.keyboard.press("Control+Shift+w"); // keep only active
+await page.waitForTimeout(300);
+await page.keyboard.press("Control+w"); // close the last one -> 0 tabs
 await page.waitForTimeout(300);
 check("U3: Ctrl+W closes active tab", (await page.locator(".tab").count()) === 0);
 await page.locator(".host-item", { hasText: "prod-web" }).first().locator(".h-name").click();
