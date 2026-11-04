@@ -255,6 +255,32 @@ body.sb-collapsed #sidebar > :not(#btn-expand) { display: none; }
 .signout-btn { width: 100%; height: 34px; padding: 0 12px; }
 .signin-popover[hidden], .signin-btn[hidden], .signout-btn[hidden] { display: none; }
 
+/* Drive backup/restore actions (shown only when signed in) */
+.drive-actions { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+.drive-actions[hidden] { display: none; }
+.drive-btn {
+  width: 100%; height: 32px; padding: 0 12px;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: 4px;
+  font-size: 12.5px; cursor: pointer;
+}
+.drive-btn:hover { background: var(--raised); }
+.drive-btn:disabled { opacity: 0.6; cursor: default; }
+.drive-status { margin-top: 4px; font-size: 11.5px; color: var(--dim); word-break: break-word; white-space: pre-wrap; }
+.drive-status[data-tone="error"] { color: var(--danger); }
+.drive-status[data-tone="ok"] { color: var(--accent); }
+
+/* Passphrase dialog */
+.pass-label { display: block; margin: 8px 0 4px; font-size: 11.5px; color: var(--dim); }
+.pass-input {
+  width: 100%; height: 32px; padding: 0 10px; box-sizing: border-box;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 4px; font-size: 13px;
+}
+.pass-confirm-row[hidden] { display: none; }
+.pass-error { margin-top: 8px; font-size: 11.5px; color: var(--danger); }
+.pass-error[hidden] { display: none; }
+
 /* tabs */
 /* U-D2 Dusk §13.3: tab bar 42px (Arus 36px) */
 #tabbar {

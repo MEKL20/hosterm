@@ -147,6 +147,14 @@ interface GoogleAccount { name: string; email: string; picture: string }
 let googleAccount: GoogleAccount | null = null;
 let googlePending = false;
 let googleError = "";
+
+// Drive backup/restore IPC result shapes (serde default snake_case, TSD §3).
+interface BackupResult { file_id: string; name: string; bytes: number; created_at: string }
+interface BackupMeta { file_id: string; name: string; created_at: string; host: string; schema: number }
+interface RestoreResult { restored: string[]; pre_restore_dir: string }
+interface PreflightTarget { path_role: string; path: string; exists: boolean }
+interface RestorePreflight { targets: PreflightTarget[] }
+let drivePending = false;
 const AI_PROPOSALS: AiProposal[] = [
   {
     id: "restart-netdata",
@@ -329,6 +337,9 @@ function renderGoogleAccount() {
   const signinLabel = signin.querySelector<HTMLElement>(".signin-label");
   if (signinLabel) signinLabel.textContent = googlePending ? "Signing in…" : "Sign in with Google";
   ($("#signout-btn") as HTMLButtonElement).hidden = !signedIn;
+  // Backup/Restore are only reachable with a connected account (they need a
+  // live Drive token backend-side).
+  $("#drive-actions").hidden = !signedIn;
 }
 
 function setGooglePopover(open: boolean, restoreFocus = false) {
@@ -372,9 +383,159 @@ async function googleSignOut() {
   renderGoogleAccount();
 }
 
+// Prompt for a passphrase inside the app (never a native dialog, never
+// persisted). `confirm` adds a second field (backup = set a new passphrase).
+// Resolves to the entered string, or null if cancelled. The inputs are cleared
+// on every close so the plaintext does not linger in the DOM.
+function passphrasePrompt(
+  title: string,
+  message: string,
+  okLabel: string,
+  confirm: boolean,
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    const input = $("#pass-input") as HTMLInputElement;
+    const confirmRow = $("#pass-confirm-row");
+    const confirmInput = $("#pass-confirm") as HTMLInputElement;
+    const err = $("#pass-error");
+    input.value = "";
+    confirmInput.value = "";
+    err.hidden = true;
+    err.textContent = "";
+    confirmRow.hidden = !confirm;
+    $("#pass-title").textContent = title;
+    $("#pass-msg").textContent = message;
+    $("#pass-label").textContent = confirm ? "New passphrase" : "Passphrase";
+    ($("#pass-ok") as HTMLButtonElement).textContent = okLabel;
+
+    const cleanup = () => {
+      // Wipe plaintext from the inputs before the nodes go back to hidden.
+      input.value = "";
+      confirmInput.value = "";
+      okBtn.removeEventListener("click", onOk);
+      cancelBtn.removeEventListener("click", onCancel);
+      input.removeEventListener("keydown", onKey);
+      confirmInput.removeEventListener("keydown", onKey);
+    };
+    const finish = (value: string | null) => {
+      cleanup();
+      closeOverlay("#pass-dialog");
+      passDialogResolve = null;
+      resolve(value);
+    };
+    const onOk = () => {
+      const value = input.value;
+      if (!value) {
+        err.textContent = "Enter a passphrase.";
+        err.hidden = false;
+        return;
+      }
+      if (confirm && value !== confirmInput.value) {
+        err.textContent = "Passphrases do not match.";
+        err.hidden = false;
+        return;
+      }
+      finish(value);
+    };
+    const onCancel = () => finish(null);
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Enter") { ev.preventDefault(); onOk(); }
+    };
+
+    const okBtn = $("#pass-ok") as HTMLButtonElement;
+    const cancelBtn = $("#pass-cancel") as HTMLButtonElement;
+    okBtn.addEventListener("click", onOk);
+    cancelBtn.addEventListener("click", onCancel);
+    input.addEventListener("keydown", onKey);
+    confirmInput.addEventListener("keydown", onKey);
+    passDialogResolve = onCancel;
+    openOverlay("#pass-dialog", input);
+  });
+}
+
+function setDriveStatus(text: string, tone: "" | "error" | "ok" = "") {
+  const el = $("#drive-status");
+  el.textContent = text;
+  el.dataset.tone = tone;
+}
+
+function setDriveBusy(busy: boolean) {
+  drivePending = busy;
+  ($("#drive-backup-btn") as HTMLButtonElement).disabled = busy;
+  ($("#drive-restore-btn") as HTMLButtonElement).disabled = busy;
+}
+
+async function driveBackup() {
+  if (drivePending || googleAccount === null) return;
+  const pass = await passphrasePrompt(
+    "Back up to Google Drive",
+    "Choose a passphrase to encrypt this backup. Drive only ever stores the "
+      + "encrypted file — without this passphrase the backup cannot be restored.",
+    "Back up",
+    true,
+  );
+  if (pass === null) return;
+  setDriveBusy(true);
+  setDriveStatus("Encrypting and uploading…");
+  try {
+    const res = await invoke<BackupResult>("drive_backup", { passphrase: pass });
+    setDriveStatus(`Backed up ${res.name} (${res.bytes} bytes).`, "ok");
+  } catch (e) {
+    setDriveStatus(`Backup failed: ${msg(e)}`, "error");
+  } finally {
+    setDriveBusy(false);
+  }
+}
+
+async function driveRestore() {
+  if (drivePending || googleAccount === null) return;
+  setDriveBusy(true);
+  setDriveStatus("Finding the latest backup…");
+  let fileId: string;
+  try {
+    const backups = await invoke<BackupMeta[]>("drive_list_backups");
+    if (backups.length === 0) {
+      setDriveStatus("No backups found on Drive.", "error");
+      setDriveBusy(false);
+      return;
+    }
+    // Newest first by created_at (ISO-8601 strings sort lexicographically).
+    backups.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+    fileId = backups[0].file_id;
+    // Overwrite warning: which real files this restore would replace.
+    const preflight = await invoke<RestorePreflight>("drive_restore_preflight", { fileId });
+    const existing = preflight.targets.filter((t) => t.exists).map((t) => t.path);
+    const warnBody = existing.length
+      ? `This will overwrite ${existing.length} existing file(s):\n`
+        + existing.join("\n")
+        + "\n\nA timestamped copy of the current files is saved first."
+      : "No existing files will be overwritten. A pre-restore copy is still made.";
+    setDriveStatus("");
+    const pass = await passphrasePrompt(
+      "Restore from Google Drive",
+      warnBody,
+      "Restore",
+      false,
+    );
+    if (pass === null) { setDriveBusy(false); return; }
+    setDriveStatus("Downloading and decrypting…");
+    const res = await invoke<RestoreResult>("drive_restore", { fileId, passphrase: pass });
+    setDriveStatus(
+      `Restored ${res.restored.length} file(s). Previous files saved to ${res.pre_restore_dir}.`,
+      "ok",
+    );
+  } catch (e) {
+    setDriveStatus(`Restore failed: ${msg(e)}`, "error");
+  } finally {
+    setDriveBusy(false);
+  }
+}
+
 function initGoogleAccount() {
   const chip = $("#user-chip");
   renderGoogleAccount();
+  $("#drive-backup-btn").addEventListener("click", () => { void driveBackup(); });
+  $("#drive-restore-btn").addEventListener("click", () => { void driveRestore(); });
   // Hydrate from the stored account (keyring refresh_token) on load.
   invoke<GoogleAccount | null>("google_account")
     .then((acct) => { googleAccount = acct ?? null; })
@@ -409,6 +570,8 @@ const overlayStack: { el: HTMLElement; restore: HTMLElement | null }[] = [];
 let overlayKeydown: ((ev: KeyboardEvent) => void) | null = null;
 let dialogResolve: ((id: string) => void) | null = null;
 let dialogEscapeId = "cancel";
+// Set while the passphrase dialog is open; Escape invokes it (= cancel).
+let passDialogResolve: (() => void) | null = null;
 
 function focusables(root: HTMLElement): HTMLElement[] {
   return [...root.querySelectorAll<HTMLElement>("button, input, textarea, select")].filter(
@@ -419,7 +582,8 @@ function focusables(root: HTMLElement): HTMLElement[] {
 function onOverlayEscape() {
   const top = overlayStack[overlayStack.length - 1];
   if (!top) return;
-  if (top.el.id === "dialog") resolveDialog(dialogEscapeId);
+  if (top.el.id === "pass-dialog") { passDialogResolve?.(); }
+  else if (top.el.id === "dialog") resolveDialog(dialogEscapeId);
   else if (top.el.id === "modal") cancelEditor();
   else if (top.el.id === "raw-modal") cancelRaw();
   else if (top.el.id === "key-modal") closeKey();
