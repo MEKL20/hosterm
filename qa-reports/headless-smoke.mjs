@@ -295,7 +295,12 @@ check("present binaries: guide never appears", await page.locator("#ssh-modal").
 // missing-binary state on Linux (OQ-5): check runs, guide skipped, per-attempt error friendly
 binCheckState = { ssh_missing: true, sftp_missing: false };
 await page.goto("http://localhost:4199/");
-await page.waitForTimeout(400);
+// Wait for real post-reload state instead of a fixed timeout: the host list must
+// be rendered and #ssh-modal settled hidden. On a slower runner (Windows CI) a
+// flat 400ms left the modal mid-transition, so it still intercepted the row click
+// at line 303 and the whole suite timed out.
+await page.locator(".host-item").first().waitFor({ state: "visible", timeout: 10000 });
+await page.locator("#ssh-modal.hidden").waitFor({ state: "attached", timeout: 10000 });
 check("missing (Linux): guide skipped, app usable",
   (await page.locator("#ssh-modal").evaluate((el) => el.classList.contains("hidden"))) &&
   (await page.locator(".host-item").count()) === 3);
