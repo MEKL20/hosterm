@@ -6,8 +6,14 @@ import { chromium } from "playwright";
 import { createServer } from "http";
 import { readFileSync, existsSync, readdirSync } from "fs";
 import { extname, join } from "path";
+import { fileURLToPath } from "url";
 
-const DIST = new URL("../dist", import.meta.url).pathname;
+// fileURLToPath (not .pathname): on Windows .pathname yields "/C:/.../dist"
+// with a leading slash before the drive letter, so join() builds an invalid
+// path, existsSync() is always false, and every request falls back to
+// index.html — the JS/CSS bundles never load and the whole DOM smoke fails.
+// fileURLToPath returns a native path on both platforms.
+const DIST = fileURLToPath(new URL("../dist", import.meta.url));
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css" };
 
 // CSP (AC R1, SEC-4): single source of truth = app.security.csp in
