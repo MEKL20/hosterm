@@ -668,6 +668,38 @@ fn create_identity_file(name: String, private_key: String) -> Result<String, Str
     Ok(format!("~/.ssh/keys/{}", name))
 }
 
+/// Delete a key hosterm manages. Scoped to `~/.ssh/keys/` ONLY: a bare filename
+/// with no path separators, and the resolved path must still sit inside
+/// keys_dir() (defence in depth against traversal). Legacy keys in ~/.ssh are
+/// intentionally NOT deletable here — we never want to remove a user's primary
+/// id_ed25519/id_rsa by accident. A matching `<name>.pub` is removed too.
+#[tauri::command]
+fn delete_identity_file(name: String) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Key name cannot be empty".into());
+    }
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err("Key name must be a plain filename (no path separators)".into());
+    }
+    let dir = keys_dir();
+    let path = dir.join(name);
+    // Defence in depth: the resolved parent must be exactly keys_dir().
+    if path.parent() != Some(dir.as_path()) {
+        return Err("Refusing to delete outside the managed keys directory".into());
+    }
+    if !path.exists() {
+        return Err(format!("No key named '{}' in ~/.ssh/keys", name));
+    }
+    std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+    // Remove the public half if present; its absence is not an error.
+    let pub_path = dir.join(format!("{}.pub", name));
+    if pub_path.exists() {
+        let _ = std::fs::remove_file(&pub_path);
+    }
+    Ok(())
+}
+
 // ============================================================
 //  STORE  (settings + allowlist JSON in app-data; bundled snippets)
 // ============================================================
@@ -2571,6 +2603,28 @@ mod auth_key_tests {
     }
 
     #[test]
+    fn delete_identity_file_removes_key_and_pub_and_guards_path() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = tmp("delkey");
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        // Create a key + its public half.
+        create_identity_file("id_del".into(), "-----BEGIN OPENSSH PRIVATE KEY-----\n".into()).unwrap();
+        let keys = cfg.parent().unwrap().join("keys");
+        std::fs::write(keys.join("id_del.pub"), "ssh-ed25519 AAAA\n").unwrap();
+        assert!(keys.join("id_del").exists());
+        // Delete removes both halves.
+        delete_identity_file("id_del".into()).unwrap();
+        assert!(!keys.join("id_del").exists(), "private key removed");
+        assert!(!keys.join("id_del.pub").exists(), "public key removed too");
+        // Guards: empty, traversal, path separators, and missing all error.
+        assert!(delete_identity_file("".into()).is_err());
+        assert!(delete_identity_file("../evil".into()).is_err());
+        assert!(delete_identity_file("a/b".into()).is_err());
+        assert!(delete_identity_file("not_there".into()).is_err());
+        std::env::remove_var("HOSTERM_CONFIG");
+    }
+
+    #[test]
     fn list_identity_files_skips_pub_and_config() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let cfg = tmp("skip");
@@ -3325,6 +3379,7 @@ pub fn run() {
             write_config_raw,
             list_identity_files,
             create_identity_file,
+            delete_identity_file,
             sftp_list,
             local_list,
             home_dir,

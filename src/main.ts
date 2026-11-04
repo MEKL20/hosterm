@@ -586,6 +586,7 @@ function onOverlayEscape() {
   else if (top.el.id === "dialog") resolveDialog(dialogEscapeId);
   else if (top.el.id === "modal") cancelEditor();
   else if (top.el.id === "raw-modal") cancelRaw();
+  else if (top.el.id === "keys-modal") closeKeys();
   else if (top.el.id === "key-modal") closeKey();
   else if (top.el.id === "ssh-modal") closeOverlay("#ssh-modal"); // Escape = Continue anyway
   else if (top.el.id === "settings-scrim") void closeSettings();
@@ -1665,6 +1666,10 @@ async function saveHost() {
 }
 
 // ---------- create identity key from pasted text ----------
+// True when the key modal was opened from the Keys manager (not the host
+// editor): on save we refresh the keys list instead of the editor dropdown.
+let keyModalReturnsToKeys = false;
+
 function openKeyModal() {
   ($("#k-name") as HTMLInputElement).value = "";
   ($("#k-text") as HTMLTextAreaElement).value = "";
@@ -1674,6 +1679,7 @@ function openKeyModal() {
 
 function closeKey() {
   closeOverlay("#key-modal");
+  keyModalReturnsToKeys = false;
 }
 
 async function saveKey() {
@@ -1681,13 +1687,94 @@ async function saveKey() {
   const privateKey = ($("#k-text") as HTMLTextAreaElement).value;
   try {
     const path = await invoke<string>("create_identity_file", { name, privateKey });
+    const fromKeys = keyModalReturnsToKeys;
     closeKey();
-    // select the freshly-created key in the host editor dropdown
-    await refreshIdentityDropdown(path);
-    ($("#f-auth") as HTMLSelectElement).value = "key";
-    applyAuthMode("key");
+    if (fromKeys) {
+      // Opened from the Keys manager: just refresh that list.
+      await renderKeysList();
+    } else {
+      // Opened from the host editor: select the new key in the dropdown.
+      await refreshIdentityDropdown(path);
+      ($("#f-auth") as HTMLSelectElement).value = "key";
+      applyAuthMode("key");
+    }
   } catch (e) {
     $("#key-err").textContent = `Failed to save key: ${msg(e)}. Check the name and press Save key again.`;
+  }
+}
+
+// ---------- keys manager: list + add + delete ----------
+// Only keys under ~/.ssh/keys/ are deletable (the backend refuses anything
+// else); legacy ~/.ssh/* keys are shown read-only so the user still sees them.
+async function renderKeysList() {
+  const list = $("#keys-list");
+  const err = $("#keys-err");
+  err.hidden = true;
+  err.textContent = "";
+  list.textContent = "Loading…";
+  let paths: string[];
+  try {
+    paths = await invoke<string[]>("list_identity_files");
+  } catch (e) {
+    list.textContent = "";
+    err.textContent = `Could not list keys: ${msg(e)}`;
+    err.hidden = false;
+    return;
+  }
+  list.textContent = "";
+  if (paths.length === 0) {
+    const empty = staticElement("div", "list-state", "No keys yet. Click Add key to paste one.");
+    list.appendChild(empty);
+    return;
+  }
+  for (const path of paths) {
+    const managed = path.startsWith("~/.ssh/keys/");
+    const name = path.slice(path.lastIndexOf("/") + 1);
+    const row = staticElement("div", "key-row");
+    const label = staticElement("span", "key-path");
+    label.textContent = path; // textContent escapes (ADR-8)
+    row.appendChild(label);
+    if (managed) {
+      const del = staticElement("button", "danger", "Delete") as HTMLButtonElement;
+      del.type = "button";
+      del.setAttribute("aria-label", `Delete key ${name}`);
+      del.addEventListener("click", () => { void deleteKey(name); });
+      row.appendChild(del);
+    } else {
+      const tag = staticElement("span", "key-legacy", "legacy (read-only)");
+      row.appendChild(tag);
+    }
+    list.appendChild(row);
+  }
+}
+
+function openKeysModal() {
+  openOverlay("#keys-modal", $("#keys-add"));
+  void renderKeysList();
+}
+
+function closeKeys() {
+  closeOverlay("#keys-modal");
+}
+
+async function deleteKey(name: string) {
+  const choice = await dialog(
+    "Delete key",
+    `Delete key "${name}" from ~/.ssh/keys? Any host pointing at it will lose its IdentityFile. This cannot be undone.`,
+    [
+      { label: "Cancel", id: "cancel" },
+      { label: "Delete", id: "delete", style: "danger" },
+    ],
+    "cancel",
+  );
+  if (choice !== "delete") return;
+  try {
+    await invoke("delete_identity_file", { name });
+    await renderKeysList();
+  } catch (e) {
+    const err = $("#keys-err");
+    err.textContent = `Failed to delete key: ${msg(e)}`;
+    err.hidden = false;
   }
 }
 
@@ -3232,6 +3319,9 @@ window.addEventListener("DOMContentLoaded", () => {
   $("#f-newkey").addEventListener("click", openKeyModal);
   $("#k-cancel").addEventListener("click", closeKey);
   $("#k-save").addEventListener("click", saveKey);
+  $("#btn-keys").addEventListener("click", openKeysModal);
+  $("#keys-close").addEventListener("click", closeKeys);
+  $("#keys-add").addEventListener("click", () => { keyModalReturnsToKeys = true; openKeyModal(); });
   // OpenSSH guide (FR-W2-2)
   $("#ssh-ps-cmd").textContent = PS_INSTALL_CMD;
   $("#ssh-copy").addEventListener("click", async () => {

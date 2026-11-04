@@ -80,7 +80,14 @@ button.danger { color: var(--danger); }
 button.danger:hover { background: var(--surface); border-color: var(--danger); }
 button.danger-filled { background: var(--danger); color: var(--bg); border-color: var(--danger); font-weight: 600; }
 button.danger-filled:hover { background: var(--danger); border-color: var(--accent); }
-button.icon { display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+button.icon {
+  display: inline-flex; align-items: center; justify-content: center; padding: 0;
+  background: transparent; border: 1px solid transparent; border-radius: 6px;
+  color: var(--dim); cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+button.icon:hover { background: var(--surface); color: var(--text); border-color: var(--border); }
+button.icon:focus-visible { border-color: var(--accent); color: var(--text); }
 
 input, textarea {
   background: var(--sidebar);
@@ -130,7 +137,7 @@ select {
   width: calc(100% - 24px);
   font-size: 12px;
 }
-body.sb-collapsed #sidebar, #sidebar.sb-collapsed { width: 44px; min-width: 44px; max-width: 44px; }
+body.sb-collapsed #sidebar, #sidebar.sb-collapsed { width: 36px; min-width: 36px; max-width: 36px; }
 body.sb-collapsed #sidebar > :not(#btn-expand) { display: none; }
 #btn-expand {
   margin: 10px auto;
@@ -281,6 +288,17 @@ body.sb-collapsed #sidebar > :not(#btn-expand) { display: none; }
 .pass-error { margin-top: 8px; font-size: 11.5px; color: var(--danger); }
 .pass-error[hidden] { display: none; }
 
+/* Keys manager list */
+.keys-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; max-height: 320px; overflow-y: auto; }
+.key-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface);
+}
+.key-path { flex: 1; font-family: var(--mono, monospace); font-size: 12px; word-break: break-all; }
+.key-legacy { font-size: 11px; color: var(--dim); }
+.key-row button.danger { flex: none; height: 26px; padding: 0 10px; font-size: 12px; }
+
 /* tabs */
 /* U-D2 Dusk §13.3: tab bar 42px (Arus 36px) */
 #tabbar {
@@ -304,6 +322,14 @@ body.sb-collapsed #sidebar > :not(#btn-expand) { display: none; }
 #tabs::-webkit-scrollbar-track { background: transparent; }
 #tabs::-webkit-scrollbar-thumb { background: var(--border); }
 #tabs::-webkit-scrollbar-thumb:hover { background: var(--border); }
+
+/* xterm viewport scrollbar — slim it down (default is a chunky ~15px native bar) */
+.xterm .xterm-viewport::-webkit-scrollbar { width: 8px; }
+.xterm .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
+.xterm .xterm-viewport::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+.xterm .xterm-viewport::-webkit-scrollbar-thumb:hover { background: var(--dim); }
+/* Firefox fallback */
+.xterm .xterm-viewport { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
 /* U-D2 Dusk §13.3: tab 32px tall; active underline --accent 2px */
 .tab {
   flex: 0 0 auto;
