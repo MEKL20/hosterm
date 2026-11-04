@@ -215,7 +215,15 @@ let page;
 for (let attempt = 1; ; attempt++) {
   try {
     browser = await chromium.launch();
-    page = await browser.newPage();
+    // Pin a Linux UA for the default page: the app computes isWindows from
+    // navigator.userAgent (main.ts:1290), and the "missing (Linux)" scenario
+    // below asserts the ssh guide is NOT shown. Without this, the default page
+    // inherits the runner's UA, so on the windows-latest CI runner isWindows
+    // became true, the guide modal opened, and the suite hung/timed out —
+    // green on Linux, red on Windows. The Windows scenario sets its own UA.
+    page = await browser.newPage({
+      userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+    });
     break;
   } catch (e) {
     await browser?.close().catch(() => {});
@@ -295,17 +303,9 @@ check("present binaries: guide never appears", await page.locator("#ssh-modal").
 // missing-binary state on Linux (OQ-5): check runs, guide skipped, per-attempt error friendly
 binCheckState = { ssh_missing: true, sftp_missing: false };
 await page.goto("http://localhost:4199/");
-// Wait for real post-reload state instead of a fixed timeout: the host list must
-// be rendered and #ssh-modal settled hidden. On a slower runner (Windows CI) a
-// flat 400ms left the modal mid-transition, so it still intercepted the row click
-// at line 303 and the whole suite timed out.
+// Wait for the host list to render after the reload (the default page's UA is
+// pinned Linux, so the ssh guide modal never opens here — no modal wait needed).
 await page.locator(".host-item").first().waitFor({ state: "visible", timeout: 10000 });
-// Poll for the modal to settle hidden (class toggled by app JS post-reload).
-// A CSS "#ssh-modal.hidden" waitFor timed out on the Windows runner; evaluate
-// the class in a polled loop instead, which is robust to how it is hidden.
-await page.waitForFunction(
-  () => { const m = document.querySelector("#ssh-modal"); return !m || m.classList.contains("hidden"); },
-  null, { timeout: 10000 });
 check("missing (Linux): guide skipped, app usable",
   (await page.locator("#ssh-modal").evaluate((el) => el.classList.contains("hidden"))) &&
   (await page.locator(".host-item").count()) === 3);
