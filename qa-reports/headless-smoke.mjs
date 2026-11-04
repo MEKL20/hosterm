@@ -1775,11 +1775,17 @@ check("U-D2 FR-SH8: status bar right shows N live · UTF-8 · LF · shell (stati
 check("U-D2 FR-SH8: right cluster field order live·enc·eol·shell·clock",
   sbRight.order.every((v, i) => v !== -1 && (i === 0 || v > sbRight.order[i - 1])),
   JSON.stringify(sbRight.order));
-// (6) host row-actions fade = .12s (FR-SH2, row-actions motion)
+// (6) host row-actions fade = .12s (FR-SH2, row-actions motion).
+// Force motion on for this measurement: the app correctly zeroes the transition
+// under prefers-reduced-motion (styles.css:729), and the windows-latest runner
+// defaults to reduce, so without this the duration reads 0s (green on the Linux
+// runner, red on Windows). Restore the default emulation afterwards.
+await page.emulateMedia({ reducedMotion: "no-preference" });
 const actFade = await page.evaluate(() => {
   const b = document.querySelector(".host-item .h-acts button");
   return b ? getComputedStyle(b).transitionDuration : "";
 });
+await page.emulateMedia({ reducedMotion: null });
 check("U-D2 §13.3: row-actions fade transition 0.12s", actFade === "0.12s", actFade);
 // (7) term divider 4px + col-resize (measure if a split is live, else assert CSS source)
 const divGeoD2 = await page.evaluate(() => {
