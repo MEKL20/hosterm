@@ -187,8 +187,19 @@ jobs:
         shell: bash
 
       - name: Headless DOM smoke
-        run: node qa-reports/headless-smoke.mjs
+        # pipefail so the node exit code (not tee's) decides pass/fail.
+        run: set -o pipefail; node qa-reports/headless-smoke.mjs 2>&1 | tee smoke-output.txt
         shell: bash
+
+      # Always upload the smoke log so a Windows-only failure is diagnosable
+      # without repo-admin access to the raw CI logs. No secrets in this output.
+      - name: Upload smoke log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: smoke-output
+          if-no-files-found: warn
+          path: smoke-output.txt
 
       - name: Build Tauri app (produces .msi and NSIS .exe)
         run: npm run tauri build
