@@ -756,7 +756,7 @@ Quick-pick accent chips (FR-SET6): amber `#e2a35c`, teal `#5fbfae`, rose `#e0869
 }
 ```
 
-**Snippets — `read_snippets` (ADR-19).** v1 = **bundled read-only default** shipped as a JSON asset (`src/assets/snippets.default.json`, embedded in the bundle, zero network, FR-DT5/NFR-DK6 clean). Shape:
+**Snippets — `read_snippets` (ADR-19).** The bundled read-only default is shipped as a JSON asset (`src/assets/snippets.default.json`, embedded in the bundle, zero network, FR-DT5/NFR-DK6 clean). **As shipped (commit `e9a5f9c`, PRD FR-SN9) the bundled set is EMPTY (`[]`)** — the read path + read-only contract (ADR-19) are retained for forward-compat, but no default snippets ship; all snippets are user-created via the CRUD overlay below. The bundled shape, when populated, is:
 
 ```jsonc
 [ { "category": "Docker", "items": [ { "name": "Prune everything", "command": "docker system prune -af" } ] },
@@ -930,10 +930,10 @@ Recommended order (dependency-driven; lead locks the actual unit boundaries):
 Every `[ASSUME-*]` below is a reversible default nano locked 31 Okt; none is a closed constraint. Listed so nano knows what to confirm before / during the relevant unit:
 
 - **OQ-1** (Dusk supersedes Arus as active identity; Arus = archived history): assumed **yes**. STATE.md §layout update (Arus token notes → historical) recommended **when the token unit lands**, not now — architect/lead does it then, not pm.
-- **OQ-2** (non-Dusk preset scope): assumed **Dusk-only functional; Slate/Ink/Light = disabled "coming" placeholders** until full-shell AA proven per preset. ADR-20 makes them drop-in later. MEKL confirms whether v1 ships the placeholders or hides them entirely.
+- **OQ-2** (non-Dusk preset scope): **RESOLVED — Slate/Ink/Light SHIPPED as functional** (MEKL, 2026-11-04, commit `e9a5f9c`; was: assumed Dusk-only, others disabled "coming" placeholders). Each is a `:root[data-theme="…"]` CSS block overriding surface/line/text/accent/status with the §729-731 AA-proven palette; the `aria-disabled` + "coming" badge are removed. **Residual limitation (open follow-up):** xterm/CodeMirror JS-literal palettes stay Dusk-only — terminal well + editor do not repaint per preset (§698, PRD FR-THM2).
 - **OQ-3** (Google OAuth backend): assumed **visual-only v1** — chip + popover, no real session, no cloud sync. Backend (provider/redirect/scope/what-syncs/token-storage=sidecar-class) is a later epic; MEKL must confirm that Dusk opening a cloud-sync door is acceptable vs PRD "zero cloud".
 - **OQ-4** (AI backend): assumed **deferred** — approval UX frozen (§13.6), no model/execution backend designed. §13.6 is the owed input to the future AI-backend spec author (mirrors §12.8). MEKL picks the direction (on-device vs remote; privacy/NFR-3 impact) in that epic.
-- **OQ-5** (store location + portability): assumed **`dirs::config_dir()/hosterm/` JSON, bundled read-only default snippets, outside `~/.ssh/`**. MEKL confirms the location AND whether settings/snippets ride along on a device move or stay machine-local (NFR-8 trade-off, §13.4).
+- **OQ-5** (store location + portability): **PARTIALLY RESOLVED — user-snippet CRUD overlay SHIPPED** (MEKL, 2026-11-04, commits `9b80c94`/`e9a5f9c`; §13.4, PRD FR-SN7..9). Store = `dirs::config_dir()/hosterm/` (`settings.json` + `snippets.user.json`), outside `~/.ssh/`, atomic whole-file writes. Bundled default snippets now ship EMPTY (`snippets.default.json` → `[]`, FR-SN9); all snippets are user-created. **Still open:** the portability trade-off — whether settings/snippets ride along on a device move or stay machine-local (NFR-8, §13.4) — remains for MEKL to confirm.
 - **OQ-6** ("Always allow" scope): assumed **exact-command-only v1**; pattern/glob = separate security epic. MEKL confirms the roadmap exists (prototype foot copy promises "Review patterns in Settings › Approvals") but is out of v1.
 
 ---
