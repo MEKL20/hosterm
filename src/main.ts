@@ -3003,7 +3003,9 @@ async function splitTerminal(targetTabId: number, sourceTabId: number) {
     invoke("clipboard_read")
       .then((raw) => {
         const text = pasteNormalize(String(raw));
-        if (text && split_session.ptyId != null) invoke("pty_write", { id: split_session.ptyId, data: text });
+        // Bracketed-paste via term.paste() (see the main-terminal path) so multi-
+        // line pastes keep their indentation; bytes exit through term.onData.
+        if (text) term.paste(text);
       })
       .catch(() => {});
   });
@@ -3063,7 +3065,13 @@ async function openTerminal(host: string): Promise<Session | null> {
     invoke("clipboard_read")
       .then((raw) => {
         const text = pasteNormalize(String(raw));
-        if (text && session.ptyId != null) invoke("pty_write", { id: session.ptyId, data: text });
+        // term.paste() wraps the text in bracketed-paste (ESC[200~ .. ESC[201~)
+        // whenever the remote app enabled it (?2004h), so vim/nano/shell suspend
+        // auto-indent for the paste and multi-line content (e.g. YAML) keeps its
+        // exact indentation. The wrapped bytes flow out through term.onData ->
+        // pty_write. Writing raw to the PTY (the old path) dropped the markers
+        // and let the remote re-indent every line.
+        if (text) term.paste(text);
       })
       .catch(() => {});
   });
