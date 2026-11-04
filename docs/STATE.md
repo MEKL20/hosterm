@@ -65,7 +65,7 @@ Desktop SSH/SFTP client, Tauri v2 + TypeScript, Windows-first (WebView2) but dev
 - **INV-26 host alias guard:** leading `-`, CR, or LF is refused before approval persist or PTY execution. Gate: three smoke vectors with zero write/execute delta.
 
 ## Verify loop (every change)
-1. `cd src-tauri && cargo test --lib` → **87/87** (77 FL-era + 1 U-D1 token test + 9 `store_tests::` U-D3). IPC inventory = **27** (`lib.rs` 25 + `fleet.rs` 2; `read_settings`/`write_settings`/`read_snippets` are the final +3).
+1. `cd src-tauri && cargo test --lib` → **107/107** (89 pre-BE-OAUTH + 18 `oauth::tests::` BE-OAUTH; prior STATE said 87 — stale, live tree measured 89 at HEAD before this card). IPC inventory = **30** (`lib.rs` 28 + `fleet.rs` 2). BE-OAUTH adds `google_sign_in`/`google_sign_out`/`google_account` (lib.rs 25→28); `mod oauth` implemented, `mod crypto`/`drive`/`backup` are BE-OAUTH-declared placeholders (TSD §2). `grep -rc "tauri::command" src-tauri/src/*.rs` → `lib.rs:28  fleet.rs:2` (others 0).
 2. `npm run build` → **0 TS errors**.
 3. `npm install --no-save playwright@1.63.0 && node qa-reports/headless-smoke.mjs` → **343/343** (U-D8 dispatch baseline 313 + 30 canonical checks). Cleanup: `mkdir -p "$TMPDIR/pw-trash"`; move `node_modules/playwright` + `node_modules/playwright-core` there, then `unlink node_modules/.bin/playwright node_modules/.bin/playwright-core` when present. Do not use `rm -rf` in headless single-query mode.
 4. Add/extend smoke checks for new behavior; keep U-D1..U-D7 explicit ledger and U-D8 seven-point audit green.

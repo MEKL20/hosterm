@@ -3270,6 +3270,48 @@ fn google_account() -> Result<Option<oauth::GoogleAccount>, String> {
     oauth::load_account()
 }
 
+// ============================================================
+//  DRIVE BACKUP/RESTORE — thin IPC wrappers (logic lives in backup.rs)
+// ============================================================
+//
+// Secrets NEVER cross IPC except the passphrase (unavoidable — the dialog is
+// in the WebView, KDF is in Rust, TSD §3). The passphrase arg is moved into a
+// `Zeroizing<String>` on entry so it is wiped from memory on drop, and it is
+// NEVER cloned into logs/errors/persistence. All gather/encrypt/upload and the
+// fail-safe restore orchestration live in backup.rs (TSD §2,§5).
+
+/// Gather the four sources → encrypt with the passphrase → upload to Drive.
+#[tauri::command]
+fn drive_backup(passphrase: String) -> Result<backup::BackupResult, String> {
+    let passphrase = zeroize::Zeroizing::new(passphrase);
+    backup::prod::backup(passphrase)
+}
+
+/// List the user's `.htbk` backups via cleartext appProperties (no decrypt).
+#[tauri::command]
+fn drive_list_backups() -> Result<Vec<backup::BackupMeta>, String> {
+    backup::prod::list_backups()
+}
+
+/// Download → decrypt (fail-safe on the AEAD tag) → pre-restore backup → write
+/// the real paths atomically. A wrong passphrase fails before anything is
+/// touched on disk.
+#[tauri::command]
+fn drive_restore(
+    file_id: String,
+    passphrase: String,
+) -> Result<backup::RestoreResult, String> {
+    let passphrase = zeroize::Zeroizing::new(passphrase);
+    backup::prod::restore(file_id, passphrase)
+}
+
+/// Return the fixed known restore target set + which currently exist, for the
+/// FE overwrite warning. No passphrase (the manifest is encrypted).
+#[tauri::command]
+fn drive_restore_preflight(_file_id: String) -> Result<backup::RestorePreflight, String> {
+    Ok(backup::preflight())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -3304,6 +3346,10 @@ pub fn run() {
             google_sign_in,
             google_sign_out,
             google_account,
+            drive_backup,
+            drive_list_backups,
+            drive_restore,
+            drive_restore_preflight,
             fleet::fleet_start,
             fleet::fleet_stop
         ])
