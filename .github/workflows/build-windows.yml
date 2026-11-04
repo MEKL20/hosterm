@@ -1,4 +1,4 @@
-name: Build Windows
+name: Build Windows + macOS
 
 # Reliable path to a Windows .exe/.msi installer: Tauri's bundler (NSIS/WiX)
 # only runs natively on Windows, so we build on a Windows runner.
@@ -213,22 +213,85 @@ jobs:
             src-tauri/target/release/bundle/msi/*.msi
             src-tauri/target/release/bundle/nsis/*.exe
 
+  # macOS universal (.app + .dmg). Same cargo + smoke gate as the Windows job;
+  # a red test/smoke fails before any bundle is produced. The .dmg is UNSIGNED
+  # (no Apple Developer cert), so Gatekeeper quarantines it on first open —
+  # users right-click > Open, or `xattr -dr com.apple.quarantine hosterm.app`.
+  build-macos:
+    if: github.event_name != 'pull_request'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust (both macOS arches for a universal binary)
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache cargo
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend deps
+        run: npm install
+
+      - name: Rust lib tests (cargo test --lib)
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+
+      - name: Build frontend for smoke
+        run: npm run build
+
+      - name: Install Playwright Chromium
+        run: |
+          npm install --no-save playwright@1.63.0
+          npx playwright install chromium
+
+      - name: Headless DOM smoke
+        run: set -o pipefail; node qa-reports/headless-smoke.mjs 2>&1 | tee smoke-output-macos.txt
+
+      - name: Upload smoke log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: smoke-output-macos
+          if-no-files-found: warn
+          path: smoke-output-macos.txt
+
+      - name: Build Tauri app (universal .app + .dmg)
+        run: npm run tauri build -- --target universal-apple-darwin
+
+      - name: Upload macOS bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: hosterm-macos
+          if-no-files-found: error
+          path: |
+            src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+
   # R4: the only job holding contents: write. Tag-gated, so manual dispatch
   # never grants write to any step. R3: also needs the audit job, so a red
   # audit gate blocks release attachment.
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [build, audit]
+    needs: [build, build-macos, audit]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Download installers
+      - name: Download installers (all platforms)
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: hosterm-windows
+          # no `name:` => download every artifact (hosterm-windows + hosterm-macos),
+          # each into its own subdir. The **/ glob below matches them at any depth.
+          path: dist-artifacts
 
       - name: Extract curated release notes
         run: python3 scripts/extract-release-notes.py "${{ github.ref_name }}" release-notes.md
@@ -247,3 +310,4 @@ jobs:
           files: |
             **/*.msi
             **/*.exe
+            **/*.dmg
