@@ -75,14 +75,30 @@ impl std::fmt::Debug for Header {
 
 impl Header {
     fn with_defaults(salt: [u8; SALT_LEN], nonce: [u8; NONCE_LEN]) -> Self {
+        Header::with_params(salt, nonce, DEFAULT_M_COST, DEFAULT_T_COST, DEFAULT_P_COST)
+    }
+
+    /// Header with explicit argon2 params. Production uses `with_defaults`
+    /// (OWASP floor). The test suite injects low-cost params through the
+    /// `encode_with_params` seam so the KDF does not dominate `cargo test`
+    /// (full OWASP params derive in ~30s each on a 5400rpm HDD — a 14-test
+    /// crypto module took ~400s; the params are still round-tripped through
+    /// the header, so coverage of the real derive/parse path is unchanged).
+    fn with_params(
+        salt: [u8; SALT_LEN],
+        nonce: [u8; NONCE_LEN],
+        m_cost: u32,
+        t_cost: u32,
+        p_cost: u32,
+    ) -> Self {
         Header {
             version: VERSION,
             kdf_id: KDF_ARGON2ID,
             aead_id: AEAD_XCHACHA,
             reserved: 0,
-            m_cost: DEFAULT_M_COST,
-            t_cost: DEFAULT_T_COST,
-            p_cost: DEFAULT_P_COST,
+            m_cost,
+            t_cost,
+            p_cost,
             salt,
             nonce,
             ct_len: 0,
@@ -230,10 +246,53 @@ fn encode_with(
     salt: [u8; SALT_LEN],
     nonce: [u8; NONCE_LEN],
 ) -> Result<Vec<u8>, CryptoError> {
+    encode_with_params(
+        passphrase,
+        plaintext,
+        salt,
+        nonce,
+        DEFAULT_M_COST,
+        DEFAULT_T_COST,
+        DEFAULT_P_COST,
+    )
+}
+
+/// Encode seam with explicit argon2 params. `encode_with` (and thus production
+/// `encode`) calls this with the OWASP defaults; the test suite calls it with
+/// low-cost params so the KDF does not dominate `cargo test`. The chosen params
+/// are written into the header and re-derived by `decode`, so the full
+/// derive→seal→parse→open path is exercised identically regardless of cost.
+/// Random-salt/nonce encode with explicit argon2 params. Same as [`encode`] but
+/// the caller chooses the KDF cost — used ONLY by the test suite (via a gated
+/// env override) to keep `cargo test` fast; production always goes through
+/// [`encode`] at the OWASP floor.
+pub(crate) fn encode_random_with_params(
+    passphrase: &str,
+    plaintext: Vec<u8>,
+    m_cost: u32,
+    t_cost: u32,
+    p_cost: u32,
+) -> Result<Vec<u8>, CryptoError> {
+    let mut salt = [0u8; SALT_LEN];
+    let mut nonce = [0u8; NONCE_LEN];
+    OsRng.fill_bytes(&mut salt);
+    OsRng.fill_bytes(&mut nonce);
+    encode_with_params(passphrase, plaintext, salt, nonce, m_cost, t_cost, p_cost)
+}
+
+fn encode_with_params(
+    passphrase: &str,
+    plaintext: Vec<u8>,
+    salt: [u8; SALT_LEN],
+    nonce: [u8; NONCE_LEN],
+    m_cost: u32,
+    t_cost: u32,
+    p_cost: u32,
+) -> Result<Vec<u8>, CryptoError> {
     // Wrap the plaintext so it is wiped once we are done with it.
     let plaintext = Zeroizing::new(plaintext);
 
-    let mut header = Header::with_defaults(salt, nonce);
+    let mut header = Header::with_params(salt, nonce, m_cost, t_cost, p_cost);
     let key = derive_key(
         passphrase.as_bytes(),
         &header.salt,
@@ -324,6 +383,24 @@ mod tests {
     const TT: u32 = 1;
     const TP: u32 = 1;
 
+    /// Fast-KDF encode for tests: fixed salt/nonce, low-cost argon2. Exercises
+    /// the same derive→seal→parse→open path as production `encode`, but ~30s/
+    /// derive cheaper. `htbk_byte_layout_golden` deliberately keeps the real
+    /// `encode_with` (OWASP defaults) to assert the shipped byte layout.
+    fn enc_fast(pw: &str, pt: Vec<u8>, salt: [u8; SALT_LEN], nonce: [u8; NONCE_LEN]) -> Vec<u8> {
+        encode_with_params(pw, pt, salt, nonce, TM, TT, TP).unwrap()
+    }
+
+    /// Fast-KDF encode with fresh random salt/nonce (for uniqueness tests that
+    /// need OsRng variation without paying the OWASP KDF cost per iteration).
+    fn enc_fast_random(pw: &str, pt: Vec<u8>) -> Vec<u8> {
+        let mut salt = [0u8; SALT_LEN];
+        let mut nonce = [0u8; NONCE_LEN];
+        OsRng.fill_bytes(&mut salt);
+        OsRng.fill_bytes(&mut nonce);
+        encode_with_params(pw, pt, salt, nonce, TM, TT, TP).unwrap()
+    }
+
     fn sample_manifest() -> Vec<u8> {
         br#"{"schema":1,"created_at":"2026-11-03T00:00:00Z","host":"box","files":[{"path_role":"ssh_config","rel":"config","mode":384,"content_b64":"SGk="}]}"#.to_vec()
     }
@@ -348,7 +425,7 @@ mod tests {
     #[test]
     fn aead_roundtrip() {
         let pt = sample_manifest();
-        let blob = encode_with("s3cret", pt.clone(), [1u8; SALT_LEN], [2u8; NONCE_LEN]).unwrap();
+        let blob = enc_fast("s3cret", pt.clone(), [1u8; SALT_LEN], [2u8; NONCE_LEN]);
         let out = decode("s3cret", &blob).unwrap();
         assert_eq!(out, pt);
     }
@@ -356,7 +433,7 @@ mod tests {
     #[test]
     fn encode_random_roundtrip() {
         let pt = sample_manifest();
-        let blob = encode("s3cret", pt.clone()).unwrap();
+        let blob = enc_fast_random("s3cret", pt.clone());
         let out = decode("s3cret", &blob).unwrap();
         assert_eq!(out, pt);
     }
@@ -364,14 +441,13 @@ mod tests {
     #[test]
     fn wrong_passphrase_fails_on_tag() {
         let blob =
-            encode_with("right", sample_manifest(), [9u8; SALT_LEN], [3u8; NONCE_LEN]).unwrap();
+            enc_fast("right", sample_manifest(), [9u8; SALT_LEN], [3u8; NONCE_LEN]);
         assert_eq!(decode("wrong", &blob), Err(CryptoError::TagFailed));
     }
 
     #[test]
     fn tampered_header_fails_aad() {
-        let mut blob =
-            encode_with("pw", sample_manifest(), [4u8; SALT_LEN], [5u8; NONCE_LEN]).unwrap();
+        let mut blob = enc_fast("pw", sample_manifest(), [4u8; SALT_LEN], [5u8; NONCE_LEN]);
         // Flip a byte inside the authenticated header region (e.g. m_cost).
         blob[8] ^= 0x01;
         assert_eq!(decode("pw", &blob), Err(CryptoError::TagFailed));
@@ -379,16 +455,14 @@ mod tests {
 
     #[test]
     fn tampered_salt_fails() {
-        let mut blob =
-            encode_with("pw", sample_manifest(), [4u8; SALT_LEN], [5u8; NONCE_LEN]).unwrap();
+        let mut blob = enc_fast("pw", sample_manifest(), [4u8; SALT_LEN], [5u8; NONCE_LEN]);
         blob[22] ^= 0xFF; // first salt byte -> different key AND AAD mismatch
         assert_eq!(decode("pw", &blob), Err(CryptoError::TagFailed));
     }
 
     #[test]
     fn tampered_ciphertext_fails() {
-        let mut blob =
-            encode_with("pw", sample_manifest(), [6u8; SALT_LEN], [7u8; NONCE_LEN]).unwrap();
+        let mut blob = enc_fast("pw", sample_manifest(), [6u8; SALT_LEN], [7u8; NONCE_LEN]);
         let last = blob.len() - 1;
         blob[last] ^= 0x80;
         assert_eq!(decode("pw", &blob), Err(CryptoError::TagFailed));
@@ -399,7 +473,7 @@ mod tests {
         // Fresh OsRng per encode -> nonces (bytes 38..62) differ across calls.
         let mut seen = std::collections::HashSet::new();
         for _ in 0..32 {
-            let blob = encode("pw", sample_manifest()).unwrap();
+            let blob = enc_fast_random("pw", sample_manifest());
             let nonce = blob[38..62].to_vec();
             assert!(seen.insert(nonce), "nonce reused across encodes");
         }
@@ -409,7 +483,7 @@ mod tests {
     fn salt_uniqueness_across_encodes() {
         let mut seen = std::collections::HashSet::new();
         for _ in 0..32 {
-            let blob = encode("pw", sample_manifest()).unwrap();
+            let blob = enc_fast_random("pw", sample_manifest());
             let salt = blob[22..38].to_vec();
             assert!(seen.insert(salt), "salt reused across encodes");
         }
@@ -447,21 +521,21 @@ mod tests {
 
     #[test]
     fn malformed_magic_rejected() {
-        let mut blob = encode("pw", sample_manifest()).unwrap();
+        let mut blob = enc_fast_random("pw", sample_manifest());
         blob[0] = b'X';
         assert!(matches!(decode("pw", &blob), Err(CryptoError::Malformed(_))));
     }
 
     #[test]
     fn truncated_blob_rejected() {
-        let blob = encode("pw", sample_manifest()).unwrap();
+        let blob = enc_fast_random("pw", sample_manifest());
         let short = &blob[0..HEADER_LEN]; // header only, no ct_len/ciphertext
         assert!(matches!(decode("pw", short), Err(CryptoError::Malformed(_))));
     }
 
     #[test]
     fn ct_len_mismatch_rejected() {
-        let mut blob = encode("pw", sample_manifest()).unwrap();
+        let mut blob = enc_fast_random("pw", sample_manifest());
         // Shrink the claimed ct_len; actual bytes no longer match.
         blob[62] = blob[62].wrapping_add(1);
         assert_eq!(decode("pw", &blob), Err(CryptoError::Malformed("ct_len mismatch")));

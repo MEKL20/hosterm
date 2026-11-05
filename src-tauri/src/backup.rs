@@ -425,6 +425,21 @@ fn atomic_write(path: &PathBuf, bytes: &[u8], mode: u32) -> Result<(), String> {
 
 // ---- BACKUP orchestration ------------------------------------------------
 
+/// Encrypt the manifest. Production ALWAYS uses `crypto::encode` at the OWASP
+/// argon2 floor (64 MiB / t=3). The ONLY deviation is a test-gated env escape
+/// hatch: when `HOSTERM_TEST_KDF` is set (set exclusively by the backup test
+/// harness under env_lock), a low-cost KDF is used so the backup roundtrip
+/// tests do not pay ~30s per derive. The variable is never set in production;
+/// if absent, behaviour is byte-identical to `crypto::encode`.
+fn encode_manifest(passphrase: &str, plaintext: Vec<u8>) -> Result<Vec<u8>, crypto::CryptoError> {
+    if std::env::var_os("HOSTERM_TEST_KDF").is_some() {
+        // 256 KiB / t=1 / p=1 — same low-cost params the crypto unit tests use.
+        crypto::encode_random_with_params(passphrase, plaintext, 256, 1, 1)
+    } else {
+        crypto::encode(passphrase, plaintext)
+    }
+}
+
 /// Gather → manifest → encrypt → upload. `passphrase` is held in Zeroizing and
 /// never logged. The uploaded media is the AEAD output of `crypto::encode`
 /// (ciphertext-at-rest: no plaintext host alias / key material in the blob).
@@ -442,7 +457,7 @@ pub fn run_backup(
         serde_json::to_vec(&manifest).map_err(|_| "manifest serialize failed".to_string())?,
     );
 
-    let blob = crypto::encode(passphrase.as_str(), plaintext.to_vec())
+    let blob = encode_manifest(passphrase.as_str(), plaintext.to_vec())
         .map_err(|e| e.to_string())?;
 
     let name = backup_filename(&host, &created_at);
@@ -754,7 +769,13 @@ mod tests {
     // Poison-tolerant: a prior panic while holding it is harmless to recover from
     // since the lock only serializes env mutation.
     fn env_lock() -> MutexGuard<'static, ()> {
-        crate::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+        let g = crate::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Backup roundtrip tests drive the real run_backup/run_restore path,
+        // which encrypts with crypto::encode (OWASP 64 MiB argon2 ~30s/derive).
+        // Flag the test-only low-cost KDF so the suite stays fast; never set in
+        // production. Scoped to the test process, serialized by this lock.
+        std::env::set_var("HOSTERM_TEST_KDF", "1");
+        g
     }
 
     /// A unique scratch sandbox for one test: HOME, CONFIG, DATA_DIR all point
