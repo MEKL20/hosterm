@@ -10,6 +10,8 @@ see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
 ## [Unreleased]
 
+## [0.13.3] - 2026-11-05
+
 ### Added
 - Sidebar section navigation: a vertical Hosts / Keys / Ansible menu at the top
   of the sidebar swaps the sidebar body between the host list, an inline SSH keys
@@ -157,6 +159,9 @@ xterm.js terminal tabs, SFTP file browser, remote text editor, add/edit/delete
 hosts with round-trip-safe config writes, key and password auth, paste-to-create
 identity keys, raw config editor. See the git tag history for details.
 
+[0.13.3]: https://github.com/MEKL20/hosterm/releases/tag/v0.13.3
+[0.13.2]: https://github.com/MEKL20/hosterm/releases/tag/v0.13.2
+[0.13.1]: https://github.com/MEKL20/hosterm/releases/tag/v0.13.1
 [0.13.0]: https://github.com/MEKL20/hosterm/releases/tag/v0.13.0
 [0.12.0]: https://github.com/MEKL20/hosterm/releases/tag/v0.12.0
 [0.11.0]: https://github.com/MEKL20/hosterm/releases/tag/v0.11.0

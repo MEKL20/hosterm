@@ -2990,9 +2990,33 @@ const ANS_HOSTILE_OUTPUT =
   "prod-web                   : ok=5    changed=2    unreachable=0    failed=0\r\n" +
   "db-core                    : ok=4    changed=0    unreachable=0    failed=0\r\n";
 
-// 1) Panel renders; binary present → runner body shown, guide hidden.
+// 1) Sidebar nav renders all three sections; Keys is inline; Ansible launcher
+// opens the existing wide runner modal.
+const sidebarNav = await page.evaluate(() => ({
+  labels: [...document.querySelectorAll(".sb-nav .sb-nav-label")].map((el) => el.textContent.trim()),
+  hostVisible: !document.querySelector("#view-host").classList.contains("hidden"),
+  oldKeysButton: !!document.querySelector("#btn-keys"),
+  oldAnsibleButton: !!document.querySelector("#btn-ansible"),
+}));
+check("SIDEBAR NAV: Hosts / Keys / Ansible render vertically with Host as default",
+  JSON.stringify(sidebarNav.labels) === JSON.stringify(["Hosts", "Keys", "Ansible"]) && sidebarNav.hostVisible,
+  JSON.stringify(sidebarNav));
+check("SIDEBAR NAV: old footer Keys / Ansible buttons are removed",
+  !sidebarNav.oldKeysButton && !sidebarNav.oldAnsibleButton, JSON.stringify(sidebarNav));
+await page.locator('.sb-nav[data-view="keys"]').click();
+await page.waitForTimeout(60);
+const keysInline = await page.evaluate(() => ({
+  visible: !document.querySelector("#view-keys").classList.contains("hidden"),
+  current: document.querySelector('.sb-nav[data-view="keys"]').getAttribute("aria-current"),
+  list: document.querySelector("#sb-keys-list"),
+}));
+check("SIDEBAR NAV: Keys swaps to the inline manager and marks aria-current",
+  keysInline.visible && keysInline.current === "page" && !!keysInline.list,
+  JSON.stringify({ visible: keysInline.visible, current: keysInline.current, list: !!keysInline.list }));
+
 ansibleCheckState = { missing: false };
-await page.evaluate(() => document.querySelector("#btn-ansible").click());
+await page.locator('.sb-nav[data-view="ansible"]').click();
+await page.locator("#sb-ansible-open").click();
 await page.waitForTimeout(60);
 const ansPanel = await page.evaluate(() => {
   const modal = document.querySelector("#ansible-modal");
