@@ -938,4 +938,308 @@ Every `[ASSUME-*]` below is a reversible default nano locked 31 Okt; none is a c
 
 ---
 
-*Sources: docs/PRD.md, docs/archive/SDD-hosterm-v1.md, docs/SDD-signing-updater.md, docs/EPIC-TSD-redesign-arus-v1.md, docs/archive/FEATURE-SPEC-wave-2-draft.md, docs/FEATURE-SPEC-fleet-run-v1.md, docs/STATE.md, docs/SPIKE-csp-findings.md, src-tauri/src/lib.rs, src/main.ts, qa-reports/headless-smoke.mjs, src-tauri/tauri.conf.json (all read 2026-10-19). Note: PRD-hosterm-v2.md landed mid-authoring from pm; header/flows reconciled against it. §12 addendum + ADR-13..16 + INV-14..19 authored for card t_a367888f (Fleet Run Unit 0). §13 Dusk addendum + ADR-18..22 + INV-21..26 authored for card t_60df4386 (Redesign Dusk v1 SDD), derived from docs/FEATURE-SPEC-redesign-dusk-v1.md + docs/UX/prototypes/proto-a-dusk{,-settings}.html + verification-report.json (all read 2026-10-31).*
+*Sources: docs/PRD.md, docs/archive/SDD-hosterm-v1.md, docs/SDD-signing-updater.md, docs/EPIC-TSD-redesign-arus-v1.md, docs/archive/FEATURE-SPEC-wave-2-draft.md, docs/FEATURE-SPEC-fleet-run-v1.md, docs/STATE.md, docs/SPIKE-csp-findings.md, src-tauri/src/lib.rs, src/main.ts, qa-reports/headless-smoke.mjs, src-tauri/tauri.conf.json (all read 2026-10-19). Note: PRD-hosterm-v2.md landed mid-authoring from pm; header/flows reconciled against it. §12 addendum + ADR-13..16 + INV-14..19 authored for card t_a367888f (Fleet Run Unit 0). §13 Dusk addendum + ADR-18..22 + INV-21..26 authored for card t_60df4386 (Redesign Dusk v1 SDD), derived from docs/FEATURE-SPEC-redesign-dusk-v1.md + docs/UX/prototypes/proto-a-dusk{,-settings}.html + verification-report.json (all read 2026-10-31). §14 Ansible v1 addendum + ADR-A1..A3 + INV-28..31 authored for card t_ed2de8f6 (Ansible v1 SDD), derived FROM docs/FEATURE-SPEC-ansible-v1.md (commit 9dae0b1, nano-verified + MEKL-confirmed 2026-11-05) + live tree src-tauri/src/lib.rs (local_pty_spawn:1768, check_binaries:1901) + src/main.ts (fleet group-derive) (all read 2026-11-05).*
+
+---
+
+## 14. Ansible v1 (addendum — playbook-runner architecture + frozen IPC contract)
+
+> Architect addendum (card t_ed2de8f6, 5 Nov 2026), derived FROM `docs/FEATURE-SPEC-ansible-v1.md`
+> (commit `9dae0b1`, nano-verified + MEKL-confirmed 2026-11-05). **Design-first lane:** the spec's
+> scope lock (§0), its LOCKED Clarifying-Question answers (§1), and its ADR-A1/A2/A3 (§7) are CLOSED
+> constraints, not inputs to re-debate here. This section supplies exactly what the lead's TSD owes
+> for unit decomposition: the component map, the frozen IPC contract (new commands + payloads), the
+> ephemeral-store schemas, four new named invariants (INV-28..31), and the formal ADRs. Units code
+> against §14.4 verbatim; the frontend mocks this contract without any backend. A payload or name
+> change requires an edit to this section (new ADR revision), never an implementation-side drift.
+>
+> **Transport is a reuse, not an invention.** The whole feature spawns ONE new kind of local PTY
+> child — real `ansible-playbook` — over the exact `local_pty_spawn` mechanism (lib.rs:1768). This
+> is the Fleet-Run posture (ADR-1 "spawn the OS real binaries") applied to a second binary. Nothing
+> about ssh/sftp/config changes.
+
+### 14.1 Constraints honored (trace)
+
+| Constraint (FEATURE-SPEC) | Mechanism (this section) |
+|---|---|
+| FR-ANS1/ANS2 — detect `ansible-playbook`, guide+block when missing | `check_ansible` command (§14.4), read-only resolve, pattern of `check_binaries` (lib.rs:1901); ADR-A3 |
+| FR-ANS6 / NFR-ANS6 — ephemeral inventory 0600 from hosterm hosts, deleted after run, never writes `~/.ssh/config` | backend generates INI inventory + ephemeral cfg in `data_dir()/hosterm/`, unlinked on run finish/stop; INV-29, INV-30 |
+| FR-ANS7 / FR-ANS11 / NFR-ANS5 — argv built as array, never `sh -c`/shell string | `ansible_run` builds a fixed `Vec<String>` argv → `CommandBuilder` (same discipline as INV-14 fleet); INV-28 |
+| FR-ANS4 / FR-ANS13 — password hosts skipped, secrets never in argv/env/`ps`/IPC | `host_eligibility_ansible` (pure, mirrors fleet) emits `skipped`+reason; only `ansible_ssh_private_key_file` **path** goes to inventory; ADR-A2, INV-31 |
+| FR-ANS9 / FR-ANS10 — dry-run WAJIB gate + explicit confirm before real run, never auto-run | frontend state machine (§14.5): Run-real DISABLED until a `--check` run for the current playbook+target succeeds; mirrors INV-25 approval posture |
+| FR-ANS12 / FR-ANS17 — host key checking ON, fail-closed | backend pins `ANSIBLE_HOST_KEY_CHECKING=True` + `ANSIBLE_CONFIG=<ephemeral cfg>` on spawn; ADR-A1 |
+| FR-ANS14 / FR-ANS15 — history app-data JSON, atomic 0600, corrupt→empty, 200 FIFO, no full output/secret | `ansible-history.json` via `read_ansible_history`/`write_ansible_history`, pattern of `settings.json` (INV-22/INV-24); INV-30 |
+| FR-ANS8 — hostile `PLAY RECAP`/task output | `esc()`/`escAttr()` at every Ansible render (ADR-8); no new `innerHTML` sink |
+| NFR-ANS1 / NFR-ANS3 — zero new Rust/JS deps, zero bundled python/ansible, zero idle network | all new backend logic is stdlib + `portable_pty` (already a dep); binary is user-installed; INV-28 path adds no runtime |
+| NFR-ANS4 — a run never mutates `~/.ssh/config` or sidecar | the Ansible path never calls config/sidecar writers; cargo byte-identity test; INV-29 |
+
+### 14.2 Component map
+
+```
+src-tauri/src/lib.rs          ← 3 NEW #[tauri::command] wrappers (thin) + pure helpers:
+                                  • check_ansible() -> AnsibleCheck         (resolve ansible-playbook, read-only)
+                                  • ansible_run(req: AnsibleRunReq) -> u32  (generate inventory+cfg, spawn PTY, return pty id)
+                                  • ansible_history(op: AnsibleHistoryOp)   (read / append — atomic, app-data)
+                                  pure cores (unit-testable, no I/O): build_ansible_argv(),
+                                  build_inventory_ini(), host_eligibility_ansible(),
+                                  ansible_missing() (mirrors binaries_missing:1883),
+                                  history_append_fifo() (200-cap).
+                                  REUSES: default pump_pty / NEXT_ID / PtyState / pty_kill / pty_write /
+                                  pty_resize — ansible_run returns a pty id into the SAME PtySession map,
+                                  so stop/resize/write are the EXISTING commands (0 new pty plumbing).
+src/main.ts                   ← Ansible panel: binary-missing guide (reuse W2-A openSshGuide pattern),
+                                  playbook file-picker + validate, host/group picker (reuse fleet picker),
+                                  dry-run→recap summary, Run-real gate + confirm dialog, PTY terminal tab
+                                  (reuse openTerminal local path), History sub-panel. All remote-origin
+                                  render via esc()/escAttr(); markup cloned from static index.html templates.
+index.html                    ← static Ansible panel markup + templates (guide modal, host-row, recap row,
+                                  confirm dialog, history row) — renderer clones, never dynamic innerHTML.
+qa-reports/headless-smoke.mjs ← extend: panel render, mock ansible_missing:true guide, dry-run-wajib gate,
+                                  confirm-before-real, hostile PLAY RECAP → 0 CSP/0 script, sh -c grep = 0.
+```
+
+**Why `ansible_run` returns a PTY id and not a new event family.** Fleet Run needed `fleet://` events
+because it fans out N parallel ssh children with per-host aggregation. Ansible v1 spawns exactly ONE
+`ansible-playbook` child whose own stdout already interleaves all hosts (`PLAY RECAP`). So the child
+rides the **existing** `pty://output/{id}` + `pty://exit/{id}` events (same as `local_pty_spawn`), and
+Stop/resize/write are the existing `pty_kill`/`pty_resize`/`pty_write` — **no new event family, no new
+pty command.** Recap parsing is frontend-side off the output stream. This keeps the backend diff to the
+three genuinely-new commands.
+
+Data flow (one run):
+
+```
+frontend: openAnsiblePanel()
+  │ invoke check_ansible() ──► AnsibleCheck{ missing }   (read-only PATH resolve, 0 spawn, FR-ANS1)
+  │   missing=true → render per-OS guide, block run, re-check button (FR-ANS2, W2-A pattern)
+  ▼
+frontend: pick playbook (file picker, *.yml/*.yaml, UTF-8, ≤2 MiB, FR-ANS5) + pick hosts/groups
+  │   host rows from existing sidebar query; password-auth rows marked skipped (FR-ANS4)
+  ▼
+frontend: Dry-run → invoke ansible_run(req{ mode:"check", playbook, targets, aliases })
+  │ backend (ansible_run):
+  │   host_eligibility_ansible(aliases) → eligible (key/agent) | skipped(password/unsafe) — pure
+  │   build_inventory_ini(eligible)  → write data_dir()/hosterm/ansible-inv-<rand>.ini   (0600)
+  │   write ephemeral cfg            → data_dir()/hosterm/ansible-cfg-<rand>.ini          (0600)
+  │   build_ansible_argv(check=true) → ["-i",<inv>,"--check","--diff","--limit",<targets>,<playbook>]
+  │   CommandBuilder::new("ansible-playbook").args(argv)  +env HOST_KEY_CHECKING=True, ANSIBLE_CONFIG=<cfg>
+  │   spawn PTY child → NEXT_ID → PtySession map (same as local_pty_spawn) → return pty id
+  │   on pty exit (frontend observes pty://exit): backend unlinks inv+cfg (ephemeral cleanup, INV-29)
+  ▼
+frontend: parse PLAY RECAP off pty://output → "N hosts will change, M tasks changed" (FR-ANS8)
+  │   on check success for this playbook+target → ENABLE Run-real (FR-ANS9 gate)
+  ▼
+frontend: Run-real → confirm dialog (FR-ANS10) → invoke ansible_run(req{ mode:"real", … })
+  │   backend: identical path, build_ansible_argv(check=false) = argv WITHOUT --check/--diff
+  ▼
+frontend: on pty://exit → invoke ansible_history({op:"append", entry:{…}})  (FR-ANS14)
+```
+
+### 14.3 Inventory + cfg generation (pure core)
+
+- Source is READ-ONLY: the hosterm host list already rendered in the sidebar (same query Fleet Run
+  uses; wildcard `*`/`?` hosts excluded). hosterm **never** writes `~/.ssh/config`.
+- **Group derivation** = alias prefix before the first `-` (`prod-web` → group `prod`), the exact
+  derivation Fleet Run FR-FL2 already uses. Never emits an ssh `Group` directive (real ssh fails hard
+  on it) — groups exist only inside the generated inventory file.
+- **Format = INI** (OQ-ANS3 resolved to INI; architect decision — INI is the terser alias→vars map and
+  Ansible's native default; YAML would add indentation fragility with no benefit for a flat host map).
+- Per eligible host, one line:
+  `<alias> ansible_host=<HostName> ansible_user=<User> ansible_port=<Port> ansible_ssh_private_key_file=<IdentityFile>`
+  Fields absent in config are omitted (Ansible applies its own defaults). **Password-auth hosts are
+  skipped** — never written to the inventory (ADR-A2/INV-31).
+- Both inventory and cfg are written to `dirs::config_dir()/hosterm/` with a random suffix, `0600`,
+  and **unlinked when the run's PTY exits or is stopped** (INV-29). Zero new persistent files under
+  `~/.ssh`. App-data store is isolated from config + sidecar (INV-22 family).
+
+### 14.4 Frozen IPC contract (lead's TSD implements verbatim; frontend mocks verbatim)
+
+Conventions identical to §12.3/§13.5: command args camelCase at the Tauri boundary, JSON payload
+fields snake_case. **IPC inventory 40 → 43** (see §14.8 for the count-of-record reconciliation). This
+block is the freeze — a shape change here is an addendum revision, never implementation drift.
+
+```ts
+// 1. Binary presence — read-only, 0 spawn, 0 network (FR-ANS1/ANS2; ADR-A3)
+invoke("check_ansible"): Promise<AnsibleCheck>
+interface AnsibleCheck {
+  missing: boolean;          // true ⇒ ansible-playbook not resolvable in PATH; frontend shows guide + blocks run
+}
+
+// 2. Spawn a run (check or real) — returns a PTY id into the EXISTING pty session map (FR-ANS6..12)
+invoke("ansible_run", { req: AnsibleRunReq }): Promise<number>   // pty id; errors as Err("ansible:<code>")
+interface AnsibleRunReq {
+  mode: "check" | "real";    // check = --check --diff (dry-run); real = no --check
+  playbook: string;          // absolute path to the picked *.yml/*.yaml (validated UTF-8 ≤2 MiB by FRONTEND before call)
+  aliases: string[];         // picker selection; backend REPLANS authoritatively via host_eligibility_ansible
+  limit: string;             // the --limit targets expression (one argv element; alias/group names, comma-joined)
+  cols: number;              // PTY geometry, like local_pty_spawn
+  rows: number;
+}
+// Backend behavior (frozen):
+//   • host_eligibility_ansible(aliases): key/agent-auth → eligible; password-auth or unsafe alias → skipped (NOT spawned)
+//   • if 0 eligible hosts → Err("ansible:no-eligible-hosts"), 0 spawn, 0 files written
+//   • generates ephemeral inventory + cfg (0600, data_dir()), builds argv as a Vec<String> (INV-28), spawns PTY
+//   • env on spawn: ANSIBLE_HOST_KEY_CHECKING=True, ANSIBLE_CONFIG=<ephemeral cfg>  (ADR-A1)
+//   • NO password/secret ever enters argv, env, or this payload (ADR-A2 / INV-31)
+//   • ephemeral files are unlinked when this pty's pty://exit fires or pty_kill is called (INV-29)
+//   • output/exit ride the EXISTING pty://output/{id} + pty://exit/{id}; stop = existing pty_kill(id)
+
+// 3. History — app-data JSON, atomic 0600, corrupt→empty, 200 FIFO (FR-ANS14/ANS15)
+invoke("ansible_history", { op: AnsibleHistoryOp }): Promise<AnsibleHistoryEntry[]>
+type AnsibleHistoryOp =
+  | { kind: "read" }                               // → full array (newest-last), [] if missing/corrupt (INV-24 family)
+  | { kind: "append"; entry: AnsibleHistoryEntry } // → array after append + FIFO-cap at 200; atomic whole-file write
+interface AnsibleHistoryEntry {
+  playbook: string;          // path (basename shown in UI; full path stored)
+  targets: string;           // the --limit expression as run
+  mode: "check" | "real";
+  started_at: string;        // ISO-8601 UTC
+  duration_ms: number;
+  rc: number;                // ansible-playbook exit code
+  recap: string;             // the trimmed PLAY RECAP block text ONLY — NEVER full task output, NEVER any secret
+}
+```
+
+**No new events, no streaming command.** The run's bytes ride the existing `pty://` family (§14.2).
+`ansible_run` is the only new command that spawns; `check_ansible` and `ansible_history` are
+request/response. Error strings are opaque `ansible:<code>` tokens the frontend maps to copy (same
+posture as Fleet's `fleet:<code>`); the backend never embeds host/path data an attacker controls into
+an error string.
+
+### 14.5 Dry-run-WAJIB gate (frontend state machine — FR-ANS9/ANS10)
+
+```
+state: { playbookPath, targets, checkedKey: string|null }
+  checkedKey = `${playbookPath}\u0000${targets}`  // identity of the last SUCCESSFUL dry-run
+Run-real button ENABLED  ⇔  checkedKey === current(`${playbookPath}\u0000${targets}`)
+  • change playbook OR targets → checkedKey := null → Run-real DISABLED (gate reset)
+  • dry-run (mode:"check") pty exits rc==0 → checkedKey := current key → Run-real ENABLED
+  • Run-real always requires an explicit confirm dialog first (FR-ANS10); never auto-runs (INV-25 sibling)
+```
+
+This is the frontend mirror of INV-25's approval posture: the permission-widening action (a real,
+mutating run) is gated behind a cheaper, safe action (dry-run) plus an explicit human confirm, and is
+never the default/primary auto-path. It is a security layer, not just UX (spec §4).
+
+### 14.6 Data model (new entities)
+
+No DB. One new app-data file + two transient files per run:
+
+| Entity | Location | Lifetime | Shape |
+|---|---|---|---|
+| `ansible-history.json` | `dirs::config_dir()/hosterm/` | persistent, app-data (INV-22) | `AnsibleHistoryEntry[]`, 200-cap FIFO, atomic 0600 write, corrupt→`[]` (INV-24) |
+| ephemeral inventory | `dirs::config_dir()/hosterm/ansible-inv-<rand>.ini` | per-run, 0600, unlinked on pty exit/stop | INI: one `<alias> ansible_host=… ansible_user=… ansible_port=… ansible_ssh_private_key_file=…` line per eligible host; `[group]` headers from alias-prefix derivation |
+| ephemeral cfg | `dirs::config_dir()/hosterm/ansible-cfg-<rand>.ini` | per-run, 0600, unlinked on pty exit/stop | pinned-defaults `ansible.cfg` (host_key_checking via env, nocolor optional) — pins a safe cfg so a stray `ansible.cfg` in cwd is never honored |
+
+All three live in app-data, **isolated from `~/.ssh/config` and the secrets sidecar** (INV-29). The
+history store never reads or writes config/sidecar (INV-30, a sibling of INV-22). Secrets are never
+serialized into any of them (INV-31).
+
+### 14.7 ADRs (frozen in spec §7; stated formally here)
+
+**ADR-A1 — Host key checking stays ON (fail-closed).**
+*Decision:* every Ansible spawn pins `ANSIBLE_HOST_KEY_CHECKING=True` and `ANSIBLE_CONFIG=<ephemeral
+cfg>`. An unknown host key makes that host's task fail with a directive message (open one terminal tab
+to the host once for TOFU), never an auto-accept.
+*Rationale:* hosterm spawns the user's real `ssh` against the user's own `known_hosts`; silently
+accepting new keys would weaken the posture for a blast-radius-wide tool. Consistent with Fleet Run's
+`BatchMode=yes` fail-closed stance. Pinning `ANSIBLE_CONFIG` also stops a hostile `ansible.cfg` in the
+user's cwd from being honored.
+*Alternatives rejected:* `False` (auto-accept) — trades a one-time TOFU friction for a persistent MITM
+exposure; rejected as a security regression.
+
+**ADR-A2 — Credentials: key/agent hosts only in v1; secrets never leave the sidecar.**
+*Decision:* for key/agent-auth hosts the ephemeral inventory carries
+`ansible_ssh_private_key_file=<IdentityFile path>` — the **path already in the user's ssh config**, not
+the key bytes. Password-auth hosts are `skipped` with an explicit reason and are never added to the
+inventory. No password/secret ever becomes an argv element, `--extra-vars`, an env var visible in `ps`,
+or an IPC payload field.
+*Rationale:* argv is world-readable via `ps`; `--extra-vars` and env leak the same way. hosterm's
+zero-knowledge posture keeps passwords only in the 0600 sidecar, never crossing IPC — the same decision
+Fleet Run FR-FL20/21 made. v1 shipping key/agent-only matches Fleet Run v1 exactly, so it is not a
+surprise regression.
+*Deferred to wave-2 (architect spike owed):* password-host Ansible runs need a proven no-expose feed
+(`sshpass` via fd, Ansible Vault, or prompt-via-PTY) before they can ship.
+
+**ADR-A3 — Binary-check lifecycle: a separate `check_ansible` command.**
+*Decision:* detection is a new command `check_ansible` called when the Ansible panel opens, NOT an
+extension of launch-time `check_binaries`.
+*Rationale:* `ansible-playbook` is OPTIONAL (the user installs it themselves), so it has a different
+lifecycle from the mandatory ssh/sftp binaries. Folding it into `check_binaries` would couple an
+optional tool's absence to app launch and muddy the W2-A guide flow. A separate command keeps the
+"check when you open the panel" semantics clean and read-only (0 spawn, mirrors `binaries_missing`).
+
+### 14.8 Impact on the verify loop + invariants
+
+**New named invariants (gate in STATE.md + smoke/cargo):**
+
+| ID | Property | Gate |
+|---|---|---|
+| INV-28 | The Ansible run path builds its `ansible-playbook` argv as a direct array (`Vec<String>` → `CommandBuilder`); zero `sh -c`/`bash -c`/`cmd /C`. Playbook path and `--limit` targets are each a single argv element, never interpolated into a shell string (sibling of INV-14/INV-27). | cargo argv-builder test (array shape, marker-file fixture) + grep `sh -c\|bash -c\|cmd /C` = 0 on the Ansible path (NFR-ANS5) |
+| INV-29 | An Ansible run writes ONLY to app-data (`dirs::config_dir()/hosterm/`); it never reads or writes `~/.ssh/config` or the secrets sidecar, and its ephemeral inventory+cfg are deleted when the run's PTY exits or is stopped. Zero new persistent files under `~/.ssh`. | cargo byte-identity test (config+sidecar hash+mtime identical before/after, NFR-ANS4) + ephemeral-cleanup test |
+| INV-30 | `ansible-history.json` is app-data-only, atomic whole-file 0600 write, 200-entry FIFO; a missing/corrupt file returns `[]` and the corrupt bytes stay untouched until the next legitimate write (INV-22/INV-24 family). | cargo: atomic write, FIFO cap, corrupt→`[]`-no-clobber |
+| INV-31 | No secret byte ever enters the Ansible path's argv, env, inventory file, history entry, or IPC payload. Password-auth hosts are `skipped` (never spawned, never in inventory); only `IdentityFile` **paths** are referenced. | cargo: inventory-generate test (password host skipped, no key bytes) + payload-shape review (no secret field) |
+
+**ADR map:** ADR-A1 (host key checking ON), ADR-A2 (credentials key/agent-only v1), ADR-A3
+(`check_ansible` lifecycle) — all §14.7.
+
+**IPC inventory gate (count of record).** The canonical gate is
+`grep -rc "tauri::command" src-tauri/src/*.rs`. At HEAD it sums to **40** (37 lib.rs + 2 fleet.rs + 1
+false-positive: a comment in `backup.rs:8` that contains the literal `#[tauri::command]` inside prose —
+the grep counts it; the actual `generate_handler!` list registers **39** real commands). The three new
+Ansible commands land in `lib.rs`, so the gate moves **40 → 43** (lib.rs 37 → 40; fleet.rs 2 unchanged;
+backup.rs comment unchanged) and the registered-command count moves **39 → 42**. §11 self-check updates
+to 43. *Lead action owed:* the stale `backup.rs:8` comment inflates the gate by 1 — the lead MAY
+neutralize it (reword the comment so it no longer matches) in the same wave to make gate == registered,
+but that is a hygiene nicety, not a blocker; document whichever number the gate actually emits.
+
+**Carried-forward checks that must stay green:** ADR-8 hostile-render (PLAY RECAP + task output through
+`esc()`/`escAttr()`, CSP counter == 0 with hostile fixtures), no-background-network (NFR-ANS3 — the only
+new outbound traffic is the ssh that `ansible-playbook` itself triggers, user-initiated), `draggable`
+grep stays 0 (picker reuses fleet's manual-mouse pattern, not HTML5 DnD).
+
+### 14.9 Hotspot + recommended unit sequence (RECOMMENDATION — final granularity = lead's TSD)
+
+**Hotspot (binding):** `src/main.ts` and `index.html` are the Ansible frontend hotspot (panel + picker +
+dialogs + history). The backend unit (three new commands + pure cores in `lib.rs`) is a HOTSPOT with
+every other `lib.rs` card — **`lib.rs` takes one active card at a time, never parallel** (standing repo
+rule). The backend unit is file-disjoint from the frontend hotspot and MAY run parallel to an early
+frontend unit as long as no other `lib.rs` card is mid-flight.
+
+> `hotspot: src-tauri/src/lib.rs — Ansible backend (3 commands + pure cores) collides with every other lib.rs card; serialize, one active lib.rs card.`
+> `hotspot: src/main.ts + index.html — Ansible frontend panel/picker/dialogs; serialize per repo rule.`
+
+Recommended sequence (lead finalizes):
+1. **Backend: `check_ansible` + `ansible_run` + `ansible_history`** — pure cores (`build_ansible_argv`,
+   `build_inventory_ini`, `host_eligibility_ansible`, `ansible_missing`, `history_append_fifo`) with
+   full cargo coverage (INV-28..31). Frozen to §14.4. File-disjoint; can start first.
+2. **Frontend panel shell + binary-missing guide** — W2-A pattern, mocks `check_ansible`. (main.ts/index.html)
+3. **Playbook picker + host/group picker** — reuse fleet picker; password rows skipped. (main.ts)
+4. **Dry-run → recap + the WAJIB gate state machine** (§14.5) — depends on #1 (ansible_run) + #2/#3.
+5. **Run-real confirm dialog + PTY terminal tab** (reuse openTerminal local) — depends on #4.
+6. **History sub-panel** — depends on #1 (`ansible_history`). **Last** (read + render, lowest risk).
+
+### 14.10 Open items for the lead (unit boundaries only — NO architectural decision left open)
+
+Every architectural decision is LOCKED above. These are purely implementation-granularity choices the
+lead settles in the TSD — none change the contract (§14.4), the invariants (§14.8), or the ADRs (§14.7):
+
+- **LQ-1 (unit split of the backend command):** whether `ansible_run`'s inventory/cfg generation lives
+  in `lib.rs` directly or a small `mod ansible` (mirroring how Fleet got its own `fleet.rs`). Architect
+  note: if the backend body grows past ~150 LOC, a `mod ansible` keeps `lib.rs` diff thin and shrinks
+  the hotspot collision surface (same reasoning as §12.2). **Decision is the lead's** — the command
+  names and payloads (§14.4) are identical either way.
+- **LQ-2 (ephemeral cleanup trigger wiring):** where the inventory/cfg unlink hooks onto the PTY exit —
+  backend-side in the pty exit path, or a frontend `invoke` on `pty://exit`. Architect recommendation:
+  backend-side (register the temp paths against the pty id, unlink in the same place `pty_kill`/exit
+  clears the session) so cleanup is not contingent on the frontend being alive. INV-29 holds either way;
+  lead picks the wiring.
+- **LQ-3 (`ANSIBLE_NOCOLOR`):** whether to also pin `ANSIBLE_NOCOLOR=1` for cleaner `PLAY RECAP`
+  parsing. Recommendation: yes (frontend parse is simpler, no ANSI strip). Trivial; lead's call.
+
+### 14.11 Wave-2 parking lot (NOT designed — carried from spec §10)
+
+1. Auto-install Ansible from inside the app (pipx/apt/brew on Unix, WSL on Windows).
+2. Playbook from a private Git repo (adds an OAuth/token surface).
+3. Password-host Ansible runs (the no-expose secret feed — architect spike owed, ADR-A2).
+4. Ad-hoc module runs, Vault editing from the UI, rolling/serial with a failure budget.
