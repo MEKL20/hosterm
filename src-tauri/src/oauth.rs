@@ -135,9 +135,15 @@ impl TokenHttp for ReqwestHttp {
             .text()
             .map_err(|e| format!("token response read failed: {e}"))?;
         if !status.is_success() {
-            // Do not echo the full body (may contain token material on some
-            // endpoints); surface status + a short error-only hint.
-            return Err(format!("token endpoint returned HTTP {}", status.as_u16()));
+            // A FAILED token response is an OAuth error object
+            // `{"error":..,"error_description":..}` and carries NO token
+            // material, so surfacing those two fields is safe and makes the
+            // cause diagnosable. We NEVER echo a success body or token fields.
+            return Err(format!(
+                "token endpoint returned HTTP {}{}",
+                status.as_u16(),
+                oauth_error_suffix(&body)
+            ));
         }
         Ok(body)
     }
@@ -160,6 +166,39 @@ impl TokenHttp for ReqwestHttp {
             return Err(format!("userinfo endpoint returned HTTP {}", status.as_u16()));
         }
         Ok(body)
+    }
+}
+
+// ---- Token-endpoint error surfacing (non-sensitive) ---------------------
+
+/// Minimal OAuth error object from a FAILED token response. Per RFC 6749 §5.2
+/// a non-2xx token response is `{"error":..,"error_description":..}` and carries
+/// NO token material — so these two fields are safe to surface.
+#[derive(Debug, Clone, Deserialize)]
+struct OAuthErrorBody {
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    error_description: Option<String>,
+}
+
+/// Build the non-sensitive, human-readable suffix for a token-endpoint HTTP
+/// error. Parses ONLY `error` / `error_description` out of the body; it never
+/// echoes the raw body and never surfaces any field that could carry token
+/// material (access_token / refresh_token / id_token). On an unparseable or
+/// error-less body it returns an empty suffix so only the HTTP status shows.
+///
+/// Example output: `: invalid_request (client_secret is missing.)`.
+fn oauth_error_suffix(body: &str) -> String {
+    match serde_json::from_str::<OAuthErrorBody>(body) {
+        Ok(e) => match (e.error, e.error_description) {
+            (Some(err), Some(desc)) if !err.is_empty() && !desc.is_empty() => {
+                format!(": {err} ({desc})")
+            }
+            (Some(err), _) if !err.is_empty() => format!(": {err}"),
+            _ => String::new(),
+        },
+        Err(_) => String::new(),
     }
 }
 
@@ -868,6 +907,80 @@ mod tests {
             seen_forms: RefCell::new(Vec::new()),
         };
         assert!(exchange_code(&empty, "C", "V", "r").is_err());
+    }
+
+    // ---- Token-endpoint error surfacing (BE-OAUTH 400 diagnosis) --------
+
+    #[test]
+    fn oauth_error_suffix_surfaces_error_and_description() {
+        // A real Google token 400 body: error + error_description, no tokens.
+        let body = r#"{"error":"invalid_request","error_description":"client_secret is missing."}"#;
+        let suffix = oauth_error_suffix(body);
+        assert_eq!(suffix, ": invalid_request (client_secret is missing.)");
+    }
+
+    #[test]
+    fn oauth_error_suffix_error_only_when_no_description() {
+        let body = r#"{"error":"invalid_grant"}"#;
+        assert_eq!(oauth_error_suffix(body), ": invalid_grant");
+    }
+
+    #[test]
+    fn oauth_error_suffix_empty_on_unparseable_or_errorless() {
+        assert_eq!(oauth_error_suffix("not json at all"), "");
+        assert_eq!(oauth_error_suffix("{}"), "");
+        assert_eq!(oauth_error_suffix(r#"{"error":""}"#), "");
+    }
+
+    #[test]
+    fn oauth_error_suffix_never_echoes_token_material() {
+        // Even if a (hypothetical) failure body also carried token-shaped
+        // fields, the suffix must surface ONLY error/error_description and must
+        // NEVER echo any token field value.
+        let body = r#"{"error":"invalid_request","error_description":"bad",
+            "access_token":"SECRET_AT","refresh_token":"SECRET_RT","id_token":"SECRET_ID"}"#;
+        let suffix = oauth_error_suffix(body);
+        assert_eq!(suffix, ": invalid_request (bad)");
+        assert!(!suffix.contains("SECRET_AT"), "must not echo access_token");
+        assert!(!suffix.contains("SECRET_RT"), "must not echo refresh_token");
+        assert!(!suffix.contains("SECRET_ID"), "must not echo id_token");
+        assert!(!suffix.contains("access_token"));
+        assert!(!suffix.contains("refresh_token"));
+    }
+
+    /// FakeHttp that returns an Err exactly as `ReqwestHttp::post_form` would on
+    /// a non-2xx — proving `exchange_code` propagates the surfaced OAuth error
+    /// (and no token material) all the way to the caller's message.
+    struct ErrHttp {
+        err: String,
+    }
+    impl TokenHttp for ErrHttp {
+        fn post_form(&self, _url: &str, _form: &[(&str, &str)]) -> Result<String, String> {
+            Err(self.err.clone())
+        }
+        fn get_bearer(&self, _url: &str, _t: &str) -> Result<String, String> {
+            Ok(String::new())
+        }
+    }
+
+    #[test]
+    fn exchange_code_propagates_surfaced_token_error() {
+        // Construct the message the production post_form would produce for a
+        // 400 with Google's error body.
+        let msg = format!(
+            "token endpoint returned HTTP 400{}",
+            oauth_error_suffix(
+                r#"{"error":"invalid_request","error_description":"client_secret is missing."}"#
+            )
+        );
+        assert_eq!(
+            msg,
+            "token endpoint returned HTTP 400: invalid_request (client_secret is missing.)"
+        );
+        let fake = ErrHttp { err: msg.clone() };
+        let got = exchange_code(&fake, "CODE", "VERIFIER", "http://127.0.0.1:1").unwrap_err();
+        assert_eq!(got, msg);
+        assert!(!got.contains("access_token"));
     }
 
     // ---- pct_encode / url_decode round-trip -----------------------------
