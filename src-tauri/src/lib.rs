@@ -4262,21 +4262,26 @@ mod bin_check_tests {
     /// byte-for-byte, which proves no shell interpolation happened to it.
     #[test]
     fn argv_marker_file_proves_no_shell_interp() {
-        let dir = tmp("ans-argv-marker");
-        // A real file whose name embeds `;`, `$()`, `&&`, `|` — a shell would
-        // mangle any of these; a direct argv element keeps them literal.
-        let fname = "pb;$(touch PWNED)&&echo x|y.yml";
-        let path = dir.join(fname);
-        std::fs::write(&path, b"---\n").unwrap();
-        let path_str = path.to_string_lossy().to_string();
+        // A playbook path whose name embeds shell metachars `;`, `$()`, `&&` — a
+        // shell would mangle/expand any of these; a direct argv element keeps them
+        // literal. We assert on the ARGV STRING, not on writing a real file: the
+        // point is that `build_ansible_argv` never hands the value to a shell, and
+        // these chars (plus Windows-illegal `|`/`:`) must never need to be a valid
+        // filename for that proof. (A real file with `|`/`:` in its name is illegal
+        // on Windows NTFS, so this test used to panic cross-platform.)
+        let path_str = "pb;$(touch PWNED)&&echo x.yml".to_string();
         let a = build_ansible_argv(true, "/tmp/inv.ini", "all", &path_str);
-        // The playbook element is the exact path — metachars preserved as data.
+        // The playbook element is the exact string — metachars preserved as data,
+        // occupying a single argv slot (not split on `;`/whitespace by a shell).
         assert_eq!(a.last().unwrap(), &path_str);
         assert!(a.last().unwrap().contains("$("), "metachars preserved literally");
-        // The marker file the embedded `touch PWNED` would create does NOT
-        // exist: nothing was ever handed to a shell to expand.
-        assert!(!dir.join("PWNED").exists(), "no shell ever expanded the argv");
-        let _ = std::fs::remove_dir_all(tmp("ans-argv-marker"));
+        assert!(a.last().unwrap().contains("&&"), "metachars preserved literally");
+        // argv is a fixed array of discrete elements; the dangerous string is ONE
+        // element, never expanded or re-split — nothing was handed to a shell.
+        assert!(
+            a.iter().filter(|e| e.contains("$(")).count() == 1,
+            "metachar string stays a single argv element, never shell-split"
+        );
     }
 
     // ---- BE-ANS2: build_inventory_ini (INV-29/31) ----
