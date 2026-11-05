@@ -1167,7 +1167,7 @@ body.sftp-dragging { user-select: none; cursor: grabbing; }
 }
 
 /* modals */
-#modal, #raw-modal, #key-modal, #dialog, #ssh-modal {
+#modal, #raw-modal, #key-modal, #dialog, #ssh-modal, #ansible-modal {
   position: fixed; inset: 0;
   background: rgba(0, 0, 0, .5);
   display: flex; align-items: center; justify-content: center;
@@ -1244,3 +1244,97 @@ body.sftp-dragging { user-select: none; cursor: grabbing; }
   text-align: left;
 }
 .link-danger:hover { background: transparent; text-decoration: underline; }
+
+/* ---------- Ansible v1 panel (FE-ANS) — Dusk tokens only ---------- */
+.ans-box { gap: 14px; }
+.ans-head { display: flex; align-items: center; gap: 8px; }
+.ans-head .head-tag {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--dim);
+  border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px;
+}
+.ans-head .spacer { flex: 1; }
+
+.ans-guide { display: flex; flex-direction: column; gap: 10px; }
+.ans-guide h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.ans-guide p { margin: 0; color: var(--dim); font-size: 12.5px; line-height: 1.5; }
+.ans-guide-os { display: flex; flex-direction: column; gap: 8px; }
+.ans-guide-step { display: flex; flex-direction: column; gap: 3px; }
+.ans-guide-label { font-size: 11.5px; color: var(--dim); }
+.ans-guide-cmd {
+  font-family: var(--font-mono); font-size: 12px;
+  background: var(--term); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: 6px 8px; white-space: pre-wrap; word-break: break-all;
+}
+.ans-guide-actions { display: flex; gap: 8px; }
+
+.ans-body { display: flex; flex-direction: column; gap: 14px; min-height: 0; flex: 1; overflow-y: auto; }
+.ans-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.ans-col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.ans-col-h { margin: 0; font-size: 12px; font-weight: 600; color: var(--text); }
+.ans-note { margin: 0; font-size: 11.5px; color: var(--faint); line-height: 1.45; }
+.ans-note code {
+  background: var(--sidebar); border: 1px solid var(--border);
+  border-radius: 4px; padding: 0 3px; font-size: 11px;
+}
+.ans-pick-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.ans-path {
+  font-family: var(--font-mono); font-size: 11.5px; color: var(--dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1;
+}
+.ans-err { margin: 0; font-size: 12px; color: var(--danger); }
+
+.ans-host-list {
+  display: flex; flex-direction: column; gap: 2px;
+  max-height: 220px; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: 4px; background: var(--surface);
+}
+.ans-host-row {
+  display: grid; grid-template-columns: auto 1fr auto; align-items: center;
+  gap: 8px; padding: 5px 7px; border-radius: var(--r-sm);
+  font-size: 12px; cursor: pointer;
+}
+.ans-host-row:hover { background: var(--raised); }
+.ans-host-cb { accent-color: var(--accent); margin: 0; }
+.ans-host-alias { font-weight: 600; color: var(--text); }
+.ans-host-conn {
+  font-family: var(--font-mono); font-size: 11px; color: var(--dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ans-host-auth { font-size: 10.5px; color: var(--faint); text-transform: uppercase; letter-spacing: .03em; }
+.ans-host-row.skipped { cursor: not-allowed; opacity: .72; }
+.ans-host-skip {
+  grid-column: 1 / -1; font-size: 10.5px; color: var(--danger);
+}
+
+.ans-run-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ans-recap { font-size: 12px; color: var(--dim); }
+.ans-gate-hint { font-size: 11.5px; }
+
+.ans-history { display: flex; flex-direction: column; gap: 8px; }
+.ans-history-list { display: flex; flex-direction: column; gap: 8px; max-height: 240px; overflow-y: auto; }
+.ans-hist-row {
+  border: 1px solid var(--border); border-radius: var(--r-sm);
+  background: var(--surface); padding: 8px 10px; display: flex; flex-direction: column; gap: 5px;
+}
+.ans-hist-top { display: flex; align-items: center; gap: 8px; }
+.ans-hist-playbook { font-weight: 600; font-size: 12.5px; color: var(--text); }
+.ans-hist-mode {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .03em;
+  border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; color: var(--dim);
+}
+.ans-hist-mode.mode-real { color: var(--accent); border-color: var(--hairline); }
+.ans-hist-rc { margin-left: auto; font-size: 11px; font-family: var(--font-mono); }
+.ans-hist-rc.rc-ok { color: var(--live); }
+.ans-hist-rc.rc-bad { color: var(--danger); }
+.ans-hist-meta { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: var(--faint); }
+.ans-hist-targets { font-family: var(--font-mono); color: var(--dim); }
+.ans-hist-recap {
+  margin: 0; font-family: var(--font-mono); font-size: 11px; line-height: 1.45;
+  color: var(--dim); background: var(--term);
+  border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: 6px 8px; white-space: pre-wrap; word-break: break-word;
+  max-height: 140px; overflow-y: auto;
+}

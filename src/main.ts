@@ -1551,6 +1551,455 @@ function binaryBlocked(kind: "ssh" | "sftp"): boolean {
   return true;
 }
 
+// ---------- Ansible v1 panel (FE-ANS) ----------
+// Frozen IPC contract (TSD §4): three backend commands.
+//   check_ansible(): { missing: boolean }
+//   ansible_run({ req }): number (pty id); errors as "ansible:<code>"
+//   ansible_history({ op }): AnsibleHistoryEntry[]
+// The playbook picker needs a native file-open + UTF-8/size validation; the
+// backend exposes that as pick_playbook() -> { path, text } (see FR-ANS5). The
+// frontend re-validates the returned text (≤2 MiB, valid UTF-8) before any run.
+interface AnsibleCheck { missing: boolean }
+interface AnsibleRunReq {
+  mode: "check" | "real";
+  playbook: string;
+  aliases: string[];
+  limit: string;
+  cols: number;
+  rows: number;
+}
+interface AnsibleHistoryEntry {
+  playbook: string;
+  targets: string;
+  mode: "check" | "real";
+  started_at: string;
+  duration_ms: number;
+  rc: number;
+  recap: string;
+}
+type AnsibleHistoryOp = { kind: "read" } | { kind: "append"; entry: AnsibleHistoryEntry };
+// Result of the native playbook picker (backend pick_playbook).
+interface PlaybookPick { path: string; text: string }
+
+const ANS_MAX_PLAYBOOK_BYTES = 2 * 1024 * 1024; // 2 MiB (FR-ANS5)
+
+// Dry-run-WAJIB gate state (TSD §5 / SDD §14.5, VERBATIM). checkedKey is the
+// identity of the last SUCCESSFUL dry-run; Run-real is enabled iff it still
+// matches the current playbook+targets. This is a SECURITY layer: the
+// permission-widening real run is gated behind a cheap safe dry-run + an
+// explicit human confirm, and never auto-runs.
+const ansState = {
+  checkAnsible: null as AnsibleCheck | null,
+  playbookPath: "" as string,
+  selected: new Set<string>(),      // chosen host aliases (eligible only)
+  checkedKey: null as string | null, // last successful dry-run key, or null
+  running: false as boolean,         // a run is in flight (disable both buttons)
+};
+
+// Current gate key: playbookPath + NUL + comma-joined sorted targets.
+function ansCurrentKey(): string {
+  const targets = [...ansState.selected].sort().join(",");
+  return `${ansState.playbookPath}\u0000${targets}`;
+}
+
+// Reset the gate (TSD §5: any playbook OR target change nulls checkedKey).
+function ansResetGate() {
+  ansState.checkedKey = null;
+  ansRenderGate();
+}
+
+async function openAnsible() {
+  if (!$("#ansible-modal").classList.contains("hidden")) return; // never stack
+  openOverlay("#ansible-modal");
+  await ansRefreshCheck();
+  ansRenderHosts();
+  ansRenderGate();
+  void ansLoadHistory();
+}
+
+// FR-ANS1/ANS2: on open, check the binary. missing → show the per-OS guide and
+// BLOCK all runs; present → show the runner body. Mirrors the W2-A pattern.
+async function ansRefreshCheck() {
+  try {
+    ansState.checkAnsible = await invoke<AnsibleCheck>("check_ansible");
+  } catch (e) {
+    // Treat a failed check as missing — fail-closed, never let a run proceed.
+    ansState.checkAnsible = { missing: true };
+    console.error("check_ansible failed:", e);
+  }
+  const missing = ansState.checkAnsible.missing;
+  $("#ans-guide").classList.toggle("hidden", !missing);
+  $("#ans-body").classList.toggle("hidden", missing);
+  if (missing) ansRenderGuide();
+}
+
+// Per-OS install guide (FR-ANS1). Static text set via textContent (ADR-8).
+function ansRenderGuide() {
+  const host = $("#ans-guide-os");
+  host.innerHTML = "";
+  const ua = navigator.userAgent;
+  const isMac = ua.includes("Mac OS X") || ua.includes("Macintosh");
+  const isWin = ua.includes("Windows");
+  const steps: { label: string; cmd: string }[] = isMac
+    ? [{ label: "macOS — Homebrew", cmd: "brew install ansible" }]
+    : isWin
+      ? [{ label: "Windows — install under WSL (Ansible has no native Windows control node)", cmd: "wsl -- sudo apt install ansible" }]
+      : [
+          { label: "Debian / Ubuntu (apt)", cmd: "sudo apt install ansible" },
+          { label: "Fedora / RHEL (dnf)", cmd: "sudo dnf install ansible" },
+          { label: "Arch (pacman)", cmd: "sudo pacman -S ansible" },
+          { label: "Any Unix (pipx)", cmd: "pipx install --include-deps ansible" },
+        ];
+  for (const s of steps) {
+    const row = document.createElement("div");
+    row.className = "ans-guide-step";
+    const label = document.createElement("div");
+    label.className = "ans-guide-label";
+    label.textContent = s.label;
+    const code = document.createElement("code");
+    code.className = "ans-guide-cmd";
+    code.textContent = s.cmd;
+    row.appendChild(label);
+    row.appendChild(code);
+    host.appendChild(row);
+  }
+}
+
+// FR-ANS4: one row per eligible sidebar host (wildcards excluded). Password-auth
+// hosts are shown but marked skipped and NOT selectable. Backend replans
+// authoritatively; the frontend only reflects.
+function ansRenderHosts() {
+  const list = $("#ans-host-list");
+  list.innerHTML = "";
+  const tpl = $("#ans-host-row-template") as HTMLTemplateElement;
+  const rows = hosts
+    .filter((h) => !h.name.includes("*") && !h.name.includes("?"))
+    .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+  // Drop selections that no longer map to an eligible host (picker race).
+  const eligibleNow = new Set(rows.filter((h) => !h.has_password).map((h) => h.name));
+  for (const a of [...ansState.selected]) if (!eligibleNow.has(a)) ansState.selected.delete(a);
+
+  for (const h of rows) {
+    const frag = tpl.content.cloneNode(true) as DocumentFragment;
+    const row = frag.querySelector(".ans-host-row") as HTMLLabelElement;
+    const cb = frag.querySelector(".ans-host-cb") as HTMLInputElement;
+    const skipped = h.has_password; // v1: password-auth hosts are not eligible
+    cb.checked = ansState.selected.has(h.name);
+    cb.disabled = skipped;
+    cb.setAttribute("aria-label", `Select ${h.name} as an Ansible target`);
+    cb.addEventListener("change", () => {
+      if (cb.checked) ansState.selected.add(h.name);
+      else ansState.selected.delete(h.name);
+      ansResetGate(); // target change resets the dry-run gate (TSD §5)
+    });
+    (frag.querySelector(".ans-host-alias") as HTMLElement).textContent = h.name;
+    const conn = `${h.user || "?"}@${h.host_name || h.name}${h.port ? `:${h.port}` : ""}`;
+    (frag.querySelector(".ans-host-conn") as HTMLElement).textContent = conn;
+    (frag.querySelector(".ans-host-auth") as HTMLElement).textContent = h.auth_method || (h.has_password ? "password" : "key");
+    if (skipped) {
+      row.classList.add("skipped");
+      const skip = frag.querySelector(".ans-host-skip") as HTMLElement;
+      skip.hidden = false;
+      skip.textContent = "skipped · password auth (key/agent only in v1)";
+    }
+    list.appendChild(frag);
+  }
+}
+
+// Render the gate (TSD §5): Run-real enabled iff checkedKey === current key and
+// a playbook + ≥1 target are chosen and no run is in flight.
+function ansRenderGate() {
+  const hasPlaybook = ansState.playbookPath.length > 0;
+  const hasTargets = ansState.selected.size > 0;
+  const dry = $("#ans-dry-run") as HTMLButtonElement;
+  const real = $("#ans-run-real") as HTMLButtonElement;
+  dry.disabled = ansState.running || !hasPlaybook || !hasTargets;
+  const gateOpen = ansState.checkedKey !== null && ansState.checkedKey === ansCurrentKey();
+  real.disabled = ansState.running || !hasPlaybook || !hasTargets || !gateOpen;
+  const hint = $("#ans-gate-hint");
+  if (!hasPlaybook || !hasTargets) {
+    hint.textContent = "Choose a playbook and at least one target to begin.";
+  } else if (gateOpen) {
+    hint.textContent = "Dry-run passed for this playbook + targets — a real run is unlocked.";
+  } else {
+    hint.textContent = "A successful dry-run of the current playbook + targets is required before a real run. Changing either resets the gate.";
+  }
+}
+
+// FR-ANS5: native playbook picker. Backend returns { path, text }; the frontend
+// re-validates extension + UTF-8 + size and names the cause of any rejection
+// BEFORE it is accepted (no ansible_run until a valid playbook is set).
+async function ansPickPlaybook() {
+  const err = $("#ans-playbook-err");
+  err.hidden = true;
+  err.textContent = "";
+  let pick: PlaybookPick;
+  try {
+    pick = await invoke<PlaybookPick>("pick_playbook");
+  } catch (e) {
+    const m = msg(e);
+    if (m === "ansible:cancelled" || m === "cancelled") return; // user dismissed picker
+    err.textContent = `Could not open the playbook: ${m}.`;
+    err.hidden = false;
+    return;
+  }
+  const lower = pick.path.toLowerCase();
+  if (!lower.endsWith(".yml") && !lower.endsWith(".yaml")) {
+    err.textContent = "Rejected: the playbook must be a .yml or .yaml file.";
+    err.hidden = false;
+    return;
+  }
+  // Size: measure UTF-8 bytes, not code units (FR-ANS5 is a byte threshold).
+  const bytes = new TextEncoder().encode(pick.text).length;
+  if (bytes > ANS_MAX_PLAYBOOK_BYTES) {
+    err.textContent = `Rejected: the playbook is ${(bytes / 1048576).toFixed(2)} MiB, over the 2 MiB limit.`;
+    err.hidden = false;
+    return;
+  }
+  // Invalid UTF-8 / binary: a NUL byte or a U+FFFD replacement char means the
+  // bytes did not decode as clean UTF-8 text.
+  if (pick.text.includes("\u0000") || pick.text.includes("\uFFFD")) {
+    err.textContent = "Rejected: the file is not valid UTF-8 text (looks binary).";
+    err.hidden = false;
+    return;
+  }
+  ansState.playbookPath = pick.path;
+  ($("#ans-playbook-path") as HTMLElement).textContent = pick.path;
+  ansResetGate(); // playbook change resets the dry-run gate (TSD §5)
+}
+
+// Comma-joined --limit expression from the selection (one argv element backend-side).
+function ansLimitExpr(): string {
+  return [...ansState.selected].sort().join(",");
+}
+
+// Parse the PLAY RECAP block off streamed PTY output (FR-ANS8). The recap lines
+// look like: "<host> : ok=5 changed=2 unreachable=0 failed=0 ...". Returns the
+// trimmed recap text plus a "N hosts will change, M tasks changed" summary.
+function ansParseRecap(output: string): { recap: string; summary: string } {
+  const idx = output.lastIndexOf("PLAY RECAP");
+  if (idx === -1) return { recap: "", summary: "" };
+  const block = output.slice(idx);
+  const lines = block.split(/\r?\n/);
+  let hostsChanging = 0;
+  let tasksChanged = 0;
+  const recapLines: string[] = [];
+  for (const line of lines) {
+    const m = line.match(/^\s*(\S+)\s*:\s*(.*\bchanged=(\d+)\b.*)$/);
+    if (!m) {
+      // keep the "PLAY RECAP ***" header line, stop at the first blank after rows
+      if (/^PLAY RECAP/.test(line)) recapLines.push(line.trim());
+      else if (recapLines.length > 1 && line.trim() === "") break;
+      continue;
+    }
+    recapLines.push(line.trim());
+    const changed = Number(m[3]);
+    tasksChanged += changed;
+    if (changed > 0) hostsChanging += 1;
+  }
+  const summary = `${hostsChanging} host${hostsChanging === 1 ? "" : "s"} will change, ${tasksChanged} task${tasksChanged === 1 ? "" : "s"} changed`;
+  return { recap: recapLines.join("\n"), summary };
+}
+
+// Open a PTY terminal tab bound to an ALREADY-SPAWNED pty id (returned by
+// ansible_run). Reuses the local-terminal rendering path (openTerminal) but the
+// backend owns the spawn, so we attach output/exit listeners to the given id.
+// Accumulates raw output so the caller can parse the PLAY RECAP on exit.
+function openAnsibleTab(ptyId: number, label: string, onExit: (output: string) => void) {
+  const tabId = nextTab++;
+  const term = new Terminal({
+    cursorBlink: !REDUCED_MOTION,
+    fontFamily: FONT_MONO,
+    fontSize: 13,
+    theme: THEME_TERMINAL[appSettings.theme],
+  });
+  const fit = new FitAddon();
+  term.loadAddon(fit);
+  const tab = makeTab(tabId, "terminal", label);
+  $("#tab-split-zone").before(tab);
+  const panel = document.createElement("div");
+  panel.className = "panel";
+  panel.dataset.tab = String(tabId);
+  panel.setAttribute("role", "tabpanel");
+  const host_el = document.createElement("div");
+  host_el.className = "term-host";
+  panel.appendChild(host_el);
+  $("#panels").appendChild(panel);
+  term.open(host_el);
+  // Selecting copies; right-click pastes — same ergonomics as openTerminal.
+  host_el.addEventListener("mouseup", () => {
+    const sel = term.getSelection();
+    if (sel) { invoke("clipboard_write", { text: sel }).catch(() => {}); term.clearSelection(); }
+  });
+  const session: Session = { id: tabId, ptyId, host: label, term, fit, banner: undefined, unlisten: [], local: true };
+  sessions.set(tabId, session);
+  activateTab(tabId);
+  term.onData((data) => { if (session.ptyId != null) invoke("pty_write", { id: session.ptyId, data }); });
+
+  let output = "";
+  void (async () => {
+    const u1 = await listen<string>(`pty://output/${ptyId}`, (ev) => {
+      output += ev.payload;
+      term.write(ev.payload);
+    });
+    const u2 = await listen(`pty://exit/${ptyId}`, () => {
+      term.write("\r\n\x1b[90m[run ended]\x1b[0m\r\n");
+      session.ptyId = null;
+      if (sessions.get(session.id) === session) markTabDead(session.id, true);
+      refreshHostDots();
+      onExit(output);
+    });
+    session.unlisten.push(u1, u2);
+  })();
+  setTimeout(() => { fit.fit(); if (session.ptyId != null) invoke("pty_resize", { id: ptyId, cols: term.cols, rows: term.rows }); }, 0);
+}
+
+// Spawn a dry-run (mode:"check", FR-ANS8). On rc==0 exit the gate opens for the
+// current playbook+targets; the recap summary is shown.
+async function ansDryRun() {
+  if (ansState.running) return;
+  const keyAtLaunch = ansCurrentKey();
+  ansState.running = true;
+  ansRenderGate();
+  const startedAt = new Date().toISOString();
+  const started = Date.now();
+  let ptyId: number;
+  try {
+    ptyId = await invoke<number>("ansible_run", {
+      req: { mode: "check", playbook: ansState.playbookPath, aliases: [...ansState.selected], limit: ansLimitExpr(), cols: 80, rows: 24 } as AnsibleRunReq,
+    });
+  } catch (e) {
+    ansState.running = false;
+    ansRenderGate();
+    void dialog("Dry-run failed", `Could not start the dry-run: ${ansErrText(msg(e))}`, [{ label: "OK", id: "ok", style: "primary" }], "ok", "ok");
+    return;
+  }
+  const label = `ansible check · ${ansPlaybookBasename()}`;
+  openAnsibleTab(ptyId, label, (out) => {
+    ansState.running = false;
+    const { recap, summary } = ansParseRecap(out);
+    // Gate opens only if the dry-run succeeded (rc==0, implied by a PLAY RECAP
+    // with no failed/unreachable) AND the key still matches the current state.
+    const ok = /PLAY RECAP/.test(out) && !/failed=[1-9]/.test(out) && !/unreachable=[1-9]/.test(out);
+    const rc = ok ? 0 : 1;
+    if (ok && keyAtLaunch === ansCurrentKey()) ansState.checkedKey = keyAtLaunch;
+    $("#ans-recap-summary").textContent = summary ? `Dry-run: ${summary}` : "Dry-run finished.";
+    ansRenderGate();
+    void ansAppendHistory({ playbook: ansState.playbookPath, targets: ansLimitExpr(), mode: "check", started_at: startedAt, duration_ms: Date.now() - started, rc, recap });
+  });
+}
+
+// FR-ANS10: Run-real ALWAYS requires an explicit confirm dialog first and never
+// auto-runs. The confirm shows the hosts + the dry-run change summary.
+async function ansRunReal() {
+  if (ansState.running) return;
+  // Re-guard the gate at click time (defense in depth; the button is already
+  // disabled when the gate is shut).
+  if (ansState.checkedKey === null || ansState.checkedKey !== ansCurrentKey()) {
+    ansRenderGate();
+    return;
+  }
+  const targets = ansLimitExpr();
+  const summary = $("#ans-recap-summary").textContent || "";
+  const id = await dialog(
+    "Run this playbook for real?",
+    `This applies ${ansPlaybookBasename()} to: ${targets}. ${summary ? summary + "." : ""} This changes the target hosts.`,
+    [
+      { label: "Run for real", id: "run", style: "primary" },
+      { label: "Cancel", id: "cancel" },
+    ],
+    "cancel", // focus Cancel first — the mutating action is never the default focus
+    "cancel"
+  );
+  if (id !== "run") return;
+  ansState.running = true;
+  ansRenderGate();
+  const startedAt = new Date().toISOString();
+  const started = Date.now();
+  let ptyId: number;
+  try {
+    ptyId = await invoke<number>("ansible_run", {
+      req: { mode: "real", playbook: ansState.playbookPath, aliases: [...ansState.selected], limit: targets, cols: 80, rows: 24 } as AnsibleRunReq,
+    });
+  } catch (e) {
+    ansState.running = false;
+    ansRenderGate();
+    void dialog("Run failed", `Could not start the run: ${ansErrText(msg(e))}`, [{ label: "OK", id: "ok", style: "primary" }], "ok", "ok");
+    return;
+  }
+  openAnsibleTab(ptyId, `ansible run · ${ansPlaybookBasename()}`, (out) => {
+    ansState.running = false;
+    const { recap, summary: s } = ansParseRecap(out);
+    const ok = /PLAY RECAP/.test(out) && !/failed=[1-9]/.test(out) && !/unreachable=[1-9]/.test(out);
+    $("#ans-recap-summary").textContent = s ? `Run: ${s}` : "Run finished.";
+    ansRenderGate();
+    void ansAppendHistory({ playbook: ansState.playbookPath, targets, mode: "real", started_at: startedAt, duration_ms: Date.now() - started, rc: ok ? 0 : 1, recap });
+  });
+}
+
+function ansPlaybookBasename(): string {
+  const p = ansState.playbookPath;
+  const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+  return i === -1 ? p : p.slice(i + 1);
+}
+
+// Map opaque ansible:<code> error tokens to a short human cause.
+function ansErrText(code: string): string {
+  switch (code) {
+    case "ansible:no-eligible-hosts": return "none of the chosen hosts are eligible (key/agent auth only).";
+    case "ansible:config-unreadable": return "~/.ssh/config could not be read.";
+    case "ansible:missing": return "the ansible-playbook binary was not found.";
+    default: return code;
+  }
+}
+
+// History sub-panel (FR-ANS14). Read on open + after each run's exit. Entries
+// render from a cloned static template; all fields set via textContent (ADR-8).
+async function ansLoadHistory() {
+  let entries: AnsibleHistoryEntry[];
+  try {
+    entries = await invoke<AnsibleHistoryEntry[]>("ansible_history", { op: { kind: "read" } as AnsibleHistoryOp });
+  } catch (e) {
+    console.error("ansible_history read failed:", e);
+    entries = [];
+  }
+  ansRenderHistory(entries);
+}
+
+async function ansAppendHistory(entry: AnsibleHistoryEntry) {
+  try {
+    const entries = await invoke<AnsibleHistoryEntry[]>("ansible_history", { op: { kind: "append", entry } as AnsibleHistoryOp });
+    ansRenderHistory(entries);
+  } catch (e) {
+    console.error("ansible_history append failed:", e);
+  }
+}
+
+function ansRenderHistory(entries: AnsibleHistoryEntry[]) {
+  const list = $("#ans-history-list");
+  list.innerHTML = "";
+  const empty = $("#ans-history-empty");
+  empty.hidden = entries.length > 0;
+  const tpl = $("#ans-history-row-template") as HTMLTemplateElement;
+  // Newest-last from the store; show newest first.
+  for (const e of [...entries].reverse()) {
+    const frag = tpl.content.cloneNode(true) as DocumentFragment;
+    const base = (() => { const i = Math.max(e.playbook.lastIndexOf("/"), e.playbook.lastIndexOf("\\")); return i === -1 ? e.playbook : e.playbook.slice(i + 1); })();
+    (frag.querySelector(".ans-hist-playbook") as HTMLElement).textContent = base;
+    const mode = frag.querySelector(".ans-hist-mode") as HTMLElement;
+    mode.textContent = e.mode === "check" ? "dry-run" : "real";
+    mode.classList.add(e.mode === "check" ? "mode-check" : "mode-real");
+    const rc = frag.querySelector(".ans-hist-rc") as HTMLElement;
+    rc.textContent = e.rc === 0 ? "ok" : `rc ${e.rc}`;
+    rc.classList.add(e.rc === 0 ? "rc-ok" : "rc-bad");
+    (frag.querySelector(".ans-hist-targets") as HTMLElement).textContent = e.targets;
+    (frag.querySelector(".ans-hist-time") as HTMLElement).textContent = e.started_at;
+    (frag.querySelector(".ans-hist-dur") as HTMLElement).textContent = `${(e.duration_ms / 1000).toFixed(1)}s`;
+    (frag.querySelector(".ans-hist-recap") as HTMLElement).textContent = e.recap;
+    list.appendChild(frag);
+  }
+}
+
 // ---------- sidebar ----------
 async function loadHosts() {
   const list = $("#host-list");
@@ -3520,6 +3969,13 @@ window.addEventListener("DOMContentLoaded", () => {
   $("#btn-keys").addEventListener("click", openKeysModal);
   // Local terminal (Termius-style): open a PTY on the OS default shell.
   $("#btn-local").addEventListener("click", () => { void openTerminal("local", { local: true }); });
+  // Ansible playbook runner (FE-ANS).
+  $("#btn-ansible").addEventListener("click", () => { void openAnsible(); });
+  $("#ansible-close").addEventListener("click", () => closeOverlay("#ansible-modal"));
+  $("#ans-recheck").addEventListener("click", () => { void ansRefreshCheck(); });
+  $("#ans-pick-playbook").addEventListener("click", () => { void ansPickPlaybook(); });
+  $("#ans-dry-run").addEventListener("click", () => { void ansDryRun(); });
+  $("#ans-run-real").addEventListener("click", () => { void ansRunReal(); });
   $("#keys-close").addEventListener("click", closeKeys);
   $("#keys-add").addEventListener("click", () => { keyModalReturnsToKeys = true; openKeyModal(); });
   // OpenSSH guide (FR-W2-2)

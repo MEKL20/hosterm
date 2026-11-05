@@ -100,6 +100,14 @@ const GOOGLE_ACCT = {
 let googleStored = null;       // what google_account returns on load (null = signed out)
 let storedUserSnippets = [];   // user-snippet CRUD store (read/write_user_snippets)
 let googleSignInFail = false;  // flip to exercise the auth-failed error path
+// FE-ANS Ansible v1 mock state.
+const ANSIBLE_PTY_ID = 7777;
+let ansibleCheckState = { missing: false };   // check_ansible result
+let ansiblePickMode = "valid";                 // valid|cancel|binary|big|badext
+let ansiblePickName = "site.yml";              // basename for the valid pick
+let ansibleRunFail = false;                    // ansible_run rejects when true
+const ansibleRuns = [];                        // every ansible_run req payload
+let ansibleHistory = [];                       // ansible_history store (newest-last)
 const invoke = (cmd, args = {}) => {
   calls.push({ cmd, args });
   switch (cmd) {
@@ -185,6 +193,28 @@ const invoke = (cmd, args = {}) => {
       return new Promise((r) => setTimeout(() => r({ ...GOOGLE_ACCT }), 40));
     }
     case "google_sign_out": { googleStored = null; return Promise.resolve(); }
+    // ---- FE-ANS Ansible v1 (FR-ANS1..15) ----
+    case "check_ansible": return Promise.resolve({ ...ansibleCheckState });
+    case "pick_playbook": {
+      if (ansiblePickMode === "cancel") return Promise.reject("ansible:cancelled");
+      if (ansiblePickMode === "binary") return Promise.resolve({ path: "/tmp/site.yml", text: "tasks:\n  - name: x\u0000\uFFFD\n" });
+      if (ansiblePickMode === "big") return Promise.resolve({ path: "/tmp/big.yml", text: "x".repeat(2 * 1024 * 1024 + 8) });
+      if (ansiblePickMode === "badext") return Promise.resolve({ path: "/tmp/notes.txt", text: "hello\n" });
+      // valid: path carries a hostile byte so the panel must esc() it (ADR-8)
+      return Promise.resolve({ path: `/tmp/${ansiblePickName}`, text: "- hosts: all\n  tasks:\n    - name: ping\n      ping:\n" });
+    }
+    case "ansible_run": {
+      ansibleRuns.push(JSON.parse(JSON.stringify(args.req)));
+      if (ansibleRunFail) return Promise.reject("ansible:no-eligible-hosts");
+      return Promise.resolve(ANSIBLE_PTY_ID);
+    }
+    case "ansible_history": {
+      const op = args.op || {};
+      if (op.kind === "append") ansibleHistory.push(JSON.parse(JSON.stringify(op.entry)));
+      // 200-cap FIFO mirror (the backend caps; the frontend just renders).
+      if (ansibleHistory.length > 200) ansibleHistory = ansibleHistory.slice(-200);
+      return Promise.resolve(JSON.parse(JSON.stringify(ansibleHistory)));
+    }
     default: return Promise.reject(`unmocked: ${cmd}`);
   }
 };
@@ -2946,6 +2976,244 @@ check("U-D8 (g) INV-25: approval classes keep Run once primary and Always allow 
 check("U-D8 (g) INV-25: primary uses accent fill while secondary stays on raised surface",
   /background:\s*var\(--accent\)/.test(primaryCss) && /color:\s*var\(--accent-ink\)/.test(primaryCss) &&
   /background:\s*var\(--raised\)/.test(secondaryCss) && !/var\(--accent\)/.test(secondaryCss));
+
+// ============================================================
+//  FE-ANS — Ansible v1 panel (TSD §6). Counts may only GROW.
+// ============================================================
+
+// Hostile PLAY RECAP + task output (ADR-8): must render inert, never inject a
+// <script> or trip CSP. Carried on the dry-run and real-run pty streams.
+const ANS_HOSTILE_OUTPUT =
+  "TASK [evil] <img src=x onerror=window.__pwn=9>\r\n" +
+  "<script>window.__pwn=10</script>\r\n" +
+  "PLAY RECAP *********************************************************************\r\n" +
+  "prod-web                   : ok=5    changed=2    unreachable=0    failed=0\r\n" +
+  "db-core                    : ok=4    changed=0    unreachable=0    failed=0\r\n";
+
+// 1) Panel renders; binary present → runner body shown, guide hidden.
+ansibleCheckState = { missing: false };
+await page.evaluate(() => document.querySelector("#btn-ansible").click());
+await page.waitForTimeout(60);
+const ansPanel = await page.evaluate(() => {
+  const modal = document.querySelector("#ansible-modal");
+  return {
+    open: modal && !modal.classList.contains("hidden"),
+    bodyShown: !document.querySelector("#ans-body").classList.contains("hidden"),
+    guideShown: !document.querySelector("#ans-guide").classList.contains("hidden"),
+    hostRows: document.querySelectorAll("#ans-host-list .ans-host-row").length,
+    // password host (pw-host) row present + marked skipped + checkbox disabled
+    skippedRows: [...document.querySelectorAll("#ans-host-list .ans-host-row.skipped")].map((r) => ({
+      alias: r.querySelector(".ans-host-alias").textContent,
+      cbDisabled: r.querySelector(".ans-host-cb").disabled,
+      skipText: r.querySelector(".ans-host-skip").textContent,
+    })),
+    runRealDisabled: document.querySelector("#ans-run-real").disabled,
+  };
+});
+check("FE-ANS: panel opens with runner body (binary present), guide hidden",
+  ansPanel.open && ansPanel.bodyShown && !ansPanel.guideShown, JSON.stringify({ open: ansPanel.open, body: ansPanel.bodyShown, guide: ansPanel.guideShown }));
+check("FE-ANS: one picker row per sidebar host (wildcard Host * excluded)",
+  ansPanel.hostRows === 3, `rows=${ansPanel.hostRows}`);
+check("FE-ANS (FR-ANS4): password host marked skipped, checkbox disabled, not selectable",
+  ansPanel.skippedRows.length === 1 && ansPanel.skippedRows[0].alias === "pw-host" &&
+  ansPanel.skippedRows[0].cbDisabled === true && ansPanel.skippedRows[0].skipText.includes("password"),
+  JSON.stringify(ansPanel.skippedRows));
+check("FE-ANS: Run-real starts disabled (no playbook, no dry-run yet)",
+  ansPanel.runRealDisabled === true);
+
+// 2) Binary missing → guide shown, run body blocked, re-check button present.
+ansibleCheckState = { missing: true };
+await page.evaluate(() => document.querySelector("#ans-recheck").click());
+await page.waitForTimeout(60);
+const ansGuide = await page.evaluate(() => ({
+  guideShown: !document.querySelector("#ans-guide").classList.contains("hidden"),
+  bodyHidden: document.querySelector("#ans-body").classList.contains("hidden"),
+  recheck: !!document.querySelector("#ans-recheck"),
+  steps: document.querySelectorAll("#ans-guide-os .ans-guide-step").length,
+}));
+check("FE-ANS (FR-ANS1/ANS2): check_ansible missing → guide shown, run body blocked, re-check present",
+  ansGuide.guideShown && ansGuide.bodyHidden && ansGuide.recheck && ansGuide.steps > 0, JSON.stringify(ansGuide));
+// re-check again with binary back → body returns
+ansibleCheckState = { missing: false };
+await page.evaluate(() => document.querySelector("#ans-recheck").click());
+await page.waitForTimeout(60);
+const ansBackState = await page.evaluate(() => ({
+  bodyShown: !document.querySelector("#ans-body").classList.contains("hidden"),
+  guideHidden: document.querySelector("#ans-guide").classList.contains("hidden"),
+}));
+check("FE-ANS: re-check with binary present → runner body returns, guide hidden",
+  ansBackState.bodyShown && ansBackState.guideHidden, JSON.stringify(ansBackState));
+
+// 3) Playbook validation (FR-ANS5): reject bad extension, >2 MiB, binary/invalid-UTF-8.
+// Pick modes are driven by toggling the module-level ansiblePickMode / ansiblePickName
+// vars below; the invoke mock reads them directly.
+const ansErrFor = async () => page.evaluate(() => {
+  const e = document.querySelector("#ans-playbook-err");
+  return { hidden: e.hidden, text: e.textContent };
+});
+ansiblePickMode = "badext";
+await page.evaluate(() => document.querySelector("#ans-pick-playbook").click());
+await page.waitForTimeout(40);
+const errBadExt = await ansErrFor();
+check("FE-ANS (FR-ANS5): non-yml/yaml path rejected with a cause-naming message",
+  !errBadExt.hidden && /\.yml or \.yaml/.test(errBadExt.text), JSON.stringify(errBadExt));
+ansiblePickMode = "big";
+await page.evaluate(() => document.querySelector("#ans-pick-playbook").click());
+await page.waitForTimeout(40);
+const errBig = await ansErrFor();
+check("FE-ANS (FR-ANS5): >2 MiB playbook rejected, message names the size cause",
+  !errBig.hidden && /2 MiB limit/.test(errBig.text), JSON.stringify(errBig));
+ansiblePickMode = "binary";
+await page.evaluate(() => document.querySelector("#ans-pick-playbook").click());
+await page.waitForTimeout(40);
+const errBin = await ansErrFor();
+check("FE-ANS (FR-ANS5): binary/invalid-UTF-8 playbook rejected, message names the cause",
+  !errBin.hidden && /not valid UTF-8/.test(errBin.text), JSON.stringify(errBin));
+// a rejected pick must NOT have triggered any ansible_run
+check("FE-ANS (FR-ANS5): rejected playbooks never reach ansible_run",
+  calls.filter((c) => c.cmd === "ansible_run").length === 0);
+
+// 4) Dry-run-WAJIB gate state machine (TSD §5). Pick a valid playbook (hostile
+//    path byte asserts esc()), select a target, Run-real stays disabled until a
+//    mode:"check" pty exits rc==0 for the current playbook+target.
+ansiblePickMode = "valid";
+ansiblePickName = "\"><img src=x onerror=window.__pwn=11>.yml"; // hostile basename (ADR-8)
+await page.evaluate(() => document.querySelector("#ans-pick-playbook").click());
+await page.waitForTimeout(40);
+// select prod-web (first eligible, not pw-host)
+await page.evaluate(() => {
+  const rows = [...document.querySelectorAll("#ans-host-list .ans-host-row")];
+  const r = rows.find((x) => x.querySelector(".ans-host-alias").textContent === "prod-web");
+  const cb = r.querySelector(".ans-host-cb");
+  cb.checked = true; cb.dispatchEvent(new Event("change", { bubbles: true }));
+});
+await page.waitForTimeout(20);
+const gateBeforeDry = await page.evaluate(() => ({
+  dryDisabled: document.querySelector("#ans-dry-run").disabled,
+  realDisabled: document.querySelector("#ans-run-real").disabled,
+  pathEsc: document.querySelector("#ans-playbook-path").children.length, // 0 = inert text
+  pathText: document.querySelector("#ans-playbook-path").textContent,
+}));
+check("FE-ANS (gate): with playbook + target, Dry-run enabled but Run-real still DISABLED",
+  gateBeforeDry.dryDisabled === false && gateBeforeDry.realDisabled === true, JSON.stringify(gateBeforeDry));
+check("FE-ANS (ADR-8): hostile playbook path renders inert (0 child nodes), no __pwn",
+  gateBeforeDry.pathEsc === 0 && gateBeforeDry.pathText.includes("onerror") &&
+  (await page.evaluate(() => typeof window.__pwn === "undefined")), JSON.stringify({ kids: gateBeforeDry.pathEsc }));
+
+const runsBeforeDry = calls.filter((c) => c.cmd === "ansible_run").length;
+await page.evaluate(() => document.querySelector("#ans-dry-run").click());
+await page.waitForTimeout(40);
+const dryReq = ansibleRuns[ansibleRuns.length - 1];
+check("FE-ANS (dry-run): clicking Dry-run calls ansible_run with mode:'check' + the selected target",
+  calls.filter((c) => c.cmd === "ansible_run").length === runsBeforeDry + 1 &&
+  dryReq && dryReq.mode === "check" && dryReq.aliases.includes("prod-web") && dryReq.limit === "prod-web",
+  JSON.stringify(dryReq));
+// while running both buttons are disabled
+const midRun = await page.evaluate(() => ({ dry: document.querySelector("#ans-dry-run").disabled, real: document.querySelector("#ans-run-real").disabled }));
+check("FE-ANS (gate): both run buttons disabled while a run is in flight", midRun.dry === true && midRun.real === true);
+// stream hostile output then exit rc==0
+await page.evaluate((out) => {
+  window.__emitTauri("pty://output/7777", out);
+  window.__emitTauri("pty://exit/7777");
+}, ANS_HOSTILE_OUTPUT);
+await page.waitForTimeout(40);
+const afterDry = await page.evaluate(() => ({
+  realDisabled: document.querySelector("#ans-run-real").disabled,
+  summary: document.querySelector("#ans-recap-summary").textContent,
+  pwn: typeof window.__pwn,
+}));
+check("FE-ANS (gate): dry-run mode:'check' exits rc==0 → Run-real ENABLED for current playbook+target",
+  afterDry.realDisabled === false, JSON.stringify(afterDry));
+check("FE-ANS (FR-ANS8): PLAY RECAP parsed into an 'N hosts will change, M tasks changed' summary",
+  /1 host will change, 2 tasks changed/.test(afterDry.summary), afterDry.summary);
+check("FE-ANS (ADR-8): hostile PLAY RECAP / task output never executes (no __pwn) and 0 CSP violations",
+  afterDry.pwn === "undefined" && (await page.evaluate(() => window.__cspViolations.length)) === 0);
+
+// changing the target resets the gate → Run-real disabled again (TSD §5)
+await page.evaluate(() => {
+  const rows = [...document.querySelectorAll("#ans-host-list .ans-host-row")];
+  const r = rows.find((x) => x.querySelector(".ans-host-alias").textContent === "db-core");
+  const cb = r.querySelector(".ans-host-cb");
+  cb.checked = true; cb.dispatchEvent(new Event("change", { bubbles: true }));
+});
+await page.waitForTimeout(20);
+check("FE-ANS (gate): changing targets after a passing dry-run resets the gate → Run-real DISABLED",
+  (await page.evaluate(() => document.querySelector("#ans-run-real").disabled)) === true);
+
+// re-run dry-run for the new pair, exit rc==0 → gate re-opens
+await page.evaluate(() => document.querySelector("#ans-dry-run").click());
+await page.waitForTimeout(30);
+await page.evaluate((out) => { window.__emitTauri("pty://output/7777", out); window.__emitTauri("pty://exit/7777"); }, ANS_HOSTILE_OUTPUT);
+await page.waitForTimeout(40);
+check("FE-ANS (gate): a fresh dry-run for the new playbook+target re-opens the gate",
+  (await page.evaluate(() => document.querySelector("#ans-run-real").disabled)) === false);
+
+// 5) Run-real confirm dialog (FR-ANS10): clicking Run-real opens a confirm and
+//    NEVER auto-runs; cancel → no ansible_run; confirm → mode:"real".
+const runsBeforeReal = calls.filter((c) => c.cmd === "ansible_run").length;
+await page.evaluate(() => document.querySelector("#ans-run-real").click());
+await page.waitForTimeout(40);
+const confirmShown = await page.evaluate(() => {
+  const d = document.querySelector("#dialog");
+  return { open: d && !d.classList.contains("hidden"), title: document.querySelector("#dialog-title").textContent };
+});
+check("FE-ANS (FR-ANS10): Run-real opens an explicit confirm dialog, never auto-runs",
+  confirmShown.open && /Run this playbook for real/.test(confirmShown.title) &&
+  calls.filter((c) => c.cmd === "ansible_run").length === runsBeforeReal, JSON.stringify(confirmShown));
+// cancel → still no real run
+await page.evaluate(() => [...document.querySelectorAll("#dialog-actions button")].find((b) => b.textContent === "Cancel").click());
+await page.waitForTimeout(30);
+check("FE-ANS (FR-ANS10): cancelling the confirm does NOT spawn a real run",
+  calls.filter((c) => c.cmd === "ansible_run").length === runsBeforeReal);
+// confirm → a mode:"real" run spawns
+await page.evaluate(() => document.querySelector("#ans-run-real").click());
+await page.waitForTimeout(30);
+await page.evaluate(() => [...document.querySelectorAll("#dialog-actions button")].find((b) => b.textContent === "Run for real").click());
+await page.waitForTimeout(40);
+const realReq = ansibleRuns[ansibleRuns.length - 1];
+check("FE-ANS (FR-ANS10): confirming spawns exactly one ansible_run with mode:'real'",
+  calls.filter((c) => c.cmd === "ansible_run").length === runsBeforeReal + 1 && realReq.mode === "real",
+  JSON.stringify(realReq));
+await page.evaluate(() => { window.__emitTauri("pty://output/7777", "PLAY RECAP\r\nprod-web : ok=1 changed=0 unreachable=0 failed=0\r\n"); window.__emitTauri("pty://exit/7777"); });
+await page.waitForTimeout(40);
+
+// 6) History (FR-ANS14): after runs exit, ansible_history append + read render
+//    rows (basename, targets, mode, time, duration, rc, recap), recap is the
+//    trimmed PLAY RECAP, hostile recap stays inert.
+const ansHist = await page.evaluate(() => {
+  const rows = [...document.querySelectorAll("#ans-history-list .ans-hist-row")];
+  return rows.map((r) => ({
+    playbook: r.querySelector(".ans-hist-playbook").textContent,
+    mode: r.querySelector(".ans-hist-mode").textContent,
+    rc: r.querySelector(".ans-hist-rc").textContent,
+    recapText: r.querySelector(".ans-hist-recap").textContent,
+    recapKids: r.querySelector(".ans-hist-recap").children.length,
+  }));
+});
+check("FE-ANS (FR-ANS14): history renders a row per run (≥3: 2 dry + 1 real) with mode + rc",
+  ansHist.length >= 3 && ansHist.some((r) => r.mode === "dry-run") && ansHist.some((r) => r.mode === "real"),
+  `rows=${ansHist.length}`);
+check("FE-ANS (FR-ANS14): history recap is the trimmed PLAY RECAP, never the full output",
+  ansHist.every((r) => !/TASK \[evil\]/.test(r.recapText)) &&
+  ansHist.some((r) => /PLAY RECAP/.test(r.recapText) && /prod-web/.test(r.recapText)),
+  JSON.stringify(ansHist.map((r) => r.recapText.slice(0, 40))));
+check("FE-ANS (ADR-8): hostile recap in history renders inert (0 child nodes), no __pwn",
+  ansHist.every((r) => r.recapKids === 0) && (await page.evaluate(() => typeof window.__pwn === "undefined")));
+check("FE-ANS (FR-ANS14): append entry carries trimmed recap only (no full task output over IPC)",
+  ansibleHistory.length >= 3 && ansibleHistory.every((e) => !/TASK \[evil\]/.test(e.recap) && !/<script>/.test(e.recap)),
+  JSON.stringify(ansibleHistory.map((e) => e.recap.slice(0, 30))));
+
+// 7) INV-28 / NFR-ANS5: no shell-string invocation on the Ansible frontend path;
+//    draggable grep stays 0 (picker is checkbox/manual, not HTML5 DnD).
+const ansMainSrc = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");
+const ansSlice = ansMainSrc.slice(ansMainSrc.indexOf("Ansible v1 panel (FE-ANS)"), ansMainSrc.indexOf("// ---------- sidebar ----------"));
+check("FE-ANS (NFR-ANS5): no sh -c / bash -c / cmd /C on the Ansible frontend path",
+  !/sh -c|bash -c|cmd \/C/.test(ansSlice));
+check("FE-ANS: draggable grep stays 0 in src/ (picker is checkbox + manual, not HTML5 DnD)",
+  !/\bdraggable\b/.test(ansMainSrc) && !/\bdraggable\b/.test(readFileSync(new URL("../index.html", import.meta.url), "utf8")));
+
+// close the panel to leave the DOM clean for any later checks
+await page.evaluate(() => document.querySelector("#ansible-close").click());
 
 console.log(results.join("\n"));
 const fails = results.filter((r) => r.startsWith("FAIL")).length;
