@@ -1915,6 +1915,35 @@ fn check_binaries() -> BinCheck {
     BinCheck { ssh_missing, sftp_missing }
 }
 
+/// Result of `check_ansible` (Ansible v1, FR-ANS1/ANS2; ADR-A3): whether the
+/// user-installed `ansible-playbook` binary is resolvable. `missing = true`
+/// ⇒ not on PATH; the frontend shows the per-OS install guide and blocks runs.
+#[derive(Serialize)]
+struct AnsibleCheck {
+    missing: bool,
+}
+
+/// Pure core of `check_ansible` (FR-ANS1): resolves `ansible-playbook` across
+/// the given PATH dirs WITHOUT spawning anything (NFR-ANS2: 0 spawn, 0
+/// network) — mirrors `binaries_missing` (lib.rs:1883). `ansible-playbook` is a
+/// user-installed OS binary (NFR-ANS1); we never embed/bundle it. Returns true
+/// when it cannot be resolved as a file in any of `path_dirs`.
+fn ansible_missing(path_dirs: &[PathBuf]) -> bool {
+    let dirs: Vec<&std::path::Path> = path_dirs.iter().map(|p| p.as_path()).collect();
+    !find_in_dirs("ansible-playbook", &dirs)
+}
+
+/// Read-only presence check (FR-ANS1/ANS2, ADR-A3): is `ansible-playbook`
+/// resolvable in PATH on this machine? No spawn, no network, no side effects
+/// (NFR-ANS2); the install guide screen is frontend. Mirrors `check_binaries`.
+#[tauri::command]
+fn check_ansible() -> AnsibleCheck {
+    let path_dirs: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
+    AnsibleCheck { missing: ansible_missing(&path_dirs) }
+}
+
 /// Shared across ALL test modules: HOSTERM_CONFIG is a process-global env var,
 /// so every test that sets it must serialize on ONE mutex. Per-module locks do
 /// not serialize across modules and let concurrent tests clobber each other.
@@ -3533,6 +3562,54 @@ mod bin_check_tests {
             let _ = std::fs::remove_dir_all(tmp(tag));
         }
     }
+
+    // ---- Ansible v1: ansible_missing pure-core tests (FR-ANS1, NFR-ANS2) ----
+
+    /// Fake bin dir writing `ansible-playbook` (`.exe` on Windows) as a file.
+    fn ansible_bin_dir(tag: &str, present: bool) -> PathBuf {
+        let dir = tmp(tag);
+        if present {
+            let name = if cfg!(windows) { "ansible-playbook.exe" } else { "ansible-playbook" };
+            std::fs::write(dir.join(name), b"#!/bin/sh\n").unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn ansible_missing_resolves_in_path() {
+        // present in one PATH dir → not missing
+        let present = ansible_bin_dir("ans-present", true);
+        assert!(!ansible_missing(&[present]), "ansible-playbook present ⇒ missing=false");
+
+        // absent everywhere → missing
+        let absent = ansible_bin_dir("ans-absent", false);
+        assert!(ansible_missing(&[absent]), "ansible-playbook absent ⇒ missing=true");
+
+        // empty PATH → missing
+        assert!(ansible_missing(&[]), "no PATH dirs ⇒ missing=true");
+
+        // first-hit-wins across multiple dirs (mirrors binaries_missing)
+        let empty = ansible_bin_dir("ans-empty", false);
+        let hit = ansible_bin_dir("ans-hit", true);
+        assert!(
+            !ansible_missing(&[empty, hit]),
+            "resolvable in a later PATH dir ⇒ missing=false"
+        );
+
+        for tag in ["ans-present", "ans-absent", "ans-empty", "ans-hit"] {
+            let _ = std::fs::remove_dir_all(tmp(tag));
+        }
+    }
+
+    #[test]
+    fn ansible_missing_rejects_non_file() {
+        // a directory named like the binary must NOT count as resolvable
+        let dir = tmp("ans-dir");
+        let name = if cfg!(windows) { "ansible-playbook.exe" } else { "ansible-playbook" };
+        std::fs::create_dir_all(dir.join(name)).unwrap();
+        assert!(ansible_missing(&[dir]), "a dir named ansible-playbook is not a binary ⇒ missing=true");
+        let _ = std::fs::remove_dir_all(tmp("ans-dir"));
+    }
 }
 
 // ============================================================
@@ -3634,6 +3711,7 @@ pub fn run() {
             pty_resize,
             pty_kill,
             check_binaries,
+            check_ansible,
             forget_secret,
             read_settings,
             write_settings,

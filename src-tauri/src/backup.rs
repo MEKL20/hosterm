@@ -5,7 +5,7 @@
 // Orchestrates the zero-knowledge Google Drive backup/restore feature per
 // docs/tsd/gdrive-backup-v1.md §4,§5 and docs/prd/discovery-gdrive-backup-v1.md
 // §C,§D. This module glues the three lower layers together WITHOUT adding any
-// new business logic to lib.rs (which only gains four thin `#[tauri::command]`
+// new business logic to lib.rs (which only gains four thin Tauri command
 // wrappers, TSD §3):
 //
 //   BACKUP:  gather the four sources → build the JSON manifest →
