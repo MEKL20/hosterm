@@ -199,6 +199,7 @@ Quick-pick accent chips: amber `#e2a35c`, teal `#5fbfae`, rose `#e0869b`, lime `
 | ID | Requirement (EARS) | Prioritas |
 |---|---|---|
 | FR-SH1 | WHEN shell di-render THE SYSTEM SHALL menyusun sidebar (248px) + main column (tab bar 42px → workbench → status bar 24px), persis struktur prototype | must |
+| FR-SH1b | WHEN sidebar di-render THE SYSTEM SHALL menampilkan nav section vertikal (icon+label: Hosts / Keys / Ansible) di bawah sidebar-head; klik satu item menandai `aria-current=page` dan menukar body sidebar antar view Host (host-list + search), Keys (daftar key inline + Add), dan Ansible (launcher yang membuka runner modal). Footer (Raw config, Local, Reload, Settings) + Google chip tetap di bawah. Default view = Host | must (v0.13.x addendum) |
 | FR-SH2 | WHEN host-list di-render THE SYSTEM SHALL menampilkan group label (prefix-derived), host row 34px dengan dot live/idle + auth icon + row-actions (Open SFTP, Host menu) yang muncul on hover/focus-within | must |
 | FR-SH3 | WHEN sebuah host punya sesi live THE SYSTEM SHALL menampilkan `dot-live` (sage + ring); WHEN idle THE SYSTEM SHALL menampilkan `dot-idle` (outline faint) | must |
 | FR-SH4 | WHEN host gagal auth THE SYSTEM SHALL menampilkan error row (`<name> auth failed`) + tombol Retry, tanpa menghapus row lain | must |

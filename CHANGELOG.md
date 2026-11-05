@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Windows releases are currently **unsigned** (Authenticode signing postponed —
 see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
+## [Unreleased]
+
+### Added
+- Sidebar section navigation: a vertical Hosts / Keys / Ansible menu at the top
+  of the sidebar swaps the sidebar body between the host list, an inline SSH keys
+  manager, and an Ansible launcher. The footer (Raw config, Local, Reload,
+  Settings) and the Google account chip are unchanged.
+
+### Fixed
+- Google sign-in now surfaces the token endpoint's actual error on an HTTP 400
+  (for example `invalid_request (client_secret is missing.)`) instead of a bare
+  status code, so a failed exchange is diagnosable. No token material is logged.
+
 ## [0.13.2] - 2026-11-05
 
 ### Fixed

@@ -2345,8 +2345,8 @@ async function saveKey() {
     const fromKeys = keyModalReturnsToKeys;
     closeKey();
     if (fromKeys) {
-      // Opened from the Keys manager: just refresh that list.
-      await renderKeysList();
+      // Opened from the Keys manager (modal or sidebar view): refresh both.
+      await refreshKeyViews();
     } else {
       // Opened from the host editor: select the new key in the dropdown.
       await refreshIdentityDropdown(path);
@@ -2361,9 +2361,9 @@ async function saveKey() {
 // ---------- keys manager: list + add + delete ----------
 // Only keys under ~/.ssh/keys/ are deletable (the backend refuses anything
 // else); legacy ~/.ssh/* keys are shown read-only so the user still sees them.
-async function renderKeysList() {
-  const list = $("#keys-list");
-  const err = $("#keys-err");
+async function renderKeysList(listSel = "#keys-list", errSel = "#keys-err") {
+  const list = $(listSel);
+  const err = $(errSel);
   err.hidden = true;
   err.textContent = "";
   list.textContent = "Loading…";
@@ -2403,11 +2403,6 @@ async function renderKeysList() {
   }
 }
 
-function openKeysModal() {
-  openOverlay("#keys-modal", $("#keys-add"));
-  void renderKeysList();
-}
-
 function closeKeys() {
   closeOverlay("#keys-modal");
 }
@@ -2425,12 +2420,36 @@ async function deleteKey(name: string) {
   if (choice !== "delete") return;
   try {
     await invoke("delete_identity_file", { name });
-    await renderKeysList();
+    await refreshKeyViews();
   } catch (e) {
-    const err = $("#keys-err");
+    // Surface the error in whichever key list is currently visible.
+    const errSel = $("#view-keys").classList.contains("hidden") ? "#keys-err" : "#sb-keys-err";
+    const err = $(errSel);
     err.textContent = `Failed to delete key: ${msg(e)}`;
     err.hidden = false;
   }
+}
+
+// Refresh every mounted keys list (modal + sidebar view) so a delete/add in one
+// surface is reflected in the other.
+async function refreshKeyViews() {
+  if (!$("#keys-modal").classList.contains("hidden")) await renderKeysList();
+  if (!$("#view-keys").classList.contains("hidden")) {
+    await renderKeysList("#sb-keys-list", "#sb-keys-err");
+  }
+}
+
+// Sidebar view-switcher: Hosts / Keys / Ansible. Swaps the sidebar body region
+// and marks the active nav item with aria-current. Host is the default.
+function selectSidebarView(view: string) {
+  document.querySelectorAll<HTMLButtonElement>(".sb-nav").forEach((btn) => {
+    const active = btn.dataset.view === view;
+    btn.setAttribute("aria-current", active ? "page" : "false");
+  });
+  $("#view-host").classList.toggle("hidden", view !== "host");
+  $("#view-keys").classList.toggle("hidden", view !== "keys");
+  $("#view-ansible").classList.toggle("hidden", view !== "ansible");
+  if (view === "keys") void renderKeysList("#sb-keys-list", "#sb-keys-err");
 }
 
 async function deleteHostByName(name: string) {
@@ -3966,11 +3985,16 @@ window.addEventListener("DOMContentLoaded", () => {
   $("#f-newkey").addEventListener("click", openKeyModal);
   $("#k-cancel").addEventListener("click", closeKey);
   $("#k-save").addEventListener("click", saveKey);
-  $("#btn-keys").addEventListener("click", openKeysModal);
+  // Sidebar section nav: Hosts / Keys / Ansible view-switcher.
+  document.querySelectorAll<HTMLButtonElement>(".sb-nav").forEach((btn) => {
+    btn.addEventListener("click", () => selectSidebarView(btn.dataset.view || "host"));
+  });
+  // Inline "Add key" in the sidebar Keys view reuses the create-key modal.
+  $("#sb-keys-add").addEventListener("click", () => { keyModalReturnsToKeys = true; openKeyModal(); });
+  // Ansible is a wide runner; the sidebar view offers a launcher that opens it.
+  $("#sb-ansible-open").addEventListener("click", () => { void openAnsible(); });
   // Local terminal (Termius-style): open a PTY on the OS default shell.
   $("#btn-local").addEventListener("click", () => { void openTerminal("local", { local: true }); });
-  // Ansible playbook runner (FE-ANS).
-  $("#btn-ansible").addEventListener("click", () => { void openAnsible(); });
   $("#ansible-close").addEventListener("click", () => closeOverlay("#ansible-modal"));
   $("#ans-recheck").addEventListener("click", () => { void ansRefreshCheck(); });
   $("#ans-pick-playbook").addEventListener("click", () => { void ansPickPlaybook(); });
