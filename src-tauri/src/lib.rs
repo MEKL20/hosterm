@@ -1944,6 +1944,152 @@ fn check_ansible() -> AnsibleCheck {
     AnsibleCheck { missing: ansible_missing(&path_dirs) }
 }
 
+// ============================================================
+//  ANSIBLE v1 — pure cores (BE-ANS2; no command wiring here)
+// ============================================================
+//
+// INV-28/29/31. These are side-effect-free functions (no I/O, no spawn),
+// exercised in isolation by the cargo `--lib` suite. BE-ANS3 wires them into
+// `ansible_run`. They never touch `~/.ssh/config` or the secrets sidecar, and
+// a secret value NEVER materializes in their output (only IdentityFile PATHS).
+
+/// Why one host was dropped from an Ansible run (mirrors fleet `R_*`). Opaque,
+/// attacker-data-free strings — never embed a host/path value here.
+const R_ANS_UNSAFE: &str = "unsafe alias";
+const R_ANS_PASSWORD: &str = "password host (not supported in v1)";
+
+/// Build the `ansible-playbook` argv as a direct `Vec<String>` (INV-28). Each
+/// of `<targets>` (the `--limit` expression) and `<playbook>` is a SINGLE argv
+/// element — never interpolated into a shell string, so no `sh -c`/`bash -c`
+/// path exists. The caller feeds this straight to `CommandBuilder` (the binary
+/// name `ansible-playbook` is prepended by the spawn site, BE-ANS3).
+///
+///   check:  -i <inv> --check --diff --limit <targets> <playbook>
+///   real:   -i <inv>               --limit <targets> <playbook>
+fn build_ansible_argv(check: bool, inv_path: &str, limit: &str, playbook: &str) -> Vec<String> {
+    let mut argv: Vec<String> = vec!["-i".to_string(), inv_path.to_string()];
+    if check {
+        argv.push("--check".to_string());
+        argv.push("--diff".to_string());
+    }
+    argv.push("--limit".to_string());
+    argv.push(limit.to_string()); // ONE element — never shell-split
+    argv.push(playbook.to_string()); // ONE element — never shell-split
+    argv
+}
+
+/// Group header derived from the alias prefix before the first `-`, identical
+/// to Fleet FR-FL2 (`main.ts` group derivation). `prod-web-01` → `prod`; an
+/// alias with no `-` (or a leading `-`, already rejected upstream) has no
+/// group. Returns `None` when there is no non-empty prefix.
+fn ansible_group_of(alias: &str) -> Option<&str> {
+    match alias.find('-') {
+        Some(0) => None,                       // leading '-' (unsafe; filtered upstream anyway)
+        Some(i) => Some(&alias[..i]),
+        None => None,                          // no '-' ⇒ ungrouped
+    }
+}
+
+/// One eligible host's inventory facts (BE-ANS2 input DTO). Absent config
+/// fields are empty strings and get OMITTED from the emitted INI line. Carries
+/// only IdentityFile PATHS — NEVER key bytes (INV-31). Password hosts never
+/// reach here (filtered by `host_eligibility_ansible` first).
+struct AnsibleInvHost {
+    alias: String,
+    host_name: String,
+    user: String,
+    port: String,
+    identity_file: String,
+}
+
+/// Build the ephemeral inventory INI from the already-eligible hosts (INV-29,
+/// SDD §14.3). Per host one line:
+///
+///   <alias> ansible_host=<HostName> ansible_user=<User> ansible_port=<Port> \
+///           ansible_ssh_private_key_file=<IdentityFile>
+///
+/// Any field absent in config (empty string) is OMITTED from the line. Hosts
+/// are grouped under `[<prefix>]` headers (prefix-before-first-`-`); ungrouped
+/// hosts go in a leading header-less block. A password-auth host NEVER appears
+/// (the caller filters with `host_eligibility_ansible`), so no secret byte can
+/// ever be written — only IdentityFile paths (INV-31).
+fn build_inventory_ini(eligible_hosts: &[AnsibleInvHost]) -> String {
+    // One INI line of host vars; absent (empty) fields omitted.
+    fn line(h: &AnsibleInvHost) -> String {
+        let mut s = h.alias.clone();
+        if !h.host_name.is_empty() {
+            s.push_str(&format!(" ansible_host={}", h.host_name));
+        }
+        if !h.user.is_empty() {
+            s.push_str(&format!(" ansible_user={}", h.user));
+        }
+        if !h.port.is_empty() {
+            s.push_str(&format!(" ansible_port={}", h.port));
+        }
+        if !h.identity_file.is_empty() {
+            // IdentityFile PATH only — never key bytes (INV-31).
+            s.push_str(&format!(" ansible_ssh_private_key_file={}", h.identity_file));
+        }
+        s
+    }
+
+    let mut out = String::new();
+    // Ungrouped hosts first (stable order = input order).
+    for h in eligible_hosts.iter().filter(|h| ansible_group_of(&h.alias).is_none()) {
+        out.push_str(&line(h));
+        out.push('\n');
+    }
+    // Grouped hosts under their prefix header, first-seen group order.
+    let mut groups: Vec<&str> = Vec::new();
+    for h in eligible_hosts {
+        if let Some(g) = ansible_group_of(&h.alias) {
+            if !groups.contains(&g) {
+                groups.push(g);
+            }
+        }
+    }
+    for g in groups {
+        out.push_str(&format!("[{}]\n", g));
+        for h in eligible_hosts
+            .iter()
+            .filter(|h| ansible_group_of(&h.alias) == Some(g))
+        {
+            out.push_str(&line(h));
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// One host's Ansible eligibility verdict (INV-31). Eligible hosts flow into
+/// the inventory; skipped hosts carry an opaque reason and are NEVER spawned,
+/// NEVER written to the inventory.
+enum AnsibleEligibility {
+    Eligible,
+    Skipped(&'static str),
+}
+
+/// Mirror of the fleet host eligibility (INV-31, ADR-A2): v1 supports KEY/AGENT
+/// auth hosts ONLY. A password-auth host OR an unsafe alias (leading `-`, CR,
+/// LF — via `sftp_safe` — or a wildcard `*`/`?`) is SKIPPED with an explicit
+/// reason; it never spawns and never reaches the inventory. `is_password` is
+/// decided by the caller the same way the fleet path does (PreferredAuth /
+/// PubkeyAuthentication / sidecar presence / legacy Password directive).
+fn host_eligibility_ansible(alias: &str, is_password: bool) -> AnsibleEligibility {
+    // Spawn-safety first (same ordering as fleet `host_eligibility`): leading
+    // '-'/CR/LF via sftp_safe, then wildcards, then auth method.
+    if crate::sftp_safe(alias, "Alias").is_err() {
+        return AnsibleEligibility::Skipped(R_ANS_UNSAFE);
+    }
+    if alias.contains('*') || alias.contains('?') {
+        return AnsibleEligibility::Skipped(R_ANS_UNSAFE);
+    }
+    if is_password {
+        return AnsibleEligibility::Skipped(R_ANS_PASSWORD);
+    }
+    AnsibleEligibility::Eligible
+}
+
 /// Shared across ALL test modules: HOSTERM_CONFIG is a process-global env var,
 /// so every test that sets it must serialize on ONE mutex. Per-module locks do
 /// not serialize across modules and let concurrent tests clobber each other.
@@ -3609,6 +3755,180 @@ mod bin_check_tests {
         std::fs::create_dir_all(dir.join(name)).unwrap();
         assert!(ansible_missing(&[dir]), "a dir named ansible-playbook is not a binary ⇒ missing=true");
         let _ = std::fs::remove_dir_all(tmp("ans-dir"));
+    }
+
+    // ---- BE-ANS2: build_ansible_argv (INV-28 array shape) ----
+
+    #[test]
+    fn argv_check_mode_has_check_diff() {
+        let a = build_ansible_argv(true, "/tmp/inv.ini", "web,db", "/pb/site.yml");
+        assert_eq!(
+            a,
+            vec![
+                "-i", "/tmp/inv.ini",
+                "--check", "--diff",
+                "--limit", "web,db",
+                "/pb/site.yml",
+            ]
+        );
+        // --check and --diff present in check mode.
+        assert!(a.contains(&"--check".to_string()));
+        assert!(a.contains(&"--diff".to_string()));
+    }
+
+    #[test]
+    fn argv_real_mode_omits_check_diff() {
+        let a = build_ansible_argv(false, "/tmp/inv.ini", "web,db", "/pb/site.yml");
+        assert_eq!(
+            a,
+            vec!["-i", "/tmp/inv.ini", "--limit", "web,db", "/pb/site.yml"]
+        );
+        assert!(!a.contains(&"--check".to_string()), "real mode has no --check");
+        assert!(!a.contains(&"--diff".to_string()), "real mode has no --diff");
+    }
+
+    #[test]
+    fn argv_playbook_and_limit_each_single_element() {
+        // targets expression and playbook path carry spaces + shell metachars;
+        // each must stay ONE argv element — never split, never shell-wrapped.
+        let targets = "web host,db host";
+        let playbook = "/pb/my site; rm -rf x.yml";
+        let a = build_ansible_argv(true, "/tmp/inv.ini", targets, playbook);
+        // --limit value is exactly the targets string, one element.
+        let li = a.iter().position(|s| s == "--limit").unwrap();
+        assert_eq!(a[li + 1], targets, "limit is one element, verbatim");
+        // playbook is the LAST element, verbatim, one element.
+        assert_eq!(a.last().unwrap(), playbook, "playbook is one element, verbatim");
+        // No element is a shell invocation (INV-28 / NFR-ANS5): no sh -c wrapper.
+        assert!(
+            !a.iter().any(|s| s == "sh" || s == "bash" || s == "-c" || s == "cmd"),
+            "argv is a direct array, never a shell string"
+        );
+    }
+
+    /// INV-28 marker-file fixture: a file whose name is a shell metachar bomb.
+    /// Because the argv is a direct array (never `sh -c "<interp>"`), the
+    /// playbook element is the path VERBATIM — the metachars are inert data,
+    /// never expanded. We assert the array element equals the on-disk path
+    /// byte-for-byte, which proves no shell interpolation happened to it.
+    #[test]
+    fn argv_marker_file_proves_no_shell_interp() {
+        let dir = tmp("ans-argv-marker");
+        // A real file whose name embeds `;`, `$()`, `&&`, `|` — a shell would
+        // mangle any of these; a direct argv element keeps them literal.
+        let fname = "pb;$(touch PWNED)&&echo x|y.yml";
+        let path = dir.join(fname);
+        std::fs::write(&path, b"---\n").unwrap();
+        let path_str = path.to_string_lossy().to_string();
+        let a = build_ansible_argv(true, "/tmp/inv.ini", "all", &path_str);
+        // The playbook element is the exact path — metachars preserved as data.
+        assert_eq!(a.last().unwrap(), &path_str);
+        assert!(a.last().unwrap().contains("$("), "metachars preserved literally");
+        // The marker file the embedded `touch PWNED` would create does NOT
+        // exist: nothing was ever handed to a shell to expand.
+        assert!(!dir.join("PWNED").exists(), "no shell ever expanded the argv");
+        let _ = std::fs::remove_dir_all(tmp("ans-argv-marker"));
+    }
+
+    // ---- BE-ANS2: build_inventory_ini (INV-29/31) ----
+
+    fn invh(alias: &str, host: &str, user: &str, port: &str, key: &str) -> AnsibleInvHost {
+        AnsibleInvHost {
+            alias: alias.to_string(),
+            host_name: host.to_string(),
+            user: user.to_string(),
+            port: port.to_string(),
+            identity_file: key.to_string(),
+        }
+    }
+
+    #[test]
+    fn inventory_full_line_maps_all_vars() {
+        let hosts = vec![invh("prod", "203.0.113.10", "root", "2222", "~/.ssh/id_ed25519")];
+        let ini = build_inventory_ini(&hosts);
+        assert_eq!(
+            ini,
+            "prod ansible_host=203.0.113.10 ansible_user=root ansible_port=2222 ansible_ssh_private_key_file=~/.ssh/id_ed25519\n"
+        );
+    }
+
+    #[test]
+    fn inventory_omits_absent_fields() {
+        // No port, no key configured → those vars are absent from the line.
+        let hosts = vec![invh("staging", "staging.example.com", "deploy", "", "")];
+        let ini = build_inventory_ini(&hosts);
+        assert_eq!(ini, "staging ansible_host=staging.example.com ansible_user=deploy\n");
+        assert!(!ini.contains("ansible_port="), "absent port omitted");
+        assert!(!ini.contains("ansible_ssh_private_key_file="), "absent key omitted");
+    }
+
+    #[test]
+    fn inventory_group_headers_from_prefix() {
+        // prod-web / prod-db share group [prod]; ungrouped `solo` leads; `db-1`
+        // forms [db]. Group order = first-seen.
+        let hosts = vec![
+            invh("solo", "10.0.0.9", "root", "", "~/.ssh/k"),
+            invh("prod-web", "10.0.0.1", "root", "", "~/.ssh/k"),
+            invh("prod-db", "10.0.0.2", "root", "", "~/.ssh/k"),
+            invh("db-1", "10.0.0.3", "root", "", "~/.ssh/k"),
+        ];
+        let ini = build_inventory_ini(&hosts);
+        let expected = "\
+solo ansible_host=10.0.0.9 ansible_user=root ansible_ssh_private_key_file=~/.ssh/k
+[prod]
+prod-web ansible_host=10.0.0.1 ansible_user=root ansible_ssh_private_key_file=~/.ssh/k
+prod-db ansible_host=10.0.0.2 ansible_user=root ansible_ssh_private_key_file=~/.ssh/k
+[db]
+db-1 ansible_host=10.0.0.3 ansible_user=root ansible_ssh_private_key_file=~/.ssh/k
+";
+        assert_eq!(ini, expected);
+    }
+
+    #[test]
+    fn inventory_never_carries_key_bytes_or_password() {
+        // Only the IdentityFile PATH goes in — never key bytes, never any
+        // password material (INV-31). Password hosts are filtered upstream, so
+        // the inventory contains only the eligible host and only its path.
+        let hosts = vec![invh("prod", "10.0.0.1", "root", "22", "/home/u/.ssh/id_ed25519")];
+        let ini = build_inventory_ini(&hosts);
+        assert!(ini.contains("/home/u/.ssh/id_ed25519"), "path present");
+        assert!(!ini.contains("BEGIN OPENSSH PRIVATE KEY"), "no key bytes");
+        assert!(!ini.contains("ansible_password"), "no password var");
+        assert!(!ini.contains("ansible_ssh_pass"), "no ssh_pass var");
+    }
+
+    // ---- BE-ANS2: host_eligibility_ansible (INV-31) ----
+
+    #[test]
+    fn eligibility_key_and_agent_hosts_run() {
+        assert!(matches!(
+            host_eligibility_ansible("prod", false),
+            AnsibleEligibility::Eligible
+        ));
+        assert!(matches!(
+            host_eligibility_ansible("prod-web-01", false),
+            AnsibleEligibility::Eligible
+        ));
+    }
+
+    #[test]
+    fn eligibility_password_host_skipped_with_reason() {
+        match host_eligibility_ansible("legacybox", true) {
+            AnsibleEligibility::Skipped(r) => assert_eq!(r, R_ANS_PASSWORD),
+            _ => panic!("password host must be skipped"),
+        }
+    }
+
+    #[test]
+    fn eligibility_unsafe_alias_skipped() {
+        // leading '-' (option injection), CR, LF, and wildcards all → skipped,
+        // never spawned, never in inventory (INV-26/INV-31).
+        for bad in ["-oProxyCommand=x", "evil\nalias", "host\rname", "web-*", "db-?"] {
+            match host_eligibility_ansible(bad, false) {
+                AnsibleEligibility::Skipped(r) => assert_eq!(r, R_ANS_UNSAFE, "alias {bad:?}"),
+                _ => panic!("unsafe alias {bad:?} must be skipped"),
+            }
+        }
     }
 }
 
