@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Windows releases are currently **unsigned** (Authenticode signing postponed —
 see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
-## [Unreleased]
+## [0.13.1] - 2026-11-05
 
 ### Fixed
 - Google sign-in on Windows: the OAuth URL was opened via `cmd /C start`, whose
