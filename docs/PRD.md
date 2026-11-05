@@ -51,6 +51,7 @@ Founding technical principle (product-visible): hosterm spawns the OS's **real `
 | UC9 | Operator clicks "Check for updates"; the app verifies the downloaded installer against a baked minisign key before installing | Update flow (wave 2 M3) | Speced (docs/archive/FEATURE-SPEC-wave-2-draft.md §4/B) |
 | UC10 | Operator sees the app in the warm "Dusk" theme; opens Settings → Appearance to pick a preset (Dusk/Slate/Ink/Light) or a custom accent with live preview; uses the AI assistant that proposes a command and only runs it after explicit approval (Run once / Always allow exact-command / Reject); copies from the snippet cheatsheet; signs in with Google | Full UI (redesign Dusk) + Settings + Google login + Snippets + AI approval | Speced (docs/FEATURE-SPEC-redesign-dusk-v1.md) |
 | UC11 | Operator opens a LOCAL shell tab (Termius-style) — the OS default shell (PowerShell/cmd on Windows, `$SHELL` on macOS/Linux) in a PTY, no SSH — to run local commands beside the remote host tabs in the same window | Sidebar "Local" button → terminal tab | Shipped |
+| UC12 | Operator opens the Ansible panel, picks a playbook + target hosts/groups (built from existing `~/.ssh/config` hosts), runs a MANDATORY dry-run (`--check`) showing which hosts/tasks change, then explicitly confirms a real run streamed to a PTY tab; each run is recorded in local history. If `ansible-playbook` is missing the panel shows a per-OS install guide and blocks runs | Sidebar "Ansible" panel → PTY tab + history (local `ansible-playbook`, opt-in install) | Speced (docs/FEATURE-SPEC-ansible-v1.md) |
 
 ---
 
@@ -167,6 +168,29 @@ run local commands without leaving the app or opening a separate terminal.
 - WHEN the environment variable `HOSTERM_LOCAL_SHELL` is set THE SYSTEM SHALL use it verbatim as the shell
   program, overriding the OS default (FR-LT3, for tests/power users).
 
+### US-13: Run Ansible playbooks against existing hosts, dry-run first (SSH operator)
+As an operator I want to run an Ansible playbook against my existing hosterm hosts, see a mandatory dry-run
+of what would change, then explicitly confirm the real run, so that I can automate host config safely
+without a second inventory store and without leaking secrets.
+- WHEN the Ansible panel opens THE SYSTEM SHALL detect whether `ansible-playbook` is resolvable; IF it is
+  missing THEN THE SYSTEM SHALL show a per-OS install guide and block all runs with a re-check button
+  (pattern of the W2-A ssh-missing guide) (FR-ANS1/ANS2).
+- WHEN the operator picks a playbook and target hosts/groups THE SYSTEM SHALL build an ephemeral inventory
+  (0600, app-data, deleted after the run) from the existing `~/.ssh/config` hosts — alias =
+  `inventory_hostname`, group = alias prefix before `-` — and SHALL NEVER write a `Group` directive or any
+  inventory into `~/.ssh/config` (FR-ANS3/ANS6).
+- WHEN a run is spawned THE SYSTEM SHALL exec `ansible-playbook` DIRECTLY as a PTY child with the argv built
+  as an array (never `sh -c`/`bash -c` with a user string, INV-14/INV-27) and SHALL never place a password
+  or secret into argv, env visible in `ps`, or IPC (FR-ANS7/ANS11/ANS13).
+- WHEN the operator requests a real run THE SYSTEM SHALL require a successful dry-run (`--check`) for the
+  current playbook+target first and an explicit confirmation summarizing the hosts/tasks that will change;
+  the real run SHALL never auto-start (FR-ANS9/ANS10).
+- IF a target host uses password auth THEN THE SYSTEM SHALL mark it `skipped` and exclude it from the run
+  (v1 key/agent hosts only); IF a target host key is unknown THEN THE SYSTEM SHALL fail that host without
+  auto-accepting the key (FR-ANS4/ANS17).
+- WHEN a run finishes THE SYSTEM SHALL record one history entry (playbook, target, mode, start, duration,
+  rc, recap) in app-data without ever reading/writing `~/.ssh/config` or the sidecar (FR-ANS14).
+
 ---
 
 ## 4. Functional Requirements
@@ -212,6 +236,23 @@ run local commands without leaving the app or opening a separate terminal.
 | FR-H2 | WHEN a user clicks "Check for updates" THE SYSTEM SHALL check exactly one endpoint, verify minisign against the baked pubkey, require consent, and refuse downgrades/invalid signatures atomically | must (wave 2 M3, after HR-W2-1) |
 | FR-H3 | WHEN the window regains focus THE SYSTEM SHALL stat config mtime+size and refresh changed state without restart; IF unreadable THEN THE SYSTEM SHALL keep last-good state + named-path error | must (wave 2 §C) |
 | FR-H4 | WHEN wave 2 M3 flips on the updater THE SYSTEM SHALL have a live release whose artifacts all carry `.sig` (HR-W2-1: sign first, updater second) | must |
+| FR-ANS1 | WHEN the Ansible panel opens THE SYSTEM SHALL detect whether `ansible-playbook` is resolvable on PATH (read-only, no spawn, no network) | must (speced) |
+| FR-ANS2 | IF `ansible-playbook` is missing THEN THE SYSTEM SHALL show a per-OS install guide (apt/dnf/pacman/pipx, brew on macOS, WSL note on Windows), block all runs, and offer an in-place re-check (pattern of W2-A FR-E2) | must (speced) |
+| FR-ANS3 | WHEN the host picker renders THE SYSTEM SHALL list one select-per-host row per sidebar host (wildcard `*`/`?` excluded) with alias, `user@HostName`, auth method; groups derive from the alias prefix before `-` | must (speced) |
+| FR-ANS4 | WHEN a password-auth host is selected as target THE SYSTEM SHALL mark it `skipped` with an explicit reason and exclude it from the ephemeral inventory (v1 = key/agent hosts only, ADR-A2) | must (speced) |
+| FR-ANS5 | WHEN a playbook is picked THE SYSTEM SHALL accept a `*.yml`/`*.yaml` path via picker, read it as UTF-8, and refuse binary/invalid-UTF-8/>2 MiB with a cause message before any run | must (speced) |
+| FR-ANS6 | WHEN a run is prepared THE SYSTEM SHALL generate an ephemeral inventory file (app-data, 0600) from the selected hosterm hosts (alias→`inventory_hostname`, HostName/User/Port/IdentityFile → `ansible_host`/`ansible_user`/`ansible_port`/`ansible_ssh_private_key_file`), delete it after the run, and NEVER write `~/.ssh/config` | must (speced) |
+| FR-ANS7 | WHEN the operator runs a dry-run THE SYSTEM SHALL spawn `ansible-playbook` as a local PTY child with argv `-i <inv> --check --diff --limit <targets> <playbook>` built as an array (never `sh -c`/shell string, INV-14/INV-27) | must (speced) |
+| FR-ANS8 | WHEN a dry-run finishes THE SYSTEM SHALL show the per-host `PLAY RECAP` (ok/changed/unreachable/failed) + "N hosts will change, M tasks changed"; remote-origin output rendered via `esc()`/`escAttr()` (ADR-8) | must (speced) |
+| FR-ANS9 | THE SYSTEM SHALL keep the real-Run button DISABLED until a `--check` dry-run has succeeded once for the current playbook+target (mandatory dry-run is a security layer, not just UX); changing playbook/target resets the gate | must (speced) |
+| FR-ANS10 | WHEN the operator presses Run-real THE SYSTEM SHALL require explicit confirmation summarizing the hosts & tasks that will change before spawning; the real run never auto-starts (parallels INV-25) | must (speced) |
+| FR-ANS11 | WHEN confirmed THE SYSTEM SHALL spawn `ansible-playbook` (PTY local, argv without `--check`), stream output to a terminal tab, and show per-host status | must (speced) |
+| FR-ANS12 | WHEN any run is spawned THE SYSTEM SHALL set env `ANSIBLE_HOST_KEY_CHECKING=True` and `ANSIBLE_CONFIG=<ephemeral app-data cfg>` — host key checking ON (follows hosterm ssh posture, ADR-A1), not inheriting a stray cwd `ansible.cfg` | must (speced) |
+| FR-ANS13 | THE SYSTEM SHALL never place a password/secret into argv, `--extra-vars`, `ps`-visible env, or any IPC payload; secrets stay only in the 0600 sidecar (zero-knowledge posture) | must (speced) |
+| FR-ANS14 | WHEN a run finishes THE SYSTEM SHALL record one history entry (playbook, target, mode, start, duration, rc, recap) in `data_dir()/ansible-history.json` via atomic 0600 write, never reading/writing `~/.ssh/config` or the sidecar (INV-22); retention 200 entries FIFO | must (speced) |
+| FR-ANS15 | IF `ansible-history.json` is missing/corrupt THEN THE SYSTEM SHALL return empty history and leave the corrupt bytes untouched until the next legitimate write (pattern INV-24) | must (speced) |
+| FR-ANS16 | WHEN the operator closes the Ansible panel during a run THE SYSTEM SHALL confirm and treat close = Stop (`pty_kill` → SIGHUP to the local `ansible-playbook`); no ghost background run | should (speced) |
+| FR-ANS17 | IF a target host key is unknown (host key verification failed) THEN THE SYSTEM SHALL fail that host with a recovery message (open one terminal tab to it once for TOFU), without auto-accepting the key (ADR-A1 fail-closed) | must (speced) |
 
 ---
 
@@ -263,7 +304,8 @@ Living-doc rule: FEATURE-SPEC-*/EPIC-TSD-* implement this PRD; this section trac
 | Wave 2 B — signing (M2) then updater (M3) | Authenticode via SignPath Foundation (free OSS program; cert issued to the Foundation) + minisign artifacts, fail-closed gates, `latest.json` feed; then user-initiated verified updater | **Speced — awaiting MEKL approval** (draft uncommitted, commit deferred §10) | docs/archive/FEATURE-SPEC-wave-2-draft.md §4 · docs/SDD-signing-updater.md |
 | Wave 2 C — config auto-reload on focus | mtime+size stat on window focus, no watcher daemon | **Speced** (same draft; HR-W2-2) | docs/archive/FEATURE-SPEC-wave-2-draft.md §5 |
 | Fleet Run v1 — multi-host command/script runner | native parallel `ssh`-argv runner over the existing `~/.ssh/config` host list; command or stdin-script to selected hosts; concurrency cap + per-host timeout; per-host status/exit/live output + run summary; confirm-gated blast radius | **Approved (MEKL 19 Okt — OQ closed, spec §5)** — backend Unit 1–2 paralel Arus; frontend Unit 3–5 antre setelah U9 | docs/FEATURE-SPEC-fleet-run-v1.md |
-| Parking lot | SBOM per release; 21-site `innerHTML` refactor (CSP is the compensating control until then); first-class Linux/macOS installers; terminal font size, go-to-line (v1.1 options) | **Backlog — no spec yet** | PRD v1 §5 · redesign §6 out-of-scope |
+| Ansible (v1) | Local `ansible-playbook` runner (PTY, pattern of UC11 local terminal): pick playbook from a local folder + target hosts/groups built from existing `~/.ssh/config`; ephemeral inventory (no new persistent file in `~/.ssh`); MANDATORY dry-run (`--check`) + explicit real-run confirmation; stream to PTY tab + per-host status; local history store. Opt-in binary (install guide + run-block if missing, W2-A pattern); argv-only (INV-14), secrets never on CLI/IPC; host-key-checking ON (ADR-A1); password hosts skipped (ADR-A2) | **Speced — awaiting nano re-verify → architect SDD** (PM doc only, uncommitted) | docs/FEATURE-SPEC-ansible-v1.md · PRD UC12/US-13/FR-ANS1..17 |
+| Parking lot | SBOM per release; 21-site `innerHTML` refactor (CSP is the compensating control until then); first-class Linux/macOS installers; terminal font size, go-to-line (v1.1 options); **Ansible wave-2** (auto-install Ansible from the app — pipx/apt/brew Unix, WSL Windows; playbook from private Git repo with OAuth/token; password-host Ansible run; ad-hoc module run / vault editing / rolling-serial failure-budget) | **Backlog — no spec yet** | PRD v1 §5 · redesign §6 out-of-scope · docs/FEATURE-SPEC-ansible-v1.md §10 |
 
 Milestone order (binding): next release carries W2-A + U1 + U2–U9 as they land; M2 (signing) precedes M3 (updater) — HR-W2-1, not reopenable.
 
