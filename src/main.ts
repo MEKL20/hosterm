@@ -1,10 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { Terminal } from "@xterm/xterm";
+import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { basicSetup, EditorView } from "codemirror";
+import { Compartment } from "@codemirror/state";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
+import palettes from "./theme-palettes.json";
 import "@xterm/xterm/css/xterm.css";
 
 interface HostDto {
@@ -84,10 +86,12 @@ const ICONS = {
   copy: svg('<rect x="6" y="6" width="7.5" height="7.5" rx="1"/><path d="M3 10V3.5a1 1 0 0 1 1-1h6.5"/>'),
   check: svg('<polyline points="3,8 6.5,11.5 13,4.5"/>'),
 };
-// CodeMirror theme — structural rules read Dusk CSS vars; cmHighlight token
-// colors are JS-literal hex (CSS vars can't reach them), locked to Dusk values
-// (SDD §13.2 pt 5): keyword/function=--accent, string=--live, comment=--faint,
-// text=--text, type/property=cyan accent, number/operator warm neutrals.
+// CodeMirror theme — structural rules read the preset CSS vars; token colors
+// are JS literals (CSS vars can't reach them), built per preset from
+// theme-palettes.json (SSOT, WCAG-gated by qa-reports/theme-contrast.mjs).
+// Dusk is byte-identical to the former cmHighlight literal (SDD §13.2 pt 5):
+// keyword/function=--accent, string=--live, comment=--faint, text=--text,
+// type/property=cyan accent, number/operator warm neutrals.
 const cmTheme = EditorView.theme({
   "&": { color: "var(--text)", backgroundColor: "var(--bg)" },
   ".cm-content": { fontFamily: FONT_MONO, fontSize: "13px", caretColor: "var(--accent)" },
@@ -104,18 +108,32 @@ const cmTheme = EditorView.theme({
   ".cm-matchingBracket": { outline: "1px solid var(--accent)", backgroundColor: "transparent" },
 }, { dark: true });
 
-const cmHighlight = HighlightStyle.define([
-  { tag: t.keyword, color: "#e2a35c" },
-  { tag: t.string, color: "#9dc489" },
-  { tag: t.number, color: "#e0a96d" },
-  { tag: t.comment, color: "#93836f" },
-  { tag: t.variableName, color: "#f2e9dc" },
-  { tag: [t.function(t.variableName)], color: "#e2a35c" },
-  { tag: t.typeName, color: "#8fc4b8" },
-  { tag: t.propertyName, color: "#8fc4b8" },
-  { tag: t.operator, color: "#b9aa95" },
-  { tag: t.punctuation, color: "#b9aa95" },
-]);
+// cmHighlight slot per tag; the hex for each preset lives in theme-palettes.json.
+const CM_TOKEN_ROLES = [
+  { key: "keyword", tag: t.keyword },
+  { key: "string", tag: t.string },
+  { key: "number", tag: t.number },
+  { key: "comment", tag: t.comment },
+  { key: "variableName", tag: t.variableName },
+  { key: "function", tag: t.function(t.variableName) },
+  { key: "typeName", tag: t.typeName },
+  { key: "propertyName", tag: t.propertyName },
+  { key: "operator", tag: t.operator },
+  { key: "punctuation", tag: t.punctuation },
+] as const;
+
+// Per-preset highlight styles; applyTheme swaps the active one into every open
+// editor view through the compartment below — no EditorView recreation, so
+// doc, cursor and dirty flag survive a preset change.
+const CM_HIGHLIGHT = Object.fromEntries(
+  (Object.keys(palettes) as ThemePreset[]).map((preset) => [
+    preset,
+    HighlightStyle.define(
+      CM_TOKEN_ROLES.map(({ key, tag }) => ({ tag, color: palettes[preset].cm[key] })),
+    ),
+  ]),
+) as Record<ThemePreset, HighlightStyle>;
+const highlightCompartment = new Compartment();
 
 // ---------- state ----------
 let hosts: HostDto[] = [];
@@ -720,6 +738,33 @@ function applyTheme(preset: ThemePreset, markDirty: boolean) {
     button.setAttribute("aria-pressed", String(button.dataset.preset === preset));
   });
   appSettings.theme = preset;
+  // Theme palettes v1: the terminal well and editor tokens follow the preset.
+  // Live terminals repaint via the ITheme option (xterm repaints on set — no
+  // Terminal/PTY recreation); open editors re-highlight through the Compartment
+  // (no EditorView recreation, doc/cursor/dirty survive). Both loops are
+  // no-op-safe while nothing is open (startup/reset path).
+  const palette = THEME_TERMINAL[preset];
+  const liveTerms = [...sessions.values(), ...splitSessions.values()];
+  for (const sess of liveTerms) {
+    sess.term.options.theme = palette;
+  }
+  let editorReconfigured = 0;
+  for (const sess of editorSessions.values()) {
+    if (!sess.view) continue; // tab exists but the EditorView hasn't opened yet
+    sess.view.dispatch({
+      effects: highlightCompartment.reconfigure(syntaxHighlighting(CM_HIGHLIGHT[preset])),
+    });
+    editorReconfigured += 1;
+  }
+  // Smoke hook (TSD theme-palettes-v1 §2.3): termBg is read back from the first
+  // live Terminal when one exists, proving the option swap landed on a real
+  // instance instead of only the palette table.
+  const hook: { preset: ThemePreset; termBg: string; editorReconfigured: number } = {
+    preset,
+    termBg: liveTerms[0]?.term.options.theme?.background ?? palettes[preset].terminal.background,
+    editorReconfigured,
+  };
+  (window as unknown as { __hostermTheme?: typeof hook }).__hostermTheme = hook;
   if (markDirty) settingsDirty = true;
 }
 
@@ -2823,7 +2868,7 @@ async function openRemoteEditor(host: string, path: string) {
         basicSetup,
         EditorView.lineWrapping,
         cmTheme,
-        syntaxHighlighting(cmHighlight),
+        highlightCompartment.of(syntaxHighlighting(CM_HIGHLIGHT[appSettings.theme])),
         EditorView.updateListener.of((u) => {
           if (u.docChanged && !sess.dirty) {
             sess.dirty = true;
@@ -3010,39 +3055,17 @@ function openTabIds(): number[] {
 }
 
 // ---------- terminals ----------
-// shared xterm theme (primary + split terminals)
-// Dusk ANSI remap (SDD §13.2 pt 5 / §13.3) — these are JS literals the xterm
-// canvas can't read from CSS vars, so they are LOCKED to Dusk values only;
-// presets do NOT repaint the terminal (documented limitation, not a bug).
-// bg=--term, fg=--text, cursor=--accent; ANSI derived from the Dusk palette
-// (green=--live sage, red=--danger terracotta, yellow=--accent honey).
-const TERMINAL_THEME = {
-  background: "#14100d",
-  foreground: "#f2e9dc",
-  cursor: "#e2a35c",
-  cursorAccent: "#14100d",
-  selectionBackground: "rgba(226,163,92,.18)",
-  selectionForeground: "#f2e9dc",
-  selectionInactiveBackground: "rgba(226,163,92,.12)",
-  // scrollbar sliders are not settable in xterm 5.5's ITheme; --border /
-  // --accent apply when the addon support lands
-  black: "#2a231c",
-  red: "#e07856",
-  green: "#9dc489",
-  yellow: "#e2a35c",
-  blue: "#8fb3c9",
-  magenta: "#c99bb3",
-  cyan: "#8fc4b8",
-  white: "#b9aa95",
-  brightBlack: "#93836f",
-  brightRed: "#e07856",
-  brightGreen: "#9dc489",
-  brightYellow: "#e2a35c",
-  brightBlue: "#8fb3c9",
-  brightMagenta: "#c99bb3",
-  brightCyan: "#8fc4b8",
-  brightWhite: "#f2e9dc",
-};
+// xterm theme per preset, built from theme-palettes.json (SSOT, WCAG-gated by
+// qa-reports/theme-contrast.mjs). bg=--term, fg=--text, cursor=--accent; ANSI
+// derived from each preset's chrome palette (Dusk: green=--live sage,
+// red=--danger terracotta, yellow=--accent honey). Dusk is byte-identical to
+// the former TERMINAL_THEME literal (SDD §13.2 pt 5). Live terminals repaint
+// via term.options.theme in applyTheme; the constructors below read the ACTIVE
+// preset at open time. Scrollbar sliders are not settable in xterm 5.5's
+// ITheme — --border/--accent apply when the addon support lands.
+const THEME_TERMINAL = Object.fromEntries(
+  (Object.keys(palettes) as ThemePreset[]).map((preset) => [preset, palettes[preset].terminal]),
+) as Record<ThemePreset, ITheme>;
 
 
 // Split view: the panel holds a flex row of two .term-host panes sharing one
@@ -3138,7 +3161,7 @@ async function splitTerminal(targetTabId: number, sourceTabId: number) {
     cursorBlink: !REDUCED_MOTION,
     fontFamily: FONT_MONO,
     fontSize: 13,
-    theme: TERMINAL_THEME,
+    theme: THEME_TERMINAL[appSettings.theme],
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
@@ -3190,7 +3213,7 @@ async function openTerminal(host: string, opts: { local?: boolean } = {}): Promi
     cursorBlink: !REDUCED_MOTION,
     fontFamily: FONT_MONO,
     fontSize: 13,
-    theme: TERMINAL_THEME,
+    theme: THEME_TERMINAL[appSettings.theme],
   });
   const fit = new FitAddon();
   term.loadAddon(fit);

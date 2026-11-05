@@ -445,6 +445,30 @@ const edChain = await page.evaluate(() => {
 });
 check("U4: ed-wrap fills panel (height chain)", edChain.wh === edChain.ph, JSON.stringify(edChain));
 
+// THEME v1 (TSD theme-palettes-v1 §2.3): a preset swap re-highlights the OPEN
+// editor through the Compartment — no EditorView recreate, so doc and cursor
+// survive; __hostermTheme.editorReconfigured must count exactly this view.
+await page.locator(".cm-content").click(); // focus -> cursor DOM exists
+await page.waitForTimeout(150);
+const themeEdSwap = await page.evaluate(() => {
+  const docBefore = document.querySelector(".panel.active .cm-content")?.textContent;
+  const cursorBefore = !!document.querySelector(".panel.active .cm-cursor");
+  const before = { ...window.__hostermTheme };
+  document.querySelector('.preset[data-preset="ink"]').click();
+  const after = { ...window.__hostermTheme };
+  const docAfter = document.querySelector(".panel.active .cm-content")?.textContent;
+  const cursorAfter = !!document.querySelector(".panel.active .cm-cursor");
+  document.querySelector('.preset[data-preset="dusk"]').click();
+  const restored = { ...window.__hostermTheme };
+  return { before, after, restored, docBefore, docAfter, cursorBefore, cursorAfter };
+});
+check("THEME v1: preset swap re-highlights the open editor (Compartment, doc + cursor survive)",
+  themeEdSwap.before.preset === "dusk" && themeEdSwap.after.preset === "ink" &&
+  themeEdSwap.after.editorReconfigured === 1 && themeEdSwap.restored.preset === "dusk" &&
+  themeEdSwap.docAfter === themeEdSwap.docBefore && themeEdSwap.cursorBefore && themeEdSwap.cursorAfter,
+  JSON.stringify(themeEdSwap));
+
+
 // 5. dirty dot appears after edit
 await page.locator(".cm-content").click();
 await page.keyboard.type("X");
@@ -766,6 +790,23 @@ check("U4: activateTab restores split focus to first side",
 const cssU4 = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
 check("U4: legacy 'float: left' split layout removed (grep 0)", !/float:\s*left/i.test(cssU4));
 
+// THEME v1 (TSD theme-palettes-v1 §2.2a/§2.3): a preset swap repaints the LIVE
+// terminals (main + split pane) through term.options.theme — no Terminal/PTY
+// recreation. Light is the strongest flip: dark Dusk well -> light #faf7f0.
+const themeTermSwap = await page.evaluate(() => {
+  const before = { ...window.__hostermTheme };
+  document.querySelector('.preset[data-preset="light"]').click();
+  const light = { ...window.__hostermTheme };
+  document.querySelector('.preset[data-preset="dusk"]').click();
+  const restored = { ...window.__hostermTheme };
+  return { before, light, restored };
+});
+check("THEME v1: preset swap repaints live split terminals (termBg #14100d -> #faf7f0 -> dusk)",
+  themeTermSwap.before.preset === "dusk" && themeTermSwap.before.termBg === "#14100d" &&
+  themeTermSwap.light.preset === "light" && themeTermSwap.light.termBg === "#faf7f0" &&
+  themeTermSwap.restored.preset === "dusk" && themeTermSwap.restored.termBg === "#14100d",
+  JSON.stringify(themeTermSwap));
+
 
 // 9g1. paste normalization: CRLF clipboard -> single LF lines, no phantom Enter
 const norm = await page.evaluate(() => {
@@ -1019,11 +1060,16 @@ const noShadow = await page.evaluate(() => {
   return { tab: sh(tab), btn: sh(btn) };
 });
 check("no glow on inactive tab / plain button", noShadow.tab === "none" && noShadow.btn === "none", `${noShadow.tab} / ${noShadow.btn}`);
-// (e) xterm/CM literal remap to Dusk (SDD §13.2 pt 5): JS literals locked to Dusk,
-//     no emerald/indigo ANSI survives in the terminal/editor theme objects.
-const litRemap = !/#020203|#00d992|#818cf8|#2fd6a1|#f2f2f2|#80d280|#ffdd80|#fd9c9f/.test(mainSrc) &&
-  /background: "#14100d"/.test(mainSrc) && /cursor: "#e2a35c"/.test(mainSrc);
-check("U-D1: xterm/CM literal remapped to Dusk (no Abyss hex)", litRemap);
+// (e) xterm/CM palette = Dusk (SDD §13.2 pt 5): no emerald/indigo ANSI survives,
+//     and Dusk's terminal palette now sources from theme-palettes.json (SSOT,
+//     theme palettes v1) — main.ts builds THEME_TERMINAL from that JSON rather
+//     than carrying inline hex literals, so assert the JSON holds byte-exact Dusk.
+const paletteSrc = readFileSync(new URL("../src/theme-palettes.json", import.meta.url), "utf8");
+const duskTerm = JSON.parse(paletteSrc).dusk.terminal;
+const noAbyss = !/#020203|#00d992|#818cf8|#2fd6a1|#f2f2f2|#80d280|#ffdd80|#fd9c9f/.test(mainSrc + "\n" + paletteSrc);
+const duskSsot = /theme-palettes\.json/.test(mainSrc) && /THEME_TERMINAL/.test(mainSrc) &&
+  duskTerm.background === "#14100d" && duskTerm.cursor === "#e2a35c";
+check("U-D1: xterm/CM palette = Dusk from SSOT JSON (no Abyss hex)", noAbyss && duskSsot);
 
 // ---- U3 tab bar Arus (EPIC-TSD §U3): kind color, dead+reconnect, scroll, menu, Ctrl+W, drop-zone ----
 // start clean: close leftover tabs (discard unsaved editor if prompted)
