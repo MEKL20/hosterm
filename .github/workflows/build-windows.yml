@@ -309,9 +309,10 @@ jobs:
           # release (first v0.9.0 tag shipped zero assets).
           fail_on_unmatched_files: true
           body_path: release-notes.md
+          # macOS .dmg temporarily disabled (build-macos job skipped, 2026-11-04);
+          # when re-enabling the macOS build, add `**/*.dmg` to the files list below.
+          # NOTE: lines under `files: |` are literal file patterns, NOT YAML comments —
+          # a `#` line there is matched as a filename and fails fail_on_unmatched_files.
           files: |
             **/*.msi
             **/*.exe
-            # macOS .dmg temporarily disabled (build-macos job skipped, 2026-11-04);
-            # restore this line when re-enabling the macOS build.
-            # **/*.dmg
