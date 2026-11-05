@@ -1613,6 +1613,24 @@ struct PtySession {
 #[derive(Default)]
 struct PtyState {
     sessions: Mutex<HashMap<u32, PtySession>>,
+    /// BE-ANS3 / LQ-2: ephemeral temp files (inventory + cfg) an Ansible run
+    /// generated, keyed by pty id. Unlinked when the run's PTY exits (pump
+    /// thread end) OR when `pty_kill` is called — backend-side, never contingent
+    /// on the frontend being alive (INV-29).
+    ephemeral: Mutex<HashMap<u32, Vec<PathBuf>>>,
+}
+
+/// LQ-2 ephemeral cleanup (INV-29): unlink every temp file registered against
+/// `id` and drop the entry. Idempotent — a double call (exit then kill, or
+/// kill then exit) is a no-op the second time. Errors are swallowed: a file
+/// already gone is success. Called from BOTH the pty exit path and `pty_kill`.
+fn cleanup_ephemeral(ephemeral: &Mutex<HashMap<u32, Vec<PathBuf>>>, id: u32) {
+    let paths = ephemeral.lock().unwrap().remove(&id);
+    if let Some(paths) = paths {
+        for p in paths {
+            let _ = std::fs::remove_file(&p);
+        }
+    }
 }
 
 /// Pump a PTY: forward output chunks through `on_chunk`, watching for
@@ -1856,6 +1874,9 @@ fn pty_resize(state: State<PtyState>, id: u32, cols: u16, rows: u16) -> Result<(
 fn pty_kill(state: State<PtyState>, id: u32) -> Result<(), String> {
     // dropping the master closes the pty; ssh receives SIGHUP and exits
     state.sessions.lock().unwrap().remove(&id);
+    // LQ-2 (INV-29): unlink any ephemeral Ansible inventory/cfg registered for
+    // this run. Backend-side, not contingent on the frontend being alive.
+    cleanup_ephemeral(&state.ephemeral, id);
     Ok(())
 }
 
@@ -2088,6 +2109,280 @@ fn host_eligibility_ansible(alias: &str, is_password: bool) -> AnsibleEligibilit
         return AnsibleEligibility::Skipped(R_ANS_PASSWORD);
     }
     AnsibleEligibility::Eligible
+}
+
+// ============================================================
+//  ANSIBLE v1 — command wiring (BE-ANS3: ansible_run + ansible_history)
+// ============================================================
+
+/// Spawn request (SDD §14.4). Args camelCase at the Tauri boundary; backend
+/// REPLANS eligibility authoritatively from config via `host_eligibility_ansible`
+/// — the picker's `aliases` is advisory, the backend decides who actually runs.
+#[derive(Deserialize)]
+struct AnsibleRunReq {
+    mode: String, // "check" | "real"
+    playbook: String,
+    aliases: Vec<String>,
+    limit: String,
+    cols: u16,
+    rows: u16,
+}
+
+/// One persisted history row (FR-ANS14/ANS15). `recap` is the trimmed PLAY
+/// RECAP block ONLY — NEVER full output, NEVER a secret (INV-31).
+#[derive(Serialize, Deserialize, Clone)]
+struct AnsibleHistoryEntry {
+    playbook: String,
+    targets: String,
+    mode: String,
+    started_at: String,
+    duration_ms: u64,
+    rc: i64,
+    recap: String,
+}
+
+/// History op (SDD §14.4): read the full array, or append one row (FIFO-cap).
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum AnsibleHistoryOp {
+    Read,
+    Append { entry: AnsibleHistoryEntry },
+}
+
+fn ansible_history_path() -> PathBuf {
+    data_dir().join("ansible-history.json")
+}
+
+/// A non-guessable per-run suffix for the ephemeral inventory/cfg file names.
+/// Reuses the process id + a monotonic PTY id + a nanosecond timestamp — NO new
+/// RNG crate (TSD §3). Hex-encoded so the name is filename-safe.
+fn ephemeral_suffix(id: u32) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{:x}-{:x}-{:x}", std::process::id(), id, nanos)
+}
+
+/// Read the persisted history array. NEVER throws (INV-24/INV-30): a missing
+/// file, an I/O error, or unparseable JSON all yield `[]`, and the corrupt
+/// file is left on disk untouched until a legitimate write.
+fn read_history() -> Vec<AnsibleHistoryEntry> {
+    match std::fs::read_to_string(ansible_history_path()) {
+        Ok(text) => serde_json::from_str::<Vec<AnsibleHistoryEntry>>(&text).unwrap_or_default(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Append `entry` to `history` and FIFO-cap at 200 (oldest dropped first,
+/// newest-last order preserved). Pure — the atomic write is the caller's.
+fn history_append_fifo(
+    mut history: Vec<AnsibleHistoryEntry>,
+    entry: AnsibleHistoryEntry,
+) -> Vec<AnsibleHistoryEntry> {
+    const CAP: usize = 200;
+    history.push(entry);
+    let len = history.len();
+    if len > CAP {
+        history.drain(..len - CAP);
+    }
+    history
+}
+
+/// Ansible run history (FR-ANS14/ANS15). `read` → full array newest-last (`[]`
+/// if missing/corrupt, INV-30). `append` → add + FIFO-cap 200 + atomic 0600
+/// whole-file write (EXACT `settings.json` pattern via `write_store_atomic`;
+/// refuses to clobber on a failed write). NEVER touches ~/.ssh/config or the
+/// sidecar (INV-22/INV-29). `recap` carries only the trimmed PLAY RECAP block.
+#[tauri::command]
+fn ansible_history(op: AnsibleHistoryOp) -> Result<Vec<AnsibleHistoryEntry>, String> {
+    match op {
+        AnsibleHistoryOp::Read => Ok(read_history()),
+        AnsibleHistoryOp::Append { entry } => {
+            let next = history_append_fifo(read_history(), entry);
+            let body = serde_json::to_string_pretty(&next)
+                .map_err(|_| "ansible:history-write-failed".to_string())?;
+            write_store_atomic(&ansible_history_path(), &body)
+                .map_err(|_| "ansible:history-write-failed".to_string())?;
+            Ok(next)
+        }
+    }
+}
+
+/// Spawn an Ansible run (SDD §14.4). Returns a PTY id into the EXISTING pty
+/// session map; errors are opaque `ansible:<code>` tokens (never embed host/path
+/// data). Behavior (FROZEN):
+///   • replan via `host_eligibility_ansible` + sidecar-alias OR → eligible/skipped;
+///     0 eligible ⇒ `ansible:no-eligible-hosts`, 0 spawn, 0 files written.
+///   • generate ephemeral inventory + cfg (0600, data_dir()); argv as Vec<String>
+///     via `build_ansible_argv` (INV-28); spawn `ansible-playbook` into the SAME
+///     PtyState/NEXT_ID map, reusing `pump_pty`.
+///   • env: ANSIBLE_HOST_KEY_CHECKING=True, ANSIBLE_CONFIG=<cfg>, ANSIBLE_NOCOLOR=1.
+///   • NO password/secret enters argv/env/payload/inventory (ADR-A2/INV-31).
+///   • ephemeral files registered against the pty id and unlinked on exit AND on
+///     pty_kill (LQ-2/INV-29), backend-side.
+#[tauri::command]
+fn ansible_run(
+    app: AppHandle,
+    state: State<PtyState>,
+    req: AnsibleRunReq,
+) -> Result<u32, String> {
+    let check = req.mode == "check";
+
+    // Authoritative replan from config text ONLY (no self-heal write; INV-29),
+    // mirroring the fleet plan layer: parse facts per alias, OR sidecar presence
+    // into password detection. Password/unsafe hosts are SKIPPED — never spawned,
+    // never written to the inventory.
+    let text = read_config_text(&config_path()).map_err(|_| "ansible:config-unreadable".to_string())?;
+    let cfg = parse_config(&text);
+    let sidecars = fleet::sidecar_aliases();
+
+    let mut eligible: Vec<AnsibleInvHost> = Vec::new();
+    for alias in &req.aliases {
+        // password detection mirrors read_ssh_config/snapshot_hosts + sidecar OR.
+        let host = cfg.hosts.iter().find(|h| h.patterns.first().map(|p| p == alias).unwrap_or(false));
+        let is_password = match host {
+            Some(h) => {
+                let prefers_password = get_opt(h, "PreferredAuthentications")
+                    .split(',')
+                    .next()
+                    .map(|s| s.trim().eq_ignore_ascii_case("password"))
+                    .unwrap_or(false);
+                let pubkey_off = get_opt(h, "PubkeyAuthentication").eq_ignore_ascii_case("no");
+                let legacy_pw = !get_opt(h, "Password").is_empty();
+                prefers_password || pubkey_off || legacy_pw
+            }
+            None => false,
+        } || sidecars.contains(alias);
+
+        if let AnsibleEligibility::Eligible = host_eligibility_ansible(alias, is_password) {
+            if let Some(h) = host {
+                eligible.push(AnsibleInvHost {
+                    alias: alias.clone(),
+                    host_name: get_opt(h, "HostName"),
+                    user: get_opt(h, "User"),
+                    port: get_opt(h, "Port"),
+                    identity_file: get_opt(h, "IdentityFile"),
+                });
+            }
+        }
+    }
+
+    // 0 eligible ⇒ error BEFORE any file is written or process spawned.
+    if eligible.is_empty() {
+        return Err("ansible:no-eligible-hosts".into());
+    }
+
+    // Allocate the pty id first so the ephemeral file names + the session key
+    // share one monotonic id.
+    let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+    let suffix = ephemeral_suffix(id);
+    let dir = data_dir();
+    let inv_path = dir.join(format!("ansible-inv-{}.ini", suffix));
+    let cfg_path = dir.join(format!("ansible-cfg-{}.ini", suffix));
+
+    // Generate the ephemeral inventory + pinned-safe cfg (0600). The cfg pins
+    // safe defaults so a stray cwd ansible.cfg is never honored (host key
+    // checking is also enforced via env below).
+    let inv_body = build_inventory_ini(&eligible);
+    let cfg_body = "[defaults]\nhost_key_checking = True\nnocolor = True\n";
+    write_store_atomic(&inv_path, &inv_body).map_err(|_| "ansible:inv-write-failed".to_string())?;
+    if write_store_atomic(&cfg_path, cfg_body).is_err() {
+        let _ = std::fs::remove_file(&inv_path); // don't leak the inventory on a half-failure
+        return Err("ansible:cfg-write-failed".into());
+    }
+
+    // Register ephemeral paths against the pty id BEFORE spawn, so cleanup fires
+    // even if spawn fails below (we also clean up on the early-return paths).
+    state
+        .ephemeral
+        .lock()
+        .unwrap()
+        .insert(id, vec![inv_path.clone(), cfg_path.clone()]);
+
+    let argv = build_ansible_argv(check, &inv_path.to_string_lossy(), &req.limit, &req.playbook);
+
+    let pty_system = native_pty_system();
+    let pair = match pty_system.openpty(PtySize {
+        rows: req.rows,
+        cols: req.cols,
+        pixel_width: 0,
+        pixel_height: 0,
+    }) {
+        Ok(p) => p,
+        Err(_) => {
+            cleanup_ephemeral(&state.ephemeral, id);
+            return Err("ansible:pty-failed".into());
+        }
+    };
+
+    let mut cmd = CommandBuilder::new("ansible-playbook");
+    cmd.args(&argv);
+    // ADR-A1 + LQ-3: host key checking ON (fail-closed), pin the ephemeral cfg so
+    // a stray ansible.cfg is ignored, and disable color for a clean PLAY RECAP.
+    // NO secret ever enters the environment (INV-31).
+    cmd.env("ANSIBLE_HOST_KEY_CHECKING", "True");
+    cmd.env("ANSIBLE_CONFIG", cfg_path.as_os_str());
+    cmd.env("ANSIBLE_NOCOLOR", "1");
+
+    let mut child = match pair.slave.spawn_command(cmd) {
+        Ok(c) => c,
+        Err(_) => {
+            cleanup_ephemeral(&state.ephemeral, id);
+            return Err("ansible:spawn-failed".into());
+        }
+    };
+    drop(pair.slave);
+
+    let reader = match pair.master.try_clone_reader() {
+        Ok(r) => r,
+        Err(_) => {
+            cleanup_ephemeral(&state.ephemeral, id);
+            return Err("ansible:pty-failed".into());
+        }
+    };
+    let writer = match pair.master.take_writer() {
+        Ok(w) => w,
+        Err(_) => {
+            cleanup_ephemeral(&state.ephemeral, id);
+            return Err("ansible:pty-failed".into());
+        }
+    };
+    let writer = Arc::new(Mutex::new(writer));
+
+    // reader -> frontend events over the EXISTING pty://output|exit/{id} family.
+    // On exit, unlink the ephemeral files (LQ-2/INV-29) — backend-side.
+    let app_r = app.clone();
+    let w_inject = writer.clone();
+    // Look the managed PtyState up again inside the thread (its `ephemeral` map
+    // outlives any single run — PtyState is `.manage()`d for the app lifetime),
+    // so exit-path cleanup drops the registration AND unlinks the files, making
+    // a later pty_kill an idempotent no-op (LQ-2/INV-29).
+    let app_state = app.clone();
+    thread::spawn(move || {
+        pump_pty(reader, w_inject, None, |s| {
+            let _ = app_r.emit(&format!("pty://output/{}", id), s.to_string());
+        });
+        {
+            use tauri::Manager;
+            let st = app_state.state::<PtyState>();
+            cleanup_ephemeral(&st.ephemeral, id);
+        }
+        let _ = app_r.emit(&format!("pty://exit/{}", id), ());
+    });
+
+    state
+        .sessions
+        .lock()
+        .unwrap()
+        .insert(id, PtySession { master: pair.master, writer });
+
+    // reap the child so it does not become a zombie
+    thread::spawn(move || {
+        let _ = child.wait();
+    });
+
+    Ok(id)
 }
 
 /// Shared across ALL test modules: HOSTERM_CONFIG is a process-global env var,
@@ -3222,6 +3517,160 @@ mod store_tests {
         AllowEntry { host: host.into(), command: cmd.into(), added_at: String::new() }
     }
 
+    // =========================================================
+    //  BE-ANS3: ansible_history (atomic/FIFO/corrupt) + cleanup
+    // =========================================================
+
+    fn hist(playbook: &str) -> AnsibleHistoryEntry {
+        AnsibleHistoryEntry {
+            playbook: playbook.into(),
+            targets: "web".into(),
+            mode: "check".into(),
+            started_at: "2026-11-05T00:00:00Z".into(),
+            duration_ms: 1234,
+            rc: 0,
+            recap: "PLAY RECAP\nweb : ok=1 changed=0 unreachable=0 failed=0".into(),
+        }
+    }
+
+    // ---- history_append_fifo: 200-cap FIFO (oldest dropped, newest-last) ----
+    #[test]
+    fn history_append_fifo_caps_at_200_dropping_oldest() {
+        // Seed 200 entries tagged 0..200, then append one more → len stays 200,
+        // the oldest (playbook "0") is gone, the newest ("200") is last.
+        let mut v: Vec<AnsibleHistoryEntry> = (0..200).map(|i| hist(&i.to_string())).collect();
+        assert_eq!(v.len(), 200);
+        v = history_append_fifo(v, hist("200"));
+        assert_eq!(v.len(), 200, "FIFO cap holds at 200");
+        assert_eq!(v.first().unwrap().playbook, "1", "oldest entry dropped first");
+        assert_eq!(v.last().unwrap().playbook, "200", "newest entry is last");
+        // under the cap it simply appends
+        let small = history_append_fifo(vec![hist("a")], hist("b"));
+        assert_eq!(small.len(), 2);
+        assert_eq!(small.last().unwrap().playbook, "b");
+    }
+
+    // ---- ansible_history: read missing → [], append atomic 0600, read back ----
+    #[test]
+    fn ansible_history_read_missing_then_append_atomic() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = data_root("ans-hist");
+        std::env::set_var("HOSTERM_DATA_DIR", &root);
+
+        // missing file → [], read creates nothing (INV-30/INV-24)
+        let empty = ansible_history(AnsibleHistoryOp::Read).unwrap();
+        assert!(empty.is_empty(), "missing history reads as []");
+        let path = root.join("hosterm").join("ansible-history.json");
+        assert!(!path.exists(), "a read must not create the file");
+
+        // append → array after append; file lands in app-data dir
+        let after = ansible_history(AnsibleHistoryOp::Append { entry: hist("site.yml") }).unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].playbook, "site.yml");
+        assert!(path.exists(), "append writes the store file");
+
+        // 0600 on unix (atomic write discipline)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "history file is 0600");
+        }
+
+        // read back reflects the append (newest-last)
+        let back = ansible_history(AnsibleHistoryOp::Read).unwrap();
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].playbook, "site.yml");
+
+        std::env::remove_var("HOSTERM_DATA_DIR");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ---- INV-30: corrupt history → [] AND bytes untouched (no clobber on read) ----
+    #[test]
+    fn ansible_history_corrupt_reads_empty_without_clobber() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = data_root("ans-hist-corrupt");
+        std::env::set_var("HOSTERM_DATA_DIR", &root);
+        let path = root.join("hosterm").join("ansible-history.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let garbage = "{ not valid json ]]] \u{0} garbage";
+        std::fs::write(&path, garbage).unwrap();
+        let before = std::fs::read(&path).unwrap();
+
+        // read → [] and the corrupt bytes are left on disk untouched
+        let got = ansible_history(AnsibleHistoryOp::Read).unwrap();
+        assert!(got.is_empty(), "corrupt history reads as []");
+        let after = std::fs::read(&path).unwrap();
+        assert_eq!(before, after, "corrupt bytes untouched until a legitimate write");
+
+        std::env::remove_var("HOSTERM_DATA_DIR");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ---- LQ-2/INV-29: cleanup_ephemeral unlinks registered files, idempotent ----
+    #[test]
+    fn cleanup_ephemeral_unlinks_and_is_idempotent() {
+        let root = data_root("ans-ephem");
+        let inv = root.join("ansible-inv-test.ini");
+        let cfg = root.join("ansible-cfg-test.ini");
+        std::fs::write(&inv, "web ansible_host=10.0.0.1\n").unwrap();
+        std::fs::write(&cfg, "[defaults]\n").unwrap();
+        assert!(inv.exists() && cfg.exists());
+
+        let map: Mutex<HashMap<u32, Vec<PathBuf>>> = Mutex::new(HashMap::new());
+        map.lock().unwrap().insert(7, vec![inv.clone(), cfg.clone()]);
+
+        cleanup_ephemeral(&map, 7);
+        assert!(!inv.exists(), "inventory unlinked on cleanup");
+        assert!(!cfg.exists(), "cfg unlinked on cleanup");
+        assert!(map.lock().unwrap().get(&7).is_none(), "registration dropped");
+
+        // second call (exit after kill, or vice versa) is a no-op, no panic
+        cleanup_ephemeral(&map, 7);
+        assert!(map.lock().unwrap().get(&7).is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ---- 0-eligible replan: all password/unsafe aliases → 0 inventory hosts ----
+    // Proves the condition behind `ansible:no-eligible-hosts` (0 spawn, 0 files):
+    // the authoritative replan drops every ineligible alias, so `eligible` is
+    // empty and ansible_run returns the error BEFORE writing any file. The
+    // command needs an AppHandle/State to spawn, so we exercise the replan
+    // composition (the branch's predicate) directly here.
+    #[test]
+    fn replan_drops_password_and_unsafe_hosts_to_zero() {
+        let aliases: Vec<String> = vec!["pw".into(), "-x".into(), "star*".into()];
+        // pw = password host; -x/star* = unsafe/wildcard → all skipped.
+        let is_password = |a: &str| a == "pw";
+        let mut eligible: Vec<&str> = Vec::new();
+        for a in &aliases {
+            if let AnsibleEligibility::Eligible = host_eligibility_ansible(a, is_password(a)) {
+                eligible.push(a);
+            }
+        }
+        assert!(eligible.is_empty(), "no key/agent host ⇒ 0 eligible ⇒ ansible:no-eligible-hosts");
+    }
+
+    // ---- INV-31: the inventory built for an Ansible run carries NO secret ----
+    // (only IdentityFile PATHS). Composition proof over build_inventory_ini,
+    // the exact body ansible_run writes to the ephemeral inventory.
+    #[test]
+    fn ansible_inventory_body_never_contains_a_secret() {
+        let hosts = vec![AnsibleInvHost {
+            alias: "prod-web".into(),
+            host_name: "203.0.113.10".into(),
+            user: "root".into(),
+            port: "2222".into(),
+            identity_file: "~/.ssh/id_ed25519".into(),
+        }];
+        let ini = build_inventory_ini(&hosts);
+        assert!(ini.contains("ansible_ssh_private_key_file=~/.ssh/id_ed25519"), "IdentityFile path present");
+        assert!(!ini.to_lowercase().contains("password"), "no password token in inventory");
+        assert!(!ini.contains("sekret"), "no secret bytes in inventory");
+    }
+
     // ---- AC1: missing file → DEFAULT_SETTINGS, no panic ----
     #[test]
     fn read_settings_missing_file_returns_defaults() {
@@ -4032,6 +4481,8 @@ pub fn run() {
             pty_kill,
             check_binaries,
             check_ansible,
+            ansible_run,
+            ansible_history,
             forget_secret,
             read_settings,
             write_settings,
