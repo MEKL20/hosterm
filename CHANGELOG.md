@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Windows releases are currently **unsigned** (Authenticode signing postponed —
 see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
+## [0.13.2] - 2026-11-05
+
+### Fixed
+- The Settings → General and terminal status-bar version now report `v0.13.2`;
+  v0.13.1 had shipped the OAuth fix correctly but still displayed `v0.13.0`.
+
 ## [0.13.1] - 2026-11-05
 
 ### Fixed
