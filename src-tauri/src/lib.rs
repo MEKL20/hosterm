@@ -4397,9 +4397,13 @@ db-1 ansible_host=10.0.0.3 ansible_user=root ansible_ssh_private_key_file=~/.ssh
 // oauth.rs — no business logic here (TSD §2,§3).
 
 /// Run the Google PKCE loopback sign-in and return the account chip fields.
+/// The browser/loopback/network flow is blocking and may wait up to five
+/// minutes, so keep it off Tauri's UI thread.
 #[tauri::command]
-fn google_sign_in() -> Result<oauth::GoogleAccount, String> {
-    oauth::interactive_sign_in()
+async fn google_sign_in() -> Result<oauth::GoogleAccount, String> {
+    tauri::async_runtime::spawn_blocking(oauth::interactive_sign_in)
+        .await
+        .map_err(|e| format!("Google sign-in task failed: {e}"))?
 }
 
 /// Sign out: delete the keyring refresh_token (idempotent).

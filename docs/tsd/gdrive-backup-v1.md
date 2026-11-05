@@ -81,7 +81,7 @@ and quote `grep -rc "tauri::command" src-tauri/src/*.rs`.
 
 | Command | Card | Shape (secrets NEVER cross IPC) |
 |---|---|---|
-| `google_sign_in` | BE-OAUTH | `() -> Result<GoogleAccount,String>`. Runs PKCE loopback, stores refresh_token in keyring, returns `{name,email,picture}` from userinfo. Access token stays backend-side. |
+| `google_sign_in` | BE-OAUTH | `async () -> Result<GoogleAccount,String>` (§9). Runs the PKCE loopback on `spawn_blocking` so the UI thread stays responsive, stores refresh_token in keyring, returns `{name,email,picture}` from userinfo. Access token stays backend-side. |
 | `google_sign_out` | BE-OAUTH | `() -> Result<(),String>`. Deletes keyring refresh_token, clears in-memory access token. |
 | `google_account` | BE-OAUTH | `() -> Result<Option<GoogleAccount>,String>`. Signed-in state on app load (keyring has token → refresh → userinfo); `None` if signed out. |
 | `drive_backup` | BE-BACKUP | `(passphrase:String) -> Result<BackupResult,String>`. Gather→encrypt→upload. Passphrase arrives from the in-app dialog, is zeroized after KDF, never logged/persisted. Returns `{file_id,name,bytes,created_at}`. |
@@ -212,3 +212,41 @@ BE-OAUTH ─► FE-AUTH
   hotspot file).
 - Each impl card has a linked QA child and a linked SECURITY child (parent =
   impl card). SECURITY is heavy and explicit per §6/PRD gate.
+
+---
+
+## 9. Post-release fix — Windows sign-in `invalid_request` + UI freeze (v0.13.0)
+
+Found by MEKL on the released v0.13.0 Windows build: clicking the Google chip
+opened the browser to `Error 400: invalid_request` with
+`Required parameter is missing: response_type`, and hosterm then went
+*Not Responding*. Two independent defects, both in the sign-in path:
+
+1. **Opener truncated the URL (the `invalid_request`).** `open_in_browser`
+   launched `cmd /C start "" <url>`. `cmd.exe`'s `start` builtin treats `&` as a
+   command separator, so the multi-param OAuth URL was cut after the first
+   query item and the browser received an incomplete URL missing
+   `response_type`. Fix: open via `rundll32.exe url.dll,FileProtocolHandler
+   <url>` on Windows — no shell, the full URL is one opaque argv element.
+   macOS (`open`) and Linux (`xdg-open`) were already shell-free and unchanged.
+   The opener is now built by a pure `browser_command(url) -> (bin, args)`
+   helper so it is unit-testable without launching a browser.
+
+2. **Blocking command froze the UI (the *Not Responding*).** The
+   `google_sign_in` Tauri command was synchronous and called
+   `interactive_sign_in()` directly, which blocks in the loopback catcher for up
+   to `LOOPBACK_TIMEOUT` (300 s). When Google errored before any callback, the
+   blocking call starved the WebView UI thread. Fix: `google_sign_in` is now
+   `async` and runs the blocking flow on `tauri::async_runtime::spawn_blocking`,
+   so the UI thread stays responsive and the existing frontend `finally` still
+   clears `googlePending`.
+
+Security invariants preserved: PKCE S256, `state` CSRF check, loopback-only
+single-shot listener, `drive.file` scope, keyring-at-rest refresh_token, no
+token logging. No OAuth credential or Google Cloud config was touched.
+
+Regression tests (in `oauth.rs`, no browser/network):
+- `browser_command_passes_full_url_as_single_arg` — the complete URL (with its
+  many `&`) is a single argv element, `response_type=code` survives, and the
+  command never routes through `cmd`/`start`/`sh`/`bash`.
+- `browser_command_is_platform_appropriate` — per-OS binary + args.

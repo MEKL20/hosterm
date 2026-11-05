@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Windows releases are currently **unsigned** (Authenticode signing postponed —
 see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
+## [Unreleased]
+
+### Fixed
+- Google sign-in on Windows: the OAuth URL was opened via `cmd /C start`, whose
+  `&` handling truncated the URL and made Google return
+  `Error 400: invalid_request` (`Required parameter is missing: response_type`).
+  Windows now opens the browser with `rundll32 url.dll,FileProtocolHandler`,
+  passing the full URL as a single argument with no shell involved.
+- Google sign-in no longer freezes the window: the `google_sign_in` command ran
+  the blocking loopback flow (up to a 5-minute wait) on the UI thread, so a
+  failed/stalled sign-in showed *Not Responding*. It now runs off-thread.
+
 ## [0.13.0] - 2026-11-05
 
 This release adds local workflows, live theme palettes, and the first safe Ansible

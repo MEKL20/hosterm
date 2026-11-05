@@ -495,14 +495,26 @@ pub fn keyring_delete_refresh() -> Result<(), String> {
 // No `open` crate (TSD §1): hosterm already spawns OS processes directly
 // (lib.rs / fleet.rs). Use the platform opener binary the same way.
 
+/// Return the platform opener command without involving a shell. In particular,
+/// Windows must not use `cmd /C start`: OAuth URLs contain `&`, which cmd.exe
+/// treats as a command separator and silently truncates the browser URL.
+fn browser_command(url: &str) -> (&'static str, Vec<&str>) {
+    #[cfg(target_os = "windows")]
+    let command: (&str, Vec<&str>) = (
+        "rundll32.exe",
+        vec!["url.dll,FileProtocolHandler", url],
+    );
+    #[cfg(target_os = "macos")]
+    let command: (&str, Vec<&str>) = ("open", vec![url]);
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let command: (&str, Vec<&str>) = ("xdg-open", vec![url]);
+
+    command
+}
+
 /// Launch the user's default browser at `url`. Spawns detached; does not wait.
 pub fn open_in_browser(url: &str) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    let (bin, args): (&str, Vec<&str>) = ("cmd", vec!["/C", "start", "", url]);
-    #[cfg(target_os = "macos")]
-    let (bin, args): (&str, Vec<&str>) = ("open", vec![url]);
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let (bin, args): (&str, Vec<&str>) = ("xdg-open", vec![url]);
+    let (bin, args) = browser_command(url);
 
     std::process::Command::new(bin)
         .args(&args)
@@ -864,5 +876,58 @@ mod tests {
     fn pct_encode_encodes_reserved_chars() {
         assert_eq!(pct_encode("a b/c:d"), "a%20b%2Fc%3Ad");
         assert_eq!(pct_encode("safe-._~AZ09"), "safe-._~AZ09");
+    }
+
+    // ---- Browser opener (Windows cmd & truncation regression) -----------
+
+    /// A real OAuth URL carries several `&`-separated query params. The opener
+    /// MUST pass the whole URL as one opaque argv element and MUST NOT route it
+    /// through a shell that treats `&` as a command separator (the Windows
+    /// `cmd /C start` bug that reached only `response_type` being dropped and
+    /// Google returning `invalid_request`).
+    #[test]
+    fn browser_command_passes_full_url_as_single_arg() {
+        let url = build_auth_url("CHAL", "STATE123", "http://127.0.0.1:54321");
+        // The URL under test genuinely contains multiple ampersands.
+        assert!(url.matches('&').count() >= 5, "fixture must have many & params");
+
+        let (bin, args) = browser_command(&url);
+
+        // The complete, unmodified URL must appear as exactly one argv element,
+        // never split on '&'.
+        assert!(
+            args.iter().any(|a| *a == url.as_str()),
+            "full URL must be a single argv element"
+        );
+        // response_type (the param Google complained was missing) must survive.
+        assert!(
+            args.iter().any(|a| a.contains("response_type=code")),
+            "response_type must reach the opener intact"
+        );
+
+        // Never invoke a shell that reinterprets '&'. On Windows this means NOT
+        // `cmd` with a `start` verb (which splits the URL on '&').
+        assert_ne!(bin, "cmd", "must not shell out through cmd.exe");
+        assert_ne!(bin, "sh");
+        assert_ne!(bin, "bash");
+        assert!(
+            !args.iter().any(|a| *a == "start"),
+            "must not use cmd's start verb that splits URLs on &"
+        );
+    }
+
+    #[test]
+    fn browser_command_is_platform_appropriate() {
+        let (bin, args) = browser_command("http://127.0.0.1:9/cb?a=1&b=2");
+        #[cfg(target_os = "windows")]
+        {
+            assert_eq!(bin, "rundll32.exe");
+            assert_eq!(args[0], "url.dll,FileProtocolHandler");
+        }
+        #[cfg(target_os = "macos")]
+        assert_eq!(bin, "open");
+        #[cfg(all(unix, not(target_os = "macos")))]
+        assert_eq!(bin, "xdg-open");
+        let _ = args;
     }
 }
