@@ -8,6 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Windows releases are currently **unsigned** (Authenticode signing postponed —
 see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
+## [0.13.0] - 2026-11-05
+
+This release adds local workflows, live theme palettes, and the first safe Ansible
+runner while keeping `~/.ssh/config` as hosterm's source of truth.
+
+### Added
+- Local terminal tabs that spawn the platform shell directly, without SSH or command-string interpolation.
+- User snippet create/edit/delete storage plus a Settings → General view for shell, platform, and version information.
+- Slate, Ink, and Light live palettes for both xterm and CodeMirror, alongside Dusk.
+- Ansible v1 panel and PTY runner: playbook picker, key/SSH-agent hosts, streamed output, and bounded history.
+
+### Changed
+- Bundled command snippets now ship empty; user snippets remain isolated in app data.
+- Terminal and editor colors now come from one contrast-gated theme-palette source of truth.
+- Test-only Argon2 parameters reduce the Rust test suite from roughly 494 seconds to about 11 seconds; production Argon2 parameters remain unchanged at the OWASP floor.
+
+### Fixed
+- The Windows CI Rust test no longer attempts to create a filename containing Windows-illegal shell metacharacters.
+
+### Security
+- A successful Ansible `--check --diff` dry-run is mandatory before a real run is enabled.
+- Ansible uses fixed argv arrays rather than `sh -c`, `bash -c`, or `cmd /C`; host-key checking remains enabled.
+- Generated inventory never carries passwords or private-key bytes, and hostile recap text is rendered inert.
+
+### Known limitations
+- Ansible v1 supports key/SSH-agent hosts only; password-host support is deferred to wave 2.
+- Windows installers remain unsigned, so Microsoft SmartScreen may warn on first launch.
+
 ## [0.12.0] - 2026-11-01
 
 Dusk replaces Arus as hosterm's active visual identity and adds the first
@@ -98,6 +126,7 @@ xterm.js terminal tabs, SFTP file browser, remote text editor, add/edit/delete
 hosts with round-trip-safe config writes, key and password auth, paste-to-create
 identity keys, raw config editor. See the git tag history for details.
 
+[0.13.0]: https://github.com/MEKL20/hosterm/releases/tag/v0.13.0
 [0.12.0]: https://github.com/MEKL20/hosterm/releases/tag/v0.12.0
 [0.11.0]: https://github.com/MEKL20/hosterm/releases/tag/v0.11.0
 [0.10.0]: https://github.com/MEKL20/hosterm/releases/tag/v0.10.0
