@@ -2,6 +2,8 @@
 
 Read this before touching code. It is the shared context: architecture, invariants, commands, pitfalls.
 
+**PRD in flight (PM, not yet SDD):** left navigation rail + contextual controls — restructure the single sidebar into a three-column shell (far-left rail Hosts/Keys/Ansible + account-menu; contextual section panel; workspace), Hosts-only visibility for Add host/Raw config/Local/Reload config, Settings relocated into the account menu (works signed-in and signed-out). Doc only, backend diff 0, OAuth still visual-only (OQ-3, not fixed). See `docs/prd/left-nav-rail-contextual-controls-v1.md`.
+
 ## What hosterm is
 Desktop SSH/SFTP client, Tauri v2 + TypeScript, Windows-first (WebView2) but dev'd on Linux. Founding principle: spawn the OS's REAL `ssh`/`sftp` binaries (portable-pty + xterm.js for terminals; batch `sftp -b -` for transfers, interactive persistent `sftp` in a PTY for password-auth hosts — one process per host, shared across tabs) — no ssh2/russh libs.
 
