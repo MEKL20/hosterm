@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Windows releases are currently **unsigned** (Authenticode signing postponed —
 see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
-## [Unreleased]
+## [0.14.0] - 2026-11-06
 
 ### Changed
 - Reworked the shell into a persistent 56px left navigation rail, a contextual
