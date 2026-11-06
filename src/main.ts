@@ -579,6 +579,11 @@ function initGoogleAccount() {
     void googleSignOut();
     setGooglePopover(false, true);
   });
+  $("#acct-settings-btn").addEventListener("click", () => {
+    setGooglePopover(false);
+    chip.focus();
+    void openSettings();
+  });
   document.addEventListener("click", (event) => {
     const popover = $("#signin-popover");
     const target = event.target as Node;
@@ -587,9 +592,13 @@ function initGoogleAccount() {
     }
   });
   window.addEventListener("keydown", (event) => {
-    if (event.key !== "Escape" || $("#signin-popover").hidden) return;
-    event.preventDefault();
-    setGooglePopover(false, true);
+    const popover = $("#signin-popover");
+    if (popover.hidden) return;
+    if (event.key === "Tab") cycleFocusWithin(popover, event);
+    else if (event.key === "Escape") {
+      event.preventDefault();
+      setGooglePopover(false, true);
+    }
   });
 }
 
@@ -603,8 +612,27 @@ let passDialogResolve: (() => void) | null = null;
 
 function focusables(root: HTMLElement): HTMLElement[] {
   return [...root.querySelectorAll<HTMLElement>("button, input, textarea, select")].filter(
-    (el) => (el as HTMLButtonElement).disabled !== true && !el.closest(".hidden")
+    (el) => (el as HTMLButtonElement).disabled !== true
+      && !el.closest(".hidden")
+      && !el.closest("[hidden]")
+      && el.getClientRects().length > 0
   );
+}
+
+function cycleFocusWithin(root: HTMLElement, event: KeyboardEvent) {
+  const candidates = focusables(root);
+  if (!candidates.length) return;
+  const first = candidates[0];
+  const last = candidates[candidates.length - 1];
+  const current = document.activeElement;
+  const outside = !root.contains(current);
+  if (event.shiftKey && (current === first || outside)) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && (current === last || outside)) {
+    event.preventDefault();
+    first.focus();
+  }
 }
 
 function onOverlayEscape() {
@@ -635,19 +663,7 @@ function openOverlay(sel: string, focusTarget?: HTMLElement) {
         ev.preventDefault();
         onOverlayEscape();
       } else if (ev.key === "Tab") {
-        const f = focusables(top.el);
-        if (!f.length) return;
-        const first = f[0];
-        const last = f[f.length - 1];
-        const cur = document.activeElement;
-        const outside = !top.el.contains(cur);
-        if (ev.shiftKey && (cur === first || outside)) {
-          ev.preventDefault();
-          last.focus();
-        } else if (!ev.shiftKey && (cur === last || outside)) {
-          ev.preventDefault();
-          first.focus();
-        }
+        cycleFocusWithin(top.el, ev);
       }
     };
     window.addEventListener("keydown", overlayKeydown);
@@ -977,7 +993,6 @@ async function closeSettings() {
 }
 
 function initSettings() {
-  $("#open-settings").addEventListener("click", () => void openSettings());
   $("#settings-close").addEventListener("click", () => void closeSettings());
   $("#settings-done").addEventListener("click", () => void closeSettings());
   $("#settings-scrim").addEventListener("click", (event) => {
@@ -2439,17 +2454,25 @@ async function refreshKeyViews() {
   }
 }
 
-// Sidebar view-switcher: Hosts / Keys / Ansible. Swaps the sidebar body region
-// and marks the active nav item with aria-current. Host is the default.
-function selectSidebarView(view: string) {
-  document.querySelectorAll<HTMLButtonElement>(".sb-nav").forEach((btn) => {
-    const active = btn.dataset.view === view;
+type Section = "host" | "keys" | "ansible";
+let activeSection: Section = "host";
+
+function selectSection(next: Section, focusPanel = true) {
+  activeSection = next;
+  document.querySelectorAll<HTMLButtonElement>(".rail-item[data-view]").forEach((btn) => {
+    const active = btn.dataset.view === next;
     btn.setAttribute("aria-current", active ? "page" : "false");
   });
-  $("#view-host").classList.toggle("hidden", view !== "host");
-  $("#view-keys").classList.toggle("hidden", view !== "keys");
-  $("#view-ansible").classList.toggle("hidden", view !== "ansible");
-  if (view === "keys") void renderKeysList("#sb-keys-list", "#sb-keys-err");
+  $("#view-host").classList.toggle("hidden", next !== "host");
+  $("#view-keys").classList.toggle("hidden", next !== "keys");
+  $("#view-ansible").classList.toggle("hidden", next !== "ansible");
+  const add = $("#btn-add") as HTMLButtonElement;
+  add.hidden = next !== "host";
+  add.classList.toggle("hidden", next !== "host");
+  if (next === "keys") void renderKeysList("#sb-keys-list", "#sb-keys-err");
+  if (!focusPanel) return;
+  const target = next === "host" ? "#host-search" : next === "keys" ? "#sb-keys-add" : "#sb-ansible-open";
+  $(target).focus();
 }
 
 async function deleteHostByName(name: string) {
@@ -3883,16 +3906,15 @@ document.addEventListener("contextmenu", (ev) => {
 
 // ---------- wire up ----------
 window.addEventListener("DOMContentLoaded", () => {
-  // sidebar width resizer (drag the divider; width persists in localStorage)
-  const sidebar = document.getElementById("sidebar") as HTMLElement;
+  const sectionPanel = $("#section-panel");
   const divider = document.createElement("div");
   divider.id = "sb-resize";
   divider.setAttribute("role", "separator");
   divider.setAttribute("aria-orientation", "vertical");
-  divider.setAttribute("aria-label", "Resize host list");
-  sidebar.after(divider);
+  divider.setAttribute("aria-label", "Resize section panel");
+  sectionPanel.after(divider);
   const saved = localStorage.getItem("sb-width");
-  if (saved) sidebar.style.width = saved + "px";
+  if (saved) sectionPanel.style.width = Math.min(504, Math.max(160, parseInt(saved, 10))) + "px";
   let dragging = false;
   divider.addEventListener("mousedown", (e) => {
     dragging = true;
@@ -3901,22 +3923,16 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   window.addEventListener("mousemove", (e) => {
     if (!dragging) return;
-    const w = Math.min(560, Math.max(160, e.clientX));
-    sidebar.style.width = w + "px";
+    const w = Math.min(504, Math.max(160, e.clientX - 56));
+    sectionPanel.style.width = w + "px";
   });
   window.addEventListener("mouseup", () => {
     if (!dragging) return;
     dragging = false;
     divider.classList.remove("dragging");
-    const w = parseInt(sidebar.style.width, 10);
+    const w = parseInt(sectionPanel.style.width, 10);
     if (w) localStorage.setItem("sb-width", String(w));
-    if (activeTab != null) {
-      const s = sessions.get(activeTab);
-      if (s) {
-        s.fit.fit();
-        if (s.ptyId != null) invoke("pty_resize", { id: s.ptyId, cols: s.term.cols, rows: s.term.rows });
-      }
-    }
+    setTimeout(fitActiveSessions, 0);
   });
 
   $("#btn-add").addEventListener("click", () => openEditor(null));
@@ -3927,9 +3943,10 @@ window.addEventListener("DOMContentLoaded", () => {
   initAiAssistant();
   initSnippets();
   ($("#host-search") as HTMLInputElement).addEventListener("input", renderHostList);
-  // Ctrl+K focuses host search (redesign §5); overlays keep their focus trap
+  selectSection("host", false);
   window.addEventListener("keydown", (ev) => {
-    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "k" && overlayStack.length === 0) {
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "k"
+      && overlayStack.length === 0 && $("#signin-popover").hidden && activeSection === "host") {
       ev.preventDefault();
       const s = $("#host-search") as HTMLInputElement;
       s.focus();
@@ -3955,21 +3972,23 @@ window.addEventListener("DOMContentLoaded", () => {
       document.querySelector<HTMLElement>(".host-item")?.focus();
     }
   });
-  // sidebar collapse: remembered across restarts
-  const setCollapsed = (c: boolean) => {
-    document.body.classList.toggle("sb-collapsed", c);
+  const setPanelCollapsed = (c: boolean) => {
+    document.body.classList.toggle("panel-collapsed", c);
     $("#btn-expand").classList.toggle("hidden", !c);
-    try { localStorage.setItem("hosterm.sb-collapsed", c ? "1" : ""); } catch { /* private mode */ }
-    // Collapsing/expanding changes #main's flex width, so the active terminal(s)
-    // must re-fit or xterm keeps stale cols/rows -> blank right margin (BUG-L2)
-    // and a scrollbar hit-area outside the visible column (BUG-L1). Mirror the
-    // proven setSidePanel pattern (setTimeout(fitActiveSessions,0)) so the layout
-    // settles before fit; also covers the startup restore call below (AC4).
+    try { localStorage.setItem("hosterm.panel-collapsed", c ? "1" : ""); } catch { /* private mode */ }
     setTimeout(fitActiveSessions, 0);
   };
-  setCollapsed(localStorage.getItem("hosterm.sb-collapsed") === "1");
-  $("#btn-collapse").addEventListener("click", () => setCollapsed(true));
-  $("#btn-expand").addEventListener("click", () => setCollapsed(false));
+  const storedPanel = localStorage.getItem("hosterm.panel-collapsed");
+  const initialPanelCollapsed = storedPanel === null
+    ? localStorage.getItem("hosterm.sb-collapsed") === "1"
+    : storedPanel === "1";
+  setPanelCollapsed(initialPanelCollapsed);
+  $("#btn-collapse").addEventListener("click", () => setPanelCollapsed(true));
+  $("#btn-expand").addEventListener("click", () => setPanelCollapsed(false));
+  const narrowPanel = window.matchMedia("(max-width: 520px)");
+  const collapseForNarrowWindow = () => { if (narrowPanel.matches) setPanelCollapsed(true); };
+  narrowPanel.addEventListener("change", collapseForNarrowWindow);
+  collapseForNarrowWindow();
   $("#m-cancel").addEventListener("click", cancelEditor);
   $("#m-save").addEventListener("click", saveHost);
   $("#m-delete").addEventListener("click", deleteHost);
@@ -3985,9 +4004,8 @@ window.addEventListener("DOMContentLoaded", () => {
   $("#f-newkey").addEventListener("click", openKeyModal);
   $("#k-cancel").addEventListener("click", closeKey);
   $("#k-save").addEventListener("click", saveKey);
-  // Sidebar section nav: Hosts / Keys / Ansible view-switcher.
-  document.querySelectorAll<HTMLButtonElement>(".sb-nav").forEach((btn) => {
-    btn.addEventListener("click", () => selectSidebarView(btn.dataset.view || "host"));
+  document.querySelectorAll<HTMLButtonElement>(".rail-item[data-view]").forEach((btn) => {
+    btn.addEventListener("click", () => selectSection((btn.dataset.view || "host") as Section));
   });
   // Inline "Add key" in the sidebar Keys view reuses the create-key modal.
   $("#sb-keys-add").addEventListener("click", () => { keyModalReturnsToKeys = true; openKeyModal(); });

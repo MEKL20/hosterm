@@ -10,6 +10,16 @@ see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
 ## [Unreleased]
 
+### Changed
+- Reworked the shell into a persistent 56px left navigation rail, a contextual
+  section panel, and the main workspace. The Google account control now stays at
+  the bottom of the rail, with Settings inside its account menu.
+- Add host, Raw config, Local, and Reload config now appear only in Hosts. Keys
+  and Ansible get focused contextual views without hidden Host actions remaining
+  in the keyboard order.
+- Panel collapse and narrow-window behavior now keep the rail available and refit
+  both normal and split terminals after layout changes.
+
 ## [0.13.3] - 2026-11-05
 
 ### Added

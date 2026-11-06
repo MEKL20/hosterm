@@ -337,6 +337,11 @@ const firstResp = await page.goto("http://localhost:4199/");
 const servedCsp = (firstResp.headers()["content-security-policy"] || "").trim();
 await page.waitForTimeout(400);
 
+const openSettingsFromAccount = async () => {
+  if (await page.locator("#signin-popover").isHidden()) await page.locator("#user-chip").click();
+  await page.locator("#acct-settings-btn").click();
+};
+
 // ---- W2-A: startup ssh/sftp check + install guide (AC-A1.5, NFR-W2-4) ----
 const PS_CMD = "Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0";
 // present-binary no-op (AC-A1.2): detection ran at launch, guide never appears
@@ -550,14 +555,14 @@ check("search: match renders", (await page.locator(".host-item").count()) === 1)
 await page.locator("#host-search").fill("");
 await page.waitForTimeout(150);
 
-// 9c. sidebar collapse/expand + localStorage persistence
+// 9c. contextual panel collapse/expand + localStorage persistence
 await page.locator("#btn-collapse").click();
-check("collapse: body class set", await page.evaluate(() => document.body.classList.contains("sb-collapsed")));
+check("collapse: body class set", await page.evaluate(() => document.body.classList.contains("panel-collapsed")));
 check("collapse: expand button shown", await page.locator("#btn-expand").isVisible());
-const stored = await page.evaluate(() => localStorage.getItem("hosterm.sb-collapsed"));
+const stored = await page.evaluate(() => localStorage.getItem("hosterm.panel-collapsed"));
 check("collapse: persisted", stored === "1");
 await page.locator("#btn-expand").click();
-check("expand: class removed", await page.evaluate(() => !document.body.classList.contains("sb-collapsed")));
+check("expand: class removed", await page.evaluate(() => !document.body.classList.contains("panel-collapsed")));
 
 // 9d. Edit/Delete left the row (fix #4) -> context menu; Delete uses in-app dialog (not native confirm)
 check("edit/delete buttons gone from rows",
@@ -910,13 +915,13 @@ check("U4: sftp-wrap fills panel (height chain)", chain.wh === chain.ph, JSON.st
 await page.evaluate(() => { localStorage.removeItem("sb-width"); });
 await page.locator(".tab.active .x").click();
 await page.waitForTimeout(300);
-const before = await page.locator("#sidebar").evaluate((el) => el.getBoundingClientRect().width);
+const before = await page.locator("#section-panel").evaluate((el) => el.getBoundingClientRect().width);
 const box = await page.locator("#sb-resize").boundingBox();
 await page.mouse.move(box.x + box.width / 2, box.y + 200);
 await page.mouse.down();
 await page.mouse.move(box.x + 200, box.y + 200, { steps: 4 });
 await page.mouse.up();
-const after = await page.locator("#sidebar").evaluate((el) => el.getBoundingClientRect().width);
+const after = await page.locator("#section-panel").evaluate((el) => el.getBoundingClientRect().width);
 check("sidebar drag-resize works", after > before + 100, `before=${before} after=${after}`);
 const sbw = await page.evaluate(() => localStorage.getItem("sb-width"));
 check("sidebar width persisted", sbw !== null && parseInt(sbw, 10) === Math.round(after), `stored=${sbw}`);
@@ -1810,7 +1815,7 @@ check("U9: shipped skeleton class is .skel (no .skel-row) + no @font-face",
 
 // ===== U-D2 Dusk shell re-skin geometry + motion (SDD §13.3 / FR-SH1..8) =====
 // (1) sidebar 248px
-const sbW = await page.locator("#sidebar").evaluate((el) => el.getBoundingClientRect().width);
+const sbW = await page.locator("#section-panel").evaluate((el) => el.getBoundingClientRect().width);
 check("U-D2 §13.3: sidebar is 248px wide", Math.round(sbW) === 248, `w=${sbW}`);
 // (2) tab bar 42px tall + tab 32px tall (open one terminal tab to measure)
 // U-D2 scope correction: the shell field is display-only ("shell" literal).
@@ -1910,7 +1915,7 @@ check("U-D4 boot: read_settings invoked + Dusk/default accent applied",
   await page.evaluate(() => document.documentElement.dataset.theme === "dusk" &&
     document.documentElement.style.getPropertyValue("--accent").trim() === "#e2a35c"));
 
-await page.locator("#open-settings").click();
+await openSettingsFromAccount();
 await page.waitForTimeout(150);
 const settingsMeta = await page.evaluate(() => {
   const scrim = document.getElementById("settings-scrim");
@@ -2105,7 +2110,7 @@ check("U-D4 INV-23: curated input -> persist -> reload stays value-based",
   bootApplied.ink === tealInputState.ink && bootApplied.previewInk === tealInputState.ink && bootApplied.teal === "true",
   JSON.stringify(bootApplied));
 
-await page.locator("#open-settings").click();
+await openSettingsFromAccount();
 await page.waitForTimeout(100);
 const nonCuratedInputState = await inputAccent("#777777");
 const writesBeforeNonCurated = calls.filter((c) => c.cmd === "write_settings").length;
@@ -2132,21 +2137,21 @@ check("U-D4 INV-23: non-curated input -> persist -> reload stays value-based",
   nonCuratedBoot.ink === nonCuratedInputState.ink && nonCuratedBoot.pressed === 0,
   JSON.stringify(nonCuratedBoot));
 
-await page.locator("#open-settings").click();
+await openSettingsFromAccount();
 await page.waitForTimeout(100);
 await page.evaluate(() => document.getElementById("settings-scrim").click());
 await page.waitForTimeout(100);
 check("U-D4 FR-SET12: scrim click closes modal", await page.locator("#settings-scrim").evaluate((el) => el.classList.contains("hidden")));
-await page.locator("#open-settings").click();
+await openSettingsFromAccount();
 await page.waitForTimeout(100);
 await page.keyboard.press("Escape");
 await page.waitForTimeout(100);
-check("U-D4 FR-SET12: Escape closes + restores gear focus",
+check("U-D4 FR-SET12: Escape closes + restores account focus",
   await page.locator("#settings-scrim").evaluate((el) => el.classList.contains("hidden")) &&
-  await page.evaluate(() => document.activeElement?.id === "open-settings"));
+  await page.evaluate(() => document.activeElement?.id === "user-chip"));
 
 // Restore the Dusk default so the remaining legacy checks keep their canonical palette.
-await page.locator("#open-settings").click();
+await openSettingsFromAccount();
 await page.locator("#accent-reset").click();
 await page.locator("#settings-done").click();
 await page.waitForTimeout(150);
@@ -2310,6 +2315,8 @@ const googleSignin = await page.evaluate(() => {
     text: style.color,
     radius: style.borderRadius,
     focused: document.activeElement?.id,
+    appInert: document.getElementById("app").hasAttribute("inert"),
+    settingsVisible: document.getElementById("acct-settings-btn").getClientRects().length > 0,
   };
 });
 check("U-D6 FR-GL1: popover + Google-brand sign-in button match the approved visual",
@@ -2317,8 +2324,18 @@ check("U-D6 FR-GL1: popover + Google-brand sign-in button match the approved vis
   googleSignin.title === "Use hosterm with Google" && googleSignin.button === "Sign in with Google" &&
   googleSignin.sub === "Connect a Google account to back up to Drive." &&
   googleSignin.surface === "rgb(255, 255, 255)" && googleSignin.text === "rgb(31, 31, 31)" &&
-  googleSignin.radius === "4px" && googleSignin.focused === "signin-btn",
+  googleSignin.radius === "4px" && googleSignin.focused === "signin-btn" &&
+  !googleSignin.appInert && googleSignin.settingsVisible,
   JSON.stringify(googleSignin));
+await page.keyboard.press("Shift+Tab");
+check("NAV RAIL: signed-out account focus cycles backward to Settings",
+  await page.evaluate(() => document.activeElement?.id === "acct-settings-btn"));
+await page.keyboard.press("Tab");
+check("NAV RAIL: signed-out account focus cycles forward to Sign in",
+  await page.evaluate(() => document.activeElement?.id === "signin-btn"));
+await page.keyboard.press("Control+k");
+check("NAV RAIL: Ctrl+K is blocked while account menu is open",
+  await page.evaluate(() => document.activeElement?.id === "signin-btn"));
 
 // Real sign-in: the 40ms mock delay lets us observe the pending state before
 // the account resolves (signed-out → pending → signed-in).
@@ -2385,6 +2402,14 @@ check("U-D6 FE-AUTH: no 'UI-only mock' / 'UI preview' text remains anywhere in t
     const t = document.querySelector("aside")?.textContent || "";
     return !t.includes("UI-only") && !t.includes("UI preview") && !t.includes("No Google session");
   }));
+
+await page.locator("#acct-settings-btn").click();
+await page.waitForTimeout(60);
+check("NAV RAIL: Settings opens from a signed-in account menu",
+  await page.locator("#settings-scrim").evaluate((el) => !el.classList.contains("hidden")));
+await page.locator("#settings-done").click();
+await page.waitForTimeout(100);
+await page.locator("#user-chip").click();
 
 // Real sign-out: invoke google_sign_out, return to signed-out.
 await page.locator("#signout-btn").click();
@@ -2600,7 +2625,7 @@ check("U-D7 SEC-01: hostile thread text stays inert after Always-allow template 
   hostileAfterAlways.pwn === "undefined" && hostileAfterAlways.csp === 0,
   JSON.stringify(hostileAfterAlways));
 
-await page.locator("#open-settings").click();
+await openSettingsFromAccount();
 const approvalsReadBefore = aiCounts().readSettings;
 await page.locator('.set-nav[data-section="ai"]').click();
 await page.waitForFunction(() => document.querySelectorAll("#approvals-list .approval-item").length === 2);
@@ -2990,32 +3015,58 @@ const ANS_HOSTILE_OUTPUT =
   "prod-web                   : ok=5    changed=2    unreachable=0    failed=0\r\n" +
   "db-core                    : ok=4    changed=0    unreachable=0    failed=0\r\n";
 
-// 1) Sidebar nav renders all three sections; Keys is inline; Ansible launcher
-// opens the existing wide runner modal.
+// 1) Persistent rail drives one contextual section at a time.
 const sidebarNav = await page.evaluate(() => ({
-  labels: [...document.querySelectorAll(".sb-nav .sb-nav-label")].map((el) => el.textContent.trim()),
+  labels: [...document.querySelectorAll(".rail-item[data-view]")].map((el) => el.getAttribute("aria-label")),
   hostVisible: !document.querySelector("#view-host").classList.contains("hidden"),
+  current: [...document.querySelectorAll('.rail-item[aria-current="page"]')].map((el) => el.dataset.view),
+  accountInRail: !!document.querySelector("#nav-rail > .rail-foot > #user-chip"),
+  oldSettings: !!document.querySelector("#open-settings"),
   oldKeysButton: !!document.querySelector("#btn-keys"),
   oldAnsibleButton: !!document.querySelector("#btn-ansible"),
 }));
-check("SIDEBAR NAV: Hosts / Keys / Ansible render vertically with Host as default",
-  JSON.stringify(sidebarNav.labels) === JSON.stringify(["Hosts", "Keys", "Ansible"]) && sidebarNav.hostVisible,
+check("NAV RAIL: Hosts / Keys / Ansible render with exactly Hosts current",
+  JSON.stringify(sidebarNav.labels) === JSON.stringify(["Hosts", "Keys", "Ansible"]) &&
+  sidebarNav.hostVisible && JSON.stringify(sidebarNav.current) === JSON.stringify(["host"]),
   JSON.stringify(sidebarNav));
-check("SIDEBAR NAV: old footer Keys / Ansible buttons are removed",
-  !sidebarNav.oldKeysButton && !sidebarNav.oldAnsibleButton, JSON.stringify(sidebarNav));
-await page.locator('.sb-nav[data-view="keys"]').click();
+check("NAV RAIL: account is rail-bottom and old settings/footer destinations are removed",
+  sidebarNav.accountInRail && !sidebarNav.oldSettings && !sidebarNav.oldKeysButton && !sidebarNav.oldAnsibleButton,
+  JSON.stringify(sidebarNav));
+const shellGeometry = await page.evaluate(() => {
+  const rail = document.getElementById("nav-rail").getBoundingClientRect();
+  const panel = document.getElementById("section-panel").getBoundingClientRect();
+  const main = document.getElementById("main").getBoundingClientRect();
+  return { railX: rail.x, railW: rail.width, panelX: panel.x, panelRight: panel.right, mainX: main.x };
+});
+check("NAV RAIL: visual order is 56px rail, contextual panel, workspace",
+  Math.round(shellGeometry.railX) === 0 && Math.round(shellGeometry.railW) === 56 &&
+  Math.round(shellGeometry.panelX) === 56 && shellGeometry.mainX > shellGeometry.panelRight,
+  JSON.stringify(shellGeometry));
+check("NAV RAIL: Hosts-only controls are rendered on Hosts",
+  await page.evaluate(() => ["btn-add", "btn-raw", "btn-local", "btn-reload"].every((id) => document.getElementById(id).getClientRects().length > 0)));
+await page.locator('.rail-item[data-view="keys"]').click();
 await page.waitForTimeout(60);
 const keysInline = await page.evaluate(() => ({
   visible: !document.querySelector("#view-keys").classList.contains("hidden"),
-  current: document.querySelector('.sb-nav[data-view="keys"]').getAttribute("aria-current"),
+  current: document.querySelector('.rail-item[data-view="keys"]').getAttribute("aria-current"),
+  focused: document.activeElement?.id,
+  hostControlsHidden: ["btn-add", "btn-raw", "btn-local", "btn-reload"].every((id) => document.getElementById(id).getClientRects().length === 0),
   list: document.querySelector("#sb-keys-list"),
 }));
-check("SIDEBAR NAV: Keys swaps to the inline manager and marks aria-current",
-  keysInline.visible && keysInline.current === "page" && !!keysInline.list,
-  JSON.stringify({ visible: keysInline.visible, current: keysInline.current, list: !!keysInline.list }));
+check("NAV RAIL: Keys swaps inline, focuses its first action, and removes Host controls",
+  keysInline.visible && keysInline.current === "page" && keysInline.focused === "sb-keys-add" &&
+  keysInline.hostControlsHidden && !!keysInline.list,
+  JSON.stringify({ ...keysInline, list: !!keysInline.list }));
+await page.keyboard.press("Control+k");
+check("NAV RAIL: Ctrl+K is a no-op outside Hosts", await page.evaluate(() => document.activeElement?.id === "sb-keys-add"));
+await page.locator('.rail-item[data-view="host"]').click();
+await page.keyboard.press("Control+k");
+check("NAV RAIL: Ctrl+K focuses search on Hosts", await page.evaluate(() => document.activeElement?.id === "host-search"));
 
 ansibleCheckState = { missing: false };
-await page.locator('.sb-nav[data-view="ansible"]').click();
+await page.locator('.rail-item[data-view="ansible"]').click();
+check("NAV RAIL: Ansible removes Host controls from layout and tab order",
+  await page.evaluate(() => ["btn-add", "btn-raw", "btn-local", "btn-reload"].every((id) => document.getElementById(id).getClientRects().length === 0)));
 await page.locator("#sb-ansible-open").click();
 await page.waitForTimeout(60);
 const ansPanel = await page.evaluate(() => {
@@ -3238,6 +3289,29 @@ check("FE-ANS: draggable grep stays 0 in src/ (picker is checkbox + manual, not 
 
 // close the panel to leave the DOM clean for any later checks
 await page.evaluate(() => document.querySelector("#ansible-close").click());
+
+await page.setViewportSize({ width: 500, height: 720 });
+await page.waitForTimeout(80);
+const narrowShell = await page.evaluate(() => ({
+  collapsed: document.body.classList.contains("panel-collapsed"),
+  railVisible: document.getElementById("nav-rail").getClientRects().length > 0,
+  panelVisible: document.getElementById("section-panel").getClientRects().length > 0,
+  overflow: document.documentElement.scrollWidth > window.innerWidth,
+}));
+check("NAV RAIL: 520px breakpoint collapses only the contextual panel without overflow",
+  narrowShell.collapsed && narrowShell.railVisible && !narrowShell.panelVisible && !narrowShell.overflow,
+  JSON.stringify(narrowShell));
+await page.locator("#user-chip").click();
+const narrowPopover = await page.locator("#signin-popover").evaluate((el) => {
+  const box = el.getBoundingClientRect();
+  return { left: box.left, right: box.right, width: box.width, viewport: window.innerWidth };
+});
+check("NAV RAIL: account menu stays inside the narrow viewport",
+  narrowPopover.left >= 0 && narrowPopover.right <= narrowPopover.viewport,
+  JSON.stringify(narrowPopover));
+await page.keyboard.press("Escape");
+await page.setViewportSize({ width: 1280, height: 720 });
+await page.locator("#btn-expand").click();
 
 console.log(results.join("\n"));
 const fails = results.filter((r) => r.startsWith("FAIL")).length;
