@@ -51,15 +51,11 @@ RESTORE all their hosterm data to/from their own Google Drive.
 - TOKEN STORAGE: refresh_token is a long-lived secret. Store it via the OS
   keyring (keyring crate: Secret Service on Linux / Keychain / Credential Mgr).
   Do NOT write refresh_token to a plaintext file. access_token kept in memory.
-- Config: `CLIENT_ID` is public-by-design for desktop PKCE and may be compiled in
-  / shipped in config.
-  **CLIENT_ID (provided by MEKL, public):**
-  `737778700861-dhtn1sc9miiqtsmtms3tmc8tk7jj3a80.apps.googleusercontent.com`
-  Place it as a build-time constant / config value (NOT a secret). Desktop PKCE
-  flow: no client_secret needed in the exchange (omit it; PKCE verifier is the
-  proof). If Google's token endpoint insists on a client_secret for a "Desktop"
-  client, the desktop client_secret is non-sensitive and may ship with the app —
-  but try PKCE-only first.
+- Config: official builds inject the Desktop OAuth client ID and generated
+  installed-app value from GitHub Actions secrets. Neither value is committed to
+  source, docs, artifacts, or logs. The generated value is sent only during token
+  exchange and refresh. PKCE S256 remains mandatory and is the authorization-code
+  proof.
   **CONSOLE PREREQUISITES still owned by MEKL (verify before AC1 e2e):** Drive API
   enabled on project 737778700861; OAuth consent screen configured with scope
   `.../auth/drive.file`; MEKL's Google email added as a Test user (while app is in
@@ -111,7 +107,7 @@ RESTORE all their hosterm data to/from their own Google Drive.
   restores files to real paths; WRONG passphrase fails safe (auth tag mismatch,
   no partial write); a pre-restore local backup of overwritten files exists.
 - AC5 (security): passphrase/derived key never written to disk or logs; refresh
-  token only in keyring; no secret in plaintext anywhere new; loopback bound to
+  token only in keyring; no token/passphrase secret in plaintext; loopback bound to
   127.0.0.1 only; CSRF state enforced. Dependencies pinned, vetted (no typosquat).
 - AC6 (regression): build 0 TS + cargo green; existing smoke stays green.
 

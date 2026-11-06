@@ -9,7 +9,8 @@
 //   - access_type=offline + prompt=consent (so a refresh_token is issued).
 //   - scope: https://www.googleapis.com/auth/drive.file ONLY (+ userinfo for
 //     the account chip name/email/picture).
-//   - PUBLIC build-time CLIENT_ID; try PKCE-only (NO client_secret) first.
+//   - Desktop client credentials are injected at build time from environment
+//     variables; PKCE remains mandatory.
 //   - refresh_token lives in the OS keyring (service "hosterm",
 //     account "google-refresh-token") — NEVER in a plaintext file.
 //   - access_token is kept in-memory only (never persisted, never logged).
@@ -19,8 +20,7 @@
 //   - exactly ONE loopback request is accepted; the listener is single-shot.
 //   - the listener binds 127.0.0.1 only; a short timeout bounds the wait.
 //   - minimal "you can close this tab" response page; no token echoed back.
-//   - access_token never logged; CLIENT_ID is a public build-time constant,
-//     NOT stored in any secret store.
+//   - access_token and injected client credentials are never logged or persisted.
 //
 // HTTP is behind an injectable seam (`TokenHttp`) so unit tests exercise the
 // token exchange / refresh / userinfo logic with a fake responder — no real
@@ -36,13 +36,32 @@ use sha2::{Digest, Sha256};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 
-// ---- Constants (public, build-time) -------------------------------------
+// ---- Constants (build-time injected) -------------------------------------
 
-/// PUBLIC OAuth client id for the installed/desktop app. Intentionally a
-/// build-time constant — it is public per Google's installed-app model and is
-/// NOT a secret. It must never be placed in the keyring / secrets sidecar.
-pub const CLIENT_ID: &str =
-    "737778700861-dhtn1sc9miiqtsmtms3tmc8tk7jj3a80.apps.googleusercontent.com";
+const UNCONFIGURED_CLIENT_ID: &str = "hosterm-oauth-client-unconfigured";
+const UNCONFIGURED_CLIENT_SECRET: &str = "hosterm-oauth-value-unconfigured";
+
+/// Official builds inject these through GitHub Actions secrets. The fallbacks
+/// keep community builds/test compilation possible, but interactive sign-in
+/// rejects an unconfigured production build with a clear error.
+pub const CLIENT_ID: &str = match option_env!("HOSTERM_GOOGLE_CLIENT_ID") {
+    Some(value) => value,
+    None => UNCONFIGURED_CLIENT_ID,
+};
+const DESKTOP_CLIENT_SECRET: &str = match option_env!("HOSTERM_GOOGLE_CLIENT_SECRET") {
+    Some(value) => value,
+    None => UNCONFIGURED_CLIENT_SECRET,
+};
+
+fn oauth_client() -> Result<(&'static str, &'static str), String> {
+    if !cfg!(test)
+        && (CLIENT_ID == UNCONFIGURED_CLIENT_ID
+            || DESKTOP_CLIENT_SECRET == UNCONFIGURED_CLIENT_SECRET)
+    {
+        return Err("Google OAuth is not configured in this build".to_string());
+    }
+    Ok((CLIENT_ID, DESKTOP_CLIENT_SECRET))
+}
 
 /// The ONLY Drive scope requested — per-file access, no broad Drive scope.
 pub const SCOPE_DRIVE_FILE: &str = "https://www.googleapis.com/auth/drive.file";
@@ -439,7 +458,8 @@ const CLOSE_TAB_ERR: &str = "<!doctype html><html><head><meta charset=\"utf-8\">
 
 // ---- Token exchange / refresh / userinfo ---------------------------------
 
-/// Exchange an authorization `code` for tokens (PKCE-only, no client_secret).
+/// Exchange an authorization `code` for tokens using PKCE plus Google's
+/// installed-app client value.
 /// Returns (access_token, refresh_token?).
 pub fn exchange_code(
     http: &dyn TokenHttp,
@@ -447,8 +467,10 @@ pub fn exchange_code(
     verifier: &str,
     redirect_uri: &str,
 ) -> Result<(String, Option<String>), String> {
+    let (client_id, client_secret) = oauth_client()?;
     let form = [
-        ("client_id", CLIENT_ID),
+        ("client_id", client_id),
+        ("client_secret", client_secret),
         ("code", code),
         ("code_verifier", verifier),
         ("grant_type", "authorization_code"),
@@ -463,14 +485,16 @@ pub fn exchange_code(
     Ok((tr.access_token, tr.refresh_token))
 }
 
-/// Refresh the access token using a stored refresh_token (PKCE public client).
+/// Refresh the access token using a stored refresh_token (Desktop public client).
 /// Google may rotate the refresh_token; if it returns a new one, surface it.
 pub fn refresh_access_token(
     http: &dyn TokenHttp,
     refresh_token: &str,
 ) -> Result<(String, Option<String>), String> {
+    let (client_id, client_secret) = oauth_client()?;
     let form = [
-        ("client_id", CLIENT_ID),
+        ("client_id", client_id),
+        ("client_secret", client_secret),
         ("refresh_token", refresh_token),
         ("grant_type", "refresh_token"),
     ];
@@ -574,6 +598,7 @@ pub fn open_in_browser(url: &str) -> Result<(), String> {
 /// unit-tested; the composable pieces (PKCE, URL build, redirect parse, token
 /// exchange behind the seam, keyring) are each tested independently.
 pub fn interactive_sign_in() -> Result<GoogleAccount, String> {
+    oauth_client()?;
     let http = ReqwestHttp;
     let pkce = generate_pkce();
     let (listener, port) = bind_loopback()?;
@@ -834,17 +859,14 @@ mod tests {
             exchange_code(&fake, "CODE", "VERIFIER", "http://127.0.0.1:1").unwrap();
         assert_eq!(at, "AT");
         assert_eq!(rt.as_deref(), Some("RT"));
-        // the request used authorization_code + code_verifier + NO client_secret
+        // The request keeps PKCE and includes Google's installed-app value.
         let form = &fake.seen_forms.borrow()[0];
         let has = |k: &str, v: &str| form.iter().any(|(kk, vv)| kk == k && vv == v);
         assert!(has("grant_type", "authorization_code"));
         assert!(has("code_verifier", "VERIFIER"));
         assert!(has("code", "CODE"));
         assert!(has("client_id", CLIENT_ID));
-        assert!(
-            !form.iter().any(|(k, _)| k == "client_secret"),
-            "PKCE-only: no client_secret"
-        );
+        assert!(has("client_secret", DESKTOP_CLIENT_SECRET));
     }
 
     #[test]
@@ -859,6 +881,8 @@ mod tests {
         assert_eq!(rt.as_deref(), Some("RT2"));
         let form = &fake.seen_forms.borrow()[0];
         assert!(form.iter().any(|(k, v)| k == "grant_type" && v == "refresh_token"));
+        assert!(form.iter().any(|(k, v)| k == "client_id" && v == CLIENT_ID));
+        assert!(form.iter().any(|(k, v)| k == "client_secret" && v == DESKTOP_CLIENT_SECRET));
         assert!(form.iter().any(|(k, v)| k == "refresh_token" && v == "OLD_RT"));
     }
 

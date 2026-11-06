@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Windows releases are currently **unsigned** (Authenticode signing postponed —
 see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
+## [0.14.1] - 2026-11-07
+
+### Fixed
+- Google sign-in now uses the new Desktop OAuth client with credentials injected
+  from GitHub Actions secrets during official builds. Token exchange and refresh
+  supply the required installed-app values while PKCE
+  S256, loopback state validation, Drive scope, keyring storage, and token
+  logging protections remain unchanged.
+
 ## [0.14.0] - 2026-11-06
 
 ### Changed

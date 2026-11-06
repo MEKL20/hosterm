@@ -10,8 +10,9 @@ locks the buildable spec from it.
 
 LOCKED DECISIONS (from MEKL, via discovery doc — NOT re-litigated here):
 PKCE loopback (127.0.0.1 ephemeral), S256, `access_type=offline`+`prompt=consent`;
-PUBLIC build-time CLIENT_ID `737778700861-dhtn1sc9miiqtsmtms3tmc8tk7jj3a80.apps.googleusercontent.com`
-(try PKCE-only, no client_secret, first); scope `drive.file` ONLY; client-side
+Desktop credentials injected at build time from GitHub Actions secrets and never
+committed to source; the Google-generated installed-app value is sent only to
+token exchange and refresh while PKCE remains mandatory; scope `drive.file` ONLY; client-side
 zero-knowledge encryption with user passphrase BEFORE upload; refresh_token in OS
 keyring; `.htbk` container; restore writes real paths only after a timestamped
 local pre-restore backup; wrong passphrase fails safe on the AEAD tag.
