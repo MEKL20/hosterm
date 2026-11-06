@@ -383,9 +383,11 @@ unchanged.
 
 Explicit non-goals (per task body):
 
-- **No OAuth credential workaround.** This PRD does not fix, enable, or work around
-  Google OAuth. The account control and its Sign-in item remain the existing
-  **visual-only** surface (OQ-3). See §Further Notes "OAuth blocker".
+- **No OAuth/Drive implementation change.** The released app already has real OAuth
+  PKCE loopback and real Google Drive backup/restore. This PRD neither fixes nor
+  works around the separate Google Cloud client-type blocker (`t_a7c6ee14`), and
+  it must not claim that blocker is resolved. The account menu must preserve the
+  current real sign-in, backup, restore, and sign-out behavior.
 - **No new backend API / no new IPC.** This is a frontend IA/visibility change;
   backend diff is 0 and the IPC inventory count is unchanged.
 - **No client_secret in the binary.** No embedded OAuth client secret, no change to
@@ -441,13 +443,18 @@ Regression risks to watch (hand to QA/SEC as the verify focus):
 
 ### OAuth blocker (referenced, not fixed)
 
-Google OAuth remains an open blocker (docs/STATE.md / PRD OQ-3: the Google account
-surface is **visual-only** in v1; no OAuth/session/network backend is wired — U-D6
-landed the accessible chip/popover explicitly as UI-only). This PRD **does not**
-claim OAuth is fixed and **does not** introduce a credential workaround, a backend,
-or a client secret. The account menu's Sign-in item stays the existing visual-only
-affordance; Drive backup/restore/sign-out keep their current behavior. Any real
-OAuth work is a separate, out-of-scope effort.
+The released app already has real OAuth PKCE loopback and real Google Drive
+backup/restore. The open blocker is configuration, not a missing backend: the
+public client ID currently shipped by v0.13.3 is registered in Google Cloud as a
+Web application client, so Google's token endpoint rejects the secretless desktop
+exchange with `invalid_request (client_secret is missing.)`. Board card
+`t_a7c6ee14` separately owns creating a Desktop app client and replacing only the
+public client ID.
+
+This UI PRD does **not** claim that blocker is fixed, does not change OAuth or
+Drive code, and does not introduce a credential workaround or client secret. The
+account menu must preserve the current real sign-in, Drive backup/restore, and
+sign-out behavior while relocating those actions.
 
 ### Current-state inventory this PRD migrates from (read 2026-11-06)
 
