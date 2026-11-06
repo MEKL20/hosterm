@@ -98,6 +98,12 @@ const GOOGLE_ACCT = {
   picture: "https://lh3.googleusercontent.com/a/mock-avatar",
 };
 let googleStored = null;       // what google_account returns on load (null = signed out)
+// FE-FIX Drive backup/restore mock steering. DRIVE_ERR carries a hostile byte so
+// the error toast must render it inert text (ADR-8), never an injected DOM node.
+const DRIVE_ERR = 'Network failed <img src=x onerror=alert(1)>';
+let driveBackupFail = false;
+let driveRestoreFail = false;
+let driveListMode = "normal";  // normal|empty — empty exercises the neutral no-backups toast
 let storedUserSnippets = [];   // user-snippet CRUD store (read/write_user_snippets)
 let googleSignInFail = false;  // flip to exercise the auth-failed error path
 // FE-ANS Ansible v1 mock state.
@@ -193,6 +199,25 @@ const invoke = (cmd, args = {}) => {
       return new Promise((r) => setTimeout(() => r({ ...GOOGLE_ACCT }), 40));
     }
     case "google_sign_out": { googleStored = null; return Promise.resolve(); }
+    // FE-FIX Drive backup/restore mocks. driveListMode steers the restore path
+    // (normal|empty), driveBackupFail/driveRestoreFail flip the error arms. The
+    // error string carries a hostile byte so the toast must render it inert
+    // (textContent, ADR-8). Small delays let the smoke observe in-progress state.
+    case "drive_backup": {
+      if (driveBackupFail) return Promise.reject(DRIVE_ERR);
+      return new Promise((r) => setTimeout(() => r({ file_id: "f-mock", name: "hosterm-backup.age", bytes: 2048, created_at: "2026-11-07T10:00:00Z" }), 30));
+    }
+    case "drive_list_backups": {
+      if (driveListMode === "empty") return Promise.resolve([]);
+      return Promise.resolve([
+        { file_id: "f-mock", name: "hosterm-backup.age", created_at: "2026-11-07T10:00:00Z", host: "ws", schema: 1 },
+      ]);
+    }
+    case "drive_restore_preflight": return Promise.resolve({ targets: [{ path: "~/.ssh/config", exists: true }] });
+    case "drive_restore": {
+      if (driveRestoreFail) return Promise.reject(DRIVE_ERR);
+      return new Promise((r) => setTimeout(() => r({ restored: ["~/.ssh/config"], pre_restore_dir: "~/.ssh/hosterm-pre-restore-123" }), 30));
+    }
     // ---- FE-ANS Ansible v1 (FR-ANS1..15) ----
     case "check_ansible": return Promise.resolve({ ...ansibleCheckState });
     case "pick_playbook": {
@@ -1084,7 +1109,7 @@ const shadowSelectors = await page.evaluate(() => {
 });
 check("U-D1: Abyss glow box-shadow fully removed", shadowSelectors.glow.length === 0, shadowSelectors.glow.join(", "));
 // --shadow-drawer only lands on floating surfaces; no sidebar/tab/row carries it.
-const elevationOk = shadowSelectors.elevation.every((s) => /modal-box|\.settings\b|\.drawer\b|\.signin-popover\b/.test(s));
+const elevationOk = shadowSelectors.elevation.every((s) => /modal-box|\.settings\b|\.drawer\b|\.signin-popover\b|\.toast\b/.test(s));
 check("U-D1/U-D6: elevation only on drawer/modal/popover boxes", elevationOk && shadowSelectors.elevation.length > 0,
   shadowSelectors.elevation.join(", "));
 // AC4 letter: inactive tab + plain button carry no box-shadow (no glow at idle/hover)
@@ -2465,6 +2490,469 @@ check("U-D6 a11y: Escape closes the account dialog and restores chip focus",
     document.getElementById("user-chip").getAttribute("aria-expanded") === "false" &&
     document.activeElement?.id === "user-chip"));
 // End U-D6 checks.
+
+// ===================================================================
+// FE-FIX (t_cee5db41): passphrase overlay, toasts, signed-in account UX
+// (design-reviews/2026-11-07-google-account-backup-ux.md). Mode DURING; Dusk
+// preserved. Deterministic mocked Drive outcomes; every assertion is red-capable.
+// ===================================================================
+
+// Re-sign-in so the Drive actions + signed-in identity row are reachable.
+await page.locator("#user-chip").click();
+await page.locator("#signin-btn").click();
+await page.waitForTimeout(120);
+
+// -- FE-FIX 1: passphrase overlay is a true fixed, centered overlay; the shell
+//    does not move between closed and open, and is inert behind it (F-1). --
+const shellBoxes = () => page.evaluate(() => {
+  const r = (id) => { const b = document.getElementById(id).getBoundingClientRect(); return { x: b.x, y: b.y, w: b.width, h: b.height }; };
+  return { app: r("app"), rail: r("nav-rail"), panel: r("section-panel") };
+});
+const boxesClosed = await shellBoxes();
+// Open the passphrase overlay via the Backup action (confirm = two fields).
+await page.locator("#drive-backup-btn").click();
+await page.locator("#pass-dialog:not(.hidden)").waitFor({ timeout: 2000 });
+await page.waitForTimeout(180); // let the 120ms entry transition settle
+const passGeo = await page.evaluate(() => {
+  const el = document.getElementById("pass-dialog");
+  const cs = getComputedStyle(el);
+  const box = el.getBoundingClientRect();
+  const dlg = el.querySelector(".dialog-box").getBoundingClientRect();
+  return {
+    position: cs.position,
+    opacity: cs.opacity,
+    coversViewport: Math.round(box.width) === window.innerWidth && Math.round(box.height) === window.innerHeight,
+    // centered: dialog box center ~ viewport center
+    centeredX: Math.abs((dlg.left + dlg.right) / 2 - window.innerWidth / 2) < 2,
+    centeredY: Math.abs((dlg.top + dlg.bottom) / 2 - window.innerHeight / 2) < 2,
+    appInert: document.getElementById("app").hasAttribute("inert"),
+    focused: document.activeElement?.id,
+    dlgWithinViewport: dlg.left >= 0 && dlg.right <= window.innerWidth,
+  };
+});
+check("FE-FIX F-1: #pass-dialog is position:fixed, viewport-sized, centered, opacity 1",
+  passGeo.position === "fixed" && passGeo.coversViewport && passGeo.centeredX && passGeo.centeredY && passGeo.opacity === "1",
+  JSON.stringify(passGeo));
+const boxesOpen = await shellBoxes();
+const sameBox = (a, b) => Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y - b.y) < 0.5 && Math.abs(a.w - b.w) < 0.5 && Math.abs(a.h - b.h) < 0.5;
+check("FE-FIX F-1: shell (app/rail/panel) does not move between closed and open",
+  sameBox(boxesClosed.app, boxesOpen.app) && sameBox(boxesClosed.rail, boxesOpen.rail) && sameBox(boxesClosed.panel, boxesOpen.panel),
+  JSON.stringify({ closed: boxesClosed, open: boxesOpen }));
+check("FE-FIX F-1: shell inert + initial focus on the passphrase input",
+  passGeo.appInert && passGeo.focused === "pass-input");
+
+// Enter a value, assert Escape cancels, restores Backup-button focus, wipes inputs.
+await page.evaluate(() => {
+  document.getElementById("pass-input").value = "secretpass";
+  document.getElementById("pass-confirm").value = "secretpass";
+});
+await page.keyboard.press("Escape");
+await page.waitForTimeout(200); // 140ms exit + buffer
+const afterEscape = await page.evaluate(() => ({
+  hidden: document.getElementById("pass-dialog").classList.contains("hidden"),
+  enter: document.getElementById("pass-dialog").classList.contains("ov-enter"),
+  focused: document.activeElement?.id,
+  passVal: document.getElementById("pass-input").value,
+  confirmVal: document.getElementById("pass-confirm").value,
+  appInert: document.getElementById("app").hasAttribute("inert"),
+}));
+check("FE-FIX F-1/§2.5: Escape cancels — dialog hidden, no stale ov-enter, shell released",
+  afterEscape.hidden && !afterEscape.enter && !afterEscape.appInert,
+  JSON.stringify(afterEscape));
+check("FE-FIX §2.5: Escape restores focus to the Backup button and wipes the passphrase inputs",
+  afterEscape.focused === "drive-backup-btn" && afterEscape.passVal === "" && afterEscape.confirmVal === "",
+  JSON.stringify(afterEscape));
+
+// -- FE-FIX 2: reduced-motion end-state is the same final state (visible, stable) --
+// Fresh page hydrates from the shared mock; reset googleStored so it loads
+// signed-out, then sign in cleanly inside the reduced-motion context.
+googleStored = null;
+const rmPage = await browser.newPage({ reducedMotion: "reduce" });
+rmPage.on("pageerror", (e) => errors.push(String(e)));
+await rmPage.addInitScript(mockTauri);
+await rmPage.addInitScript(cspCollector);
+await rmPage.exposeFunction("__invokeImpl", invoke);
+await rmPage.goto("http://localhost:4199/");
+await rmPage.waitForTimeout(300);
+await rmPage.locator("#user-chip").click();
+await rmPage.locator("#signin-btn").click();
+await rmPage.waitForTimeout(120);
+await rmPage.locator("#drive-backup-btn").click();
+await rmPage.locator("#pass-dialog:not(.hidden)").waitFor({ timeout: 2000 });
+await rmPage.waitForTimeout(60);
+const rmState = await rmPage.evaluate(() => {
+  const el = document.getElementById("pass-dialog");
+  return { opacity: getComputedStyle(el).opacity, position: getComputedStyle(el).position, visible: el.getClientRects().length > 0 };
+});
+check("FE-FIX F-2: reduced-motion passphrase overlay reaches the visible final state (opacity 1, fixed)",
+  rmState.opacity === "1" && rmState.position === "fixed" && rmState.visible,
+  JSON.stringify(rmState));
+await rmPage.close();
+
+// -- FE-FIX 3: signed-in identity row — escaped hostile name/email inert, no remote image request --
+// The popover stayed open through the overlay cycle (overlay owned Escape); make
+// sure it is open without toggling it shut.
+if (await page.locator("#signin-popover").isHidden()) await page.locator("#user-chip").click();
+const reqBeforeIdentity = requestLog.length;
+await page.waitForTimeout(40);
+const identity = await page.evaluate(() => {
+  const avatar = document.getElementById("pop-avatar");
+  const title = document.getElementById("google-pop-title");
+  const sub = document.getElementById("google-pop-sub");
+  const label = document.querySelector("#drive-actions .pop-group-label");
+  const foot = document.querySelector(".pop-foot");
+  return {
+    avatarHidden: avatar.hidden,
+    avatarText: avatar.textContent,
+    avatarKids: avatar.childElementCount,
+    title: title.textContent,
+    titleKids: title.childElementCount,
+    titleWeight: getComputedStyle(title).fontWeight,
+    titleColor: getComputedStyle(title).color,
+    sub: sub.textContent,
+    subKids: sub.childElementCount,
+    subColor: getComputedStyle(sub).color,
+    groupLabel: label?.textContent,
+    footHasSignout: !!foot?.querySelector("#signout-btn"),
+    footHasSettings: !!foot?.querySelector("#acct-settings-btn"),
+  };
+});
+check("FE-FIX §2.2: signed-in identity row — initials avatar + name focal point + Drive group label",
+  !identity.avatarHidden && identity.avatarText === "AL" && identity.avatarKids === 0 &&
+  identity.title === "Ada Lovelace" && Number(identity.titleWeight) >= 650 &&
+  identity.groupLabel === "Google Drive" && identity.footHasSignout && identity.footHasSettings,
+  JSON.stringify(identity));
+check("FE-FIX §2.2/ADR-8: hostile email renders inert text (0 child nodes) in --dim, name in --text",
+  identity.sub === 'ada+<img src=x onerror=alert(1)>@example.com' && identity.subKids === 0 &&
+  identity.subColor === "rgb(185, 170, 149)" && identity.titleColor === "rgb(242, 233, 220)",
+  JSON.stringify(identity));
+check("FE-FIX NFR-3: opening the signed-in popover fires no remote image request",
+  !requestLog.slice(reqBeforeIdentity).some((u) => u.includes("googleusercontent") || /\.(png|jpg|jpeg|webp|gif)(\?|$)/i.test(u)),
+  JSON.stringify(requestLog.slice(reqBeforeIdentity)));
+
+// -- FE-FIX 4: backup success -> role=status toast, dismissable via close --
+const toastInfo = () => page.evaluate(() => [...document.querySelectorAll("#toast-stack .toast")].map((t) => ({
+  role: t.getAttribute("role"),
+  title: t.querySelector(".toast-title").textContent,
+  msg: t.querySelector(".toast-msg").textContent,
+  msgKids: t.querySelector(".toast-msg").childElementCount,
+  ok: t.classList.contains("toast--ok"),
+  error: t.classList.contains("toast--error"),
+  info: t.classList.contains("toast--info"),
+})));
+// Clicking a toast (outside the popover) closes it, so reopen before each
+// drive action. The chip toggles, so only click when the popover is hidden.
+const ensureDrive = async () => {
+  // Wait out any in-flight pass-dialog exit (fixed, covers the rail for ~140ms).
+  await page.locator("#pass-dialog.hidden").waitFor({ timeout: 2000 }).catch(() => {});
+  if (await page.locator("#signin-popover").isHidden()) await page.locator("#user-chip").click();
+  await page.locator("#drive-backup-btn").waitFor({ state: "visible", timeout: 2000 });
+};
+driveBackupFail = false;
+await ensureDrive();
+await page.locator("#drive-backup-btn").click();
+await page.locator("#pass-input").fill("pw-success");
+await page.locator("#pass-confirm").fill("pw-success");
+await page.locator("#pass-ok").click();
+await page.waitForTimeout(120);
+let toasts = await toastInfo();
+check("FE-FIX §2.3: backup success raises exactly one role=status --ok toast",
+  toasts.length === 1 && toasts[0].role === "status" && toasts[0].ok && toasts[0].title === "Backup complete" &&
+  toasts[0].msg.includes("hosterm-backup.age"),
+  JSON.stringify(toasts));
+// Close via the keyboard-operable close button.
+await page.locator("#toast-stack .toast-close").first().focus();
+const toastFocus = await page.evaluate(() => {
+  const btn = document.activeElement;
+  const cs = getComputedStyle(btn);
+  const box = btn.getBoundingClientRect();
+  return { isClose: btn.classList.contains("toast-close"), w: Math.round(box.width), h: Math.round(box.height) };
+});
+check("FE-FIX §2.3: toast close is keyboard-focusable with a 44px hit target",
+  toastFocus.isClose && toastFocus.w === 44 && toastFocus.h === 44,
+  JSON.stringify(toastFocus));
+await page.keyboard.press("Enter");
+await page.waitForTimeout(220);
+check("FE-FIX §2.3: Enter on the close button dismisses the success toast",
+  (await page.locator("#toast-stack .toast").count()) === 0);
+
+// backup failure -> persistent role=alert --error toast (close-only).
+driveBackupFail = true;
+await ensureDrive();
+await page.locator("#drive-backup-btn").click();
+await page.locator("#pass-input").fill("pw-fail");
+await page.locator("#pass-confirm").fill("pw-fail");
+await page.locator("#pass-ok").click();
+await page.waitForTimeout(120);
+toasts = await toastInfo();
+check("FE-FIX §2.3: backup failure raises a role=alert --error toast, title 'Backup failed'",
+  toasts.length === 1 && toasts[0].role === "alert" && toasts[0].error && toasts[0].title === "Backup failed",
+  JSON.stringify(toasts));
+check("FE-FIX ADR-8: hostile error text renders inert in the toast (0 child nodes), no __pwn",
+  toasts[0].msg === DRIVE_ERR && toasts[0].msgKids === 0 &&
+  (await page.evaluate(() => typeof window.__pwn === "undefined")),
+  JSON.stringify(toasts[0]));
+// Error is persistent (no auto-dismiss timer armed at all). A short real-time
+// sample only shows it has not vanished immediately; the authoritative proof
+// that it outlives the full 5000ms success window is the deterministic
+// fake-clock check below (clockPage), which fast-forwards past 5s.
+await page.waitForTimeout(600);
+check("FE-FIX §2.3: error toast is still present shortly after creation (600ms real-time sample)",
+  (await page.locator("#toast-stack .toast--error").count()) === 1);
+driveBackupFail = false;
+
+// -- FE-FIX 5: restore success/failure + neutral no-backups map to the right toast role/copy --
+// No close control on error other than the close button (close-only, no 'Try again').
+check("FE-FIX nano-lock #3: error toast has no retry/action control, only the close button",
+  await page.evaluate(() => {
+    const t = document.querySelector("#toast-stack .toast--error");
+    return t && t.querySelectorAll("button").length === 1 && t.querySelector(".toast-close") !== null;
+  }));
+// Clear the standing error so the stack is clean for the restore checks.
+await page.locator("#toast-stack .toast--error .toast-close").click();
+await page.waitForTimeout(200);
+
+driveListMode = "empty";
+await ensureDrive();
+await page.locator("#drive-restore-btn").click();
+await page.waitForTimeout(120);
+toasts = await toastInfo();
+check("FE-FIX nano-lock #5: restore with zero backups raises a neutral role=status --info toast with the locked copy",
+  toasts.length === 1 && toasts[0].role === "status" && toasts[0].info &&
+  toasts[0].title === "Nothing to restore" &&
+  toasts[0].msg === "No backups on Drive yet. Back up first to enable restore.",
+  JSON.stringify(toasts));
+await page.locator("#toast-stack .toast-close").first().click();
+await page.waitForTimeout(200);
+driveListMode = "normal";
+
+// restore success: confirm the passphrase (no-confirm field), expect an ok toast.
+driveRestoreFail = false;
+await ensureDrive();
+await page.locator("#drive-restore-btn").click();
+await page.locator("#pass-dialog:not(.hidden)").waitFor({ timeout: 2000 });
+await page.locator("#pass-input").fill("restorepw");
+await page.locator("#pass-ok").click();
+await page.waitForTimeout(140);
+toasts = await toastInfo();
+check("FE-FIX §2.3: restore success raises a role=status --ok toast",
+  toasts.length === 1 && toasts[0].role === "status" && toasts[0].ok && toasts[0].title === "Restore complete",
+  JSON.stringify(toasts));
+await page.locator("#toast-stack .toast-close").first().click();
+await page.waitForTimeout(200);
+
+driveRestoreFail = true;
+await ensureDrive();
+await page.locator("#drive-restore-btn").click();
+await page.locator("#pass-dialog:not(.hidden)").waitFor({ timeout: 2000 });
+await page.locator("#pass-input").fill("restorepw");
+await page.locator("#pass-ok").click();
+await page.waitForTimeout(140);
+toasts = await toastInfo();
+check("FE-FIX §2.3: restore failure raises a persistent role=alert --error toast",
+  toasts.length === 1 && toasts[0].role === "alert" && toasts[0].error && toasts[0].title === "Restore failed",
+  JSON.stringify(toasts));
+await page.locator("#toast-stack .toast-close").first().click();
+await page.waitForTimeout(200);
+driveRestoreFail = false;
+
+// -- FE-FIX 6: max-stack/eviction (newest-first, max 3, never drop an error) + no CSP violations --
+// Push an error, then three successes; the error must remain (4 arrive, max 3).
+driveBackupFail = true;
+await ensureDrive();
+await page.locator("#drive-backup-btn").click();
+await page.locator("#pass-input").fill("e1"); await page.locator("#pass-confirm").fill("e1");
+await page.locator("#pass-ok").click();
+await page.waitForTimeout(120);
+driveBackupFail = false;
+for (const p of ["s1", "s2", "s3"]) {
+  await ensureDrive();
+  await page.locator("#drive-backup-btn").click();
+  await page.locator("#pass-input").fill(p); await page.locator("#pass-confirm").fill(p);
+  await page.locator("#pass-ok").click();
+  await page.waitForTimeout(80);
+}
+const stackState = await page.evaluate(() => {
+  const list = [...document.querySelectorAll("#toast-stack .toast")];
+  return {
+    count: list.length,
+    hasError: list.some((t) => t.classList.contains("toast--error")),
+    // newest-first: DOM-first node is the most recent (prepend)
+    firstIsSuccess: list[0]?.classList.contains("toast--ok"),
+  };
+});
+check("FE-FIX §2.3: stack caps at 3 visible, newest-first, and never evicts the error",
+  stackState.count === 3 && stackState.hasError && stackState.firstIsSuccess,
+  JSON.stringify(stackState));
+const feFixCsp = await page.evaluate(() => window.__cspViolations || []);
+check("FE-FIX: toast surface carries no CSP violations (counter stays 0)",
+  feFixCsp.length === 0, JSON.stringify(feFixCsp));
+// Clean the stack for later checks.
+await page.evaluate(() => { document.querySelectorAll("#toast-stack .toast-close").forEach((b) => b.click()); });
+await page.waitForTimeout(220);
+
+// -- FE-FIX 6c: deterministic timer behavior on an ISOLATED fake-clock page --
+// A dedicated page installs Playwright's clock so setTimeout + Date.now are
+// controllable; this proves (a) the success toast auto-dismisses exactly at the
+// 5000ms boundary, (b) hover and keyboard focus each PAUSE that timer so the
+// toast outlives 5000ms of fast-forward, then resumes, and (c) a persistent
+// error genuinely survives past 5000ms. The clock stays scoped to clockPage so
+// it never perturbs the main suite's real-timer pages. Runtime is bounded: all
+// waits are fake fast-forwards, not real 5s sleeps.
+googleStored = null;
+const clockPage = await browser.newPage();
+clockPage.on("pageerror", (e) => errors.push(String(e)));
+await clockPage.clock.install();
+await clockPage.addInitScript(mockTauri);
+await clockPage.addInitScript(cspCollector);
+await clockPage.exposeFunction("__invokeImpl", invoke);
+await clockPage.goto("http://localhost:4199/");
+await clockPage.clock.runFor(400); // let boot settle under the fake clock
+await clockPage.locator("#user-chip").click();
+await clockPage.locator("#signin-btn").click();
+await clockPage.clock.runFor(150);
+const clockToastCount = () => clockPage.locator("#toast-stack .toast").count();
+// Raise a success toast and PUMP the fake clock in small steps until it is
+// actually in the DOM. The backup invoke resolves on a microtask/timer chain
+// that only advances under clock.runFor, so without pumping the toast would not
+// exist yet when we start measuring. Pumping ≤500ms total keeps the timer's
+// 5000ms budget essentially intact and the measurement deterministic.
+const raiseSuccess = async (pw) => {
+  if (await clockPage.locator("#signin-popover").isHidden()) { await clockPage.locator("#user-chip").click(); await clockPage.clock.runFor(30); }
+  await clockPage.locator("#drive-backup-btn").click();
+  await clockPage.locator("#pass-dialog:not(.hidden)").waitFor({ timeout: 2000 });
+  await clockPage.locator("#pass-input").fill(pw);
+  await clockPage.locator("#pass-confirm").fill(pw);
+  await clockPage.locator("#pass-ok").click();
+  let pumped = 0;
+  while (pumped < 500 && (await clockPage.locator("#toast-stack .toast--ok").count()) === 0) {
+    await clockPage.clock.runFor(25);
+    pumped += 25;
+  }
+  return pumped;
+};
+
+// (a) success auto-dismisses at the 5000ms boundary, not before.
+driveBackupFail = false;
+await raiseSuccess("t-auto");
+await clockPage.clock.runFor(4000);
+const before5s = await clockToastCount();
+await clockPage.clock.runFor(1200); // cross 5000ms (+ exit transition)
+const after5s = await clockToastCount();
+check("FE-FIX §2.3: success toast is alive at 4000ms and auto-dismisses after the 5000ms window",
+  before5s === 1 && after5s === 0, JSON.stringify({ before5s, after5s }));
+
+// (b1) pointer hover PAUSES the success timer: fast-forward well past 5000ms
+// while hovered and the toast must remain; after mouseleave it resumes and dies.
+await raiseSuccess("t-hover");
+await clockPage.locator("#toast-stack .toast--ok").first().hover();
+await clockPage.clock.runFor(8000); // > 5000ms, but paused by hover
+const hoverHeld = await clockToastCount();
+await clockPage.mouse.move(5, 5); // leave the toast -> resume
+await clockPage.clock.runFor(5200); // remaining ~5000ms elapses
+const hoverResumed = await clockToastCount();
+check("FE-FIX §2.3: pointer hover pauses the success auto-dismiss (survives 8000ms held), resumes on leave",
+  hoverHeld === 1 && hoverResumed === 0, JSON.stringify({ hoverHeld, hoverResumed }));
+
+// (b2) keyboard focus PAUSES the timer the same way (focusin), resumes on blur.
+await raiseSuccess("t-focus");
+await clockPage.locator("#toast-stack .toast--ok .toast-close").first().focus();
+await clockPage.clock.runFor(8000); // > 5000ms, paused by focus
+const focusHeld = await clockToastCount();
+await clockPage.locator("#user-chip").focus(); // blur the toast -> resume
+await clockPage.clock.runFor(5200);
+const focusResumed = await clockToastCount();
+check("FE-FIX §2.3: keyboard focus pauses the success auto-dismiss (survives 8000ms held), resumes on blur",
+  focusHeld === 1 && focusResumed === 0, JSON.stringify({ focusHeld, focusResumed }));
+
+// (c) more than three simultaneous errors are ALL preserved (never silently
+// dropped): with TOAST_MAX=3, four errors must all remain because eviction only
+// drops non-errors. Fast-forward past 5000ms to prove none auto-dismiss either.
+await clockPage.evaluate(() => { document.querySelectorAll("#toast-stack .toast-close").forEach((b) => b.click()); });
+await clockPage.clock.runFor(300);
+driveBackupFail = true;
+for (const pw of ["e1", "e2", "e3", "e4"]) {
+  if (await clockPage.locator("#signin-popover").isHidden()) { await clockPage.locator("#user-chip").click(); await clockPage.clock.runFor(30); }
+  await clockPage.locator("#drive-backup-btn").click();
+  await clockPage.locator("#pass-input").fill(pw);
+  await clockPage.locator("#pass-confirm").fill(pw);
+  await clockPage.locator("#pass-ok").click();
+  await clockPage.clock.runFor(80);
+}
+const fourErrorsImmediate = await clockPage.locator("#toast-stack .toast--error").count();
+await clockPage.clock.runFor(6000); // well past 5000ms — errors never auto-dismiss
+const fourErrorsPersist = await clockPage.locator("#toast-stack .toast--error").count();
+check("FE-FIX §2.3: four simultaneous errors are all preserved (no silent drop) and never auto-dismiss",
+  fourErrorsImmediate === 4 && fourErrorsPersist === 4,
+  JSON.stringify({ fourErrorsImmediate, fourErrorsPersist }));
+const clockCsp = await clockPage.evaluate(() => (window.__cspViolations || []).length);
+check("FE-FIX §2.3: fake-clock timer page raises no CSP violations", clockCsp === 0, String(clockCsp));
+driveBackupFail = false;
+await clockPage.close();
+
+// -- FE-FIX 6b: narrow window — passphrase box + toast stack never overflow --
+await page.setViewportSize({ width: 360, height: 640 });
+await page.waitForTimeout(80);
+await ensureDrive();
+await page.locator("#drive-backup-btn").click();
+await page.locator("#pass-dialog:not(.hidden)").waitFor({ timeout: 2000 });
+await page.waitForTimeout(80);
+const narrowPass = await page.evaluate(() => {
+  const dlg = document.querySelector("#pass-dialog .dialog-box").getBoundingClientRect();
+  return { left: Math.round(dlg.left), right: Math.round(dlg.right), vw: window.innerWidth, overflow: document.documentElement.scrollWidth > window.innerWidth };
+});
+check("FE-FIX §2.5: passphrase box clamps within a 360px viewport (no horizontal overflow)",
+  narrowPass.left >= 0 && narrowPass.right <= narrowPass.vw && !narrowPass.overflow,
+  JSON.stringify(narrowPass));
+await page.keyboard.press("Escape");
+await page.waitForTimeout(200);
+// Raise a toast in the narrow window and confirm it stays inside the viewport.
+driveBackupFail = true;
+await ensureDrive();
+await page.locator("#drive-backup-btn").click();
+await page.locator("#pass-input").fill("n1"); await page.locator("#pass-confirm").fill("n1");
+await page.locator("#pass-ok").click();
+await page.waitForTimeout(120);
+const narrowToast = await page.evaluate(() => {
+  const t = document.querySelector("#toast-stack .toast");
+  if (!t) return { none: true };
+  const b = t.getBoundingClientRect();
+  return { left: Math.round(b.left), right: Math.round(b.right), vw: window.innerWidth, overflow: document.documentElement.scrollWidth > window.innerWidth };
+});
+check("FE-FIX §2.5/R-03: toast stack stays inside a 360px viewport (no overflow)",
+  !narrowToast.none && narrowToast.left >= 0 && narrowToast.right <= narrowToast.vw && !narrowToast.overflow,
+  JSON.stringify(narrowToast));
+driveBackupFail = false;
+await page.evaluate(() => { document.querySelectorAll("#toast-stack .toast-close").forEach((b) => b.click()); });
+await page.waitForTimeout(220);
+await page.setViewportSize({ width: 1280, height: 720 });
+await page.waitForTimeout(80);
+
+// -- FE-FIX 7: existing sign-in/out + account flow still green (re-assert the invariants). --
+const feFixSignedIn = await page.locator("#user-chip").evaluate((chip) => chip.dataset.state);
+check("FE-FIX regression: account remains signed-in after the toast/overlay cycle",
+  feFixSignedIn === "signed-in");
+// Sign out to leave the suite signed-out (the state U-D6 handed over). The
+// narrow-window + toast cycle may have closed the popover, so open it first.
+if (await page.locator("#signin-popover").isHidden()) {
+  await page.locator("#user-chip").click();
+  await page.waitForTimeout(40);
+}
+await page.locator("#signout-btn").click();
+await page.waitForTimeout(40);
+check("FE-FIX regression: sign out returns the chip to signed-out",
+  (await page.locator("#user-chip").evaluate((chip) => chip.dataset.state)) === "signed-out");
+// The 360px narrow-window test above auto-collapsed the section panel and
+// persisted `hosterm.panel-collapsed=1` to localStorage, which survives
+// page.reload(). Clear it and re-expand now (popover already closed by sign-out)
+// so later sections (U-D7 reloads -> U9 host controls) boot with #view-host
+// visible — do not leak narrow-window state downstream.
+await page.evaluate(() => { try { localStorage.removeItem("hosterm.panel-collapsed"); localStorage.removeItem("hosterm.sb-collapsed"); } catch { /* private mode */ } });
+if (await page.locator("#btn-expand").isVisible().catch(() => false)) {
+  await page.locator("#btn-expand").click();
+  await page.waitForTimeout(40);
+}
+// End FE-FIX checks.
 
 // U-D7 AI assistant + exact-command approval contract (FR-AI1..13, INV-25/26).
 const aiCounts = () => ({

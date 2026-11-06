@@ -617,14 +617,48 @@ pub fn interactive_sign_in() -> Result<GoogleAccount, String> {
     let (access_token, refresh_token) =
         exchange_code(&http, &redirect.code, &pkce.verifier, &redirect_uri)?;
 
-    if let Some(rt) = refresh_token {
-        keyring_store_refresh(&rt)?;
-    }
-    // If Google returned no refresh_token (e.g. prior consent without
-    // prompt=consent), we still succeed for this session but cannot persist —
-    // the keyring simply has whatever was there before. Account comes from the
-    // just-issued access_token.
+    // Decide the durable-auth outcome BEFORE presenting any account. A
+    // successful sign-in must leave the app able to perform Drive work; the
+    // frozen contract (TSD §9, backup::prod::with_client) bases every Drive
+    // call on the keyring refresh_token, so a sign-in with no durable token is
+    // a false success and is rejected here. See `durable_refresh_or_error`.
+    let durable = durable_refresh_or_error(refresh_token)?;
+    keyring_store_refresh(&durable)?;
+
     fetch_userinfo(&http, &access_token)
+}
+
+/// Decide whether an authorization-code exchange produced a durable session.
+///
+/// Root cause of the v0.14.1 false signed-in state: a sign-in that received no
+/// `refresh_token` from Google (e.g. a stale prior grant where Google omits it
+/// even with `prompt=consent`) still returned `Ok(account)` while persisting
+/// nothing. The in-memory access token was then dropped, so the next Drive
+/// call hit `backup::prod::with_client`, found an empty keyring, and failed
+/// with `not signed in to Google — sign in first` — an account that looks
+/// signed in but can do no Drive work.
+///
+/// Tradeoff (chosen architecture): the frozen OAuth/Drive contract keys ALL
+/// usable Drive state off the keyring refresh_token — `load_account` returns
+/// `None` without it and `with_client` refuses without it — while the access
+/// token is memory-only, backend-side, and MUST NOT cross IPC or live in
+/// long-lived app state (security invariants). Carrying a memory-only session
+/// would require a new backend access-token store plus IPC plumbing, both
+/// outside this contract. The smallest honest fix is therefore to FAIL sign-in
+/// when no durable refresh_token is obtained, so the app never presents a
+/// signed-in account it cannot back with real Drive capability. The error is
+/// actionable and carries NO token material.
+fn durable_refresh_or_error(refresh_token: Option<String>) -> Result<String, String> {
+    match refresh_token {
+        Some(rt) if !rt.is_empty() => Ok(rt),
+        _ => Err(
+            "Google sign-in did not return durable authorization, so Drive access \
+             cannot be set up. Remove hosterm's access in your Google Account \
+             (myaccount.google.com → Security → Third-party access), then sign in \
+             again to re-grant."
+                .to_string(),
+        ),
+    }
 }
 
 /// Load the signed-in account on app start: if the keyring holds a
@@ -896,6 +930,54 @@ mod tests {
         let (at, rt) = refresh_access_token(&fake, "RT").unwrap();
         assert_eq!(at, "AT3");
         assert_eq!(rt, None);
+    }
+
+    // ---- Durable sign-in gate (v0.14.1 false signed-in regression) ------
+    //
+    // These prove a successful-looking sign-in cannot leave the app claiming a
+    // usable Drive account when no durable refresh_token was obtained. The
+    // decision lives in the pure `durable_refresh_or_error` so it is tested
+    // without any real network / browser / keyring I/O (interactive_sign_in
+    // itself performs real I/O and stays untested, per the module header).
+
+    #[test]
+    fn durable_refresh_rejects_missing_refresh_token() {
+        // REGRESSION: Google returned no refresh_token. Sign-in must fail here
+        // (before userinfo / before presenting an account), not succeed into a
+        // state where the keyring is empty and the first Drive call errors.
+        let err = durable_refresh_or_error(None).unwrap_err();
+        assert!(
+            err.contains("durable authorization"),
+            "error must explain the missing durable grant: {err}"
+        );
+        // Actionable: tells the user how to recover.
+        assert!(err.contains("sign in again"), "error must be actionable: {err}");
+        // Secret-safe: never echoes token-shaped material.
+        assert!(!err.to_lowercase().contains("refresh_token"));
+        assert!(!err.to_lowercase().contains("access_token"));
+    }
+
+    #[test]
+    fn durable_refresh_rejects_empty_refresh_token() {
+        // An empty string is not a usable token; treat it like None.
+        let err = durable_refresh_or_error(Some(String::new())).unwrap_err();
+        assert!(err.contains("durable authorization"), "got: {err}");
+    }
+
+    #[test]
+    fn durable_refresh_accepts_stored_refresh_token() {
+        // Normal first grant: Google issues a refresh_token; it is the value
+        // that gets persisted to the keyring and backs every later Drive call.
+        let rt = durable_refresh_or_error(Some("RT_DURABLE".to_string())).unwrap();
+        assert_eq!(rt, "RT_DURABLE");
+    }
+
+    #[test]
+    fn durable_refresh_passes_through_rotated_refresh_token() {
+        // Re-grant / rotation: whatever refresh_token the exchange yields is the
+        // one persisted — the gate never substitutes or drops it.
+        let rt = durable_refresh_or_error(Some("RT_ROTATED".to_string())).unwrap();
+        assert_eq!(rt, "RT_ROTATED");
     }
 
     #[test]

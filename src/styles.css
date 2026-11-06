@@ -346,9 +346,42 @@ body.panel-collapsed #sb-resize { display: none; }
   background: var(--raised); border-left: 1px solid var(--border); border-bottom: 1px solid var(--border);
   transform: rotate(45deg);
 }
-.pop-title { margin-bottom: 3px; font-size: 12.5px; font-weight: 600; }
-.pop-sub { margin-bottom: 11px; color: var(--dim); font-size: 11.5px; word-break: break-word; }
+/* Signed-in identity row: larger avatar + name (focal point) / email (--dim).
+   §2.2 — name is 13px/650 --text (12.88:1), email stays --dim (6.82:1), never
+   --faint on --raised (F-7, 4.22:1 fail). Separation comes from the popover's
+   --shadow-drawer, not --border (F-8, ~1.1:1). */
+.pop-identity { display: flex; align-items: center; gap: 10px; margin-bottom: 11px; }
+.pop-identity-text { min-width: 0; flex: 1; }
+.pop-avatar {
+  width: 32px; height: 32px; flex: none;
+  display: grid; place-items: center;
+  background: var(--raised); border: 1px solid var(--hairline);
+  border-radius: 50%;
+  color: var(--accent); font-size: 13px; font-weight: 650;
+}
+.pop-avatar[hidden] { display: none; }
+.pop-title { font-size: 13px; font-weight: 650; color: var(--text); word-break: break-word; }
+.pop-sub { margin-top: 2px; color: var(--dim); font-size: 11.5px; word-break: break-word; }
 .pop-sub[data-tone="error"] { color: var(--danger); }
+/* Drive action group: labelled, separated from the account footer. */
+.pop-group-label {
+  font-size: 10.5px; font-weight: 600; letter-spacing: .02em;
+  color: var(--dim); text-transform: uppercase; margin-bottom: 2px;
+}
+/* Footer groups Settings + Sign out below a hairline, so account-level actions
+   read apart from the Drive block. Sign out is secondary/destructive, never a
+   peer of Back up. */
+.pop-foot {
+  display: flex; flex-direction: column; gap: 6px;
+  margin-top: 10px; padding-top: 10px;
+  border-top: 1px solid var(--hairline);
+}
+.pop-foot .account-menu-btn { margin-top: 0; }
+.signout-btn {
+  color: var(--danger); background: transparent;
+  border: 1px solid var(--hairline);
+}
+.signout-btn:hover { background: var(--surface); }
 .signin-btn:disabled { opacity: 0.6; cursor: default; }
 .signin-btn {
   width: 100%; height: 34px;
@@ -377,6 +410,51 @@ body.panel-collapsed #sb-resize { display: none; }
 .drive-status { margin-top: 4px; font-size: 11.5px; color: var(--dim); word-break: break-word; white-space: pre-wrap; }
 .drive-status[data-tone="error"] { color: var(--danger); }
 .drive-status[data-tone="ok"] { color: var(--accent); }
+
+/* Shell-level toast stack (§2.3). Non-modal: fixed bottom-right, newest on top
+   (column-reverse so prepend-in-DOM reads as stacking upward), max 3 visible
+   enforced in TS. Surface is --raised separated by the single --shadow-drawer
+   elevation token (F-8: never --border alone). Left-accent bar carries severity
+   (a signal, not decoration). No new color/gradient/glow/blur. */
+.toast-stack {
+  position: fixed; bottom: 16px; right: 16px; z-index: 60;
+  display: flex; flex-direction: column-reverse; gap: 8px;
+  max-width: min(360px, calc(100vw - 32px));
+  pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 11px 10px 11px 12px;
+  background: var(--raised);
+  border-left: 3px solid var(--dim);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-drawer);
+  opacity: 0; transform: translateX(8px);
+  transition: opacity 120ms ease, transform 140ms ease;
+}
+.toast.toast-in { opacity: 1; transform: none; }
+.toast--ok { border-left-color: var(--live); }
+.toast--error { border-left-color: var(--danger); }
+.toast--info { border-left-color: var(--dim); }
+.toast-icon { flex: none; display: grid; place-items: center; margin-top: 1px; }
+.toast-icon svg { display: none; }
+.toast--ok .toast-ico-ok { display: block; color: var(--live); }
+.toast--error .toast-ico-error { display: block; color: var(--danger); }
+.toast--info .toast-ico-info { display: block; color: var(--dim); }
+.toast-body { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.toast-title { font-size: 12.5px; font-weight: 600; color: var(--text); word-break: break-word; }
+.toast-msg { font-size: 11.5px; color: var(--dim); word-break: break-word; white-space: pre-wrap; }
+.toast-msg:empty { display: none; }
+/* 44px hit target around the 14px glyph (R-03); visible accent focus (R-32). */
+.toast-close {
+  flex: none; width: 44px; height: 44px; margin: -11px -6px -11px 0;
+  display: grid; place-items: center;
+  background: transparent; border: 0; border-radius: var(--r-sm);
+  color: var(--dim); cursor: pointer;
+}
+.toast-close:hover { color: var(--text); background: var(--surface); }
+.toast-close:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 /* Passphrase dialog */
 .pass-label { display: block; margin: 8px 0 4px; font-size: 11.5px; color: var(--dim); }
@@ -1204,12 +1282,20 @@ body.sftp-dragging { user-select: none; cursor: grabbing; }
 }
 
 /* modals */
-#modal, #raw-modal, #key-modal, #dialog, #ssh-modal, #ansible-modal {
+#modal, #raw-modal, #key-modal, #dialog, #ssh-modal, #ansible-modal, #pass-dialog {
   position: fixed; inset: 0;
   background: rgba(0, 0, 0, .5);
   display: flex; align-items: center; justify-content: center;
   z-index: 50;
 }
+/* Pass-dialog-only entry/exit (F-2, scoped per nano lock #2): scrim fades
+   0→1 and the box lifts 6px→0 over 120ms. .ov-enter is toggled on the next
+   frame after display flips. Final state is opacity:1/transform:none so the
+   reduced-motion kill switch (875-876) lands on the correct end state. */
+#pass-dialog { opacity: 0; transition: opacity 120ms ease; }
+#pass-dialog .modal-box { transform: translateY(6px); transition: transform 120ms ease; }
+#pass-dialog.ov-enter { opacity: 1; }
+#pass-dialog.ov-enter .modal-box { transform: none; }
 .hidden { display: none !important; }
 .modal-box {
   background: var(--bg);
@@ -1222,7 +1308,7 @@ body.sftp-dragging { user-select: none; cursor: grabbing; }
   display: flex; flex-direction: column; gap: 12px;
 }
 .modal-box.wide { width: 70vw; height: 70vh; }
-.dialog-box { width: 340px; }
+.dialog-box { width: min(340px, calc(100vw - 24px)); }
 .dialog-box p { margin: 0; }
 .modal-box h2 { margin: 0; font-size: 15px; font-weight: 600; }
 .modal-box label {

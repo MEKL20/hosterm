@@ -343,6 +343,17 @@ function renderGoogleAccount() {
     ? `Signed in to Google as ${googleAccount!.name}`
     : "Sign in with Google");
 
+  // Larger identity avatar in the popover (initials only; the remote picture is
+  // never fetched — NFR-3 / CSP img-src 'self'). Hidden when signed out.
+  const popAvatar = $("#pop-avatar");
+  if (signedIn) {
+    popAvatar.textContent = googleInitials(googleAccount!.name);
+    popAvatar.hidden = false;
+  } else {
+    popAvatar.textContent = "";
+    popAvatar.hidden = true;
+  }
+
   $("#google-pop-title").textContent = signedIn
     ? googleAccount!.name
     : "Use hosterm with Google";
@@ -493,6 +504,103 @@ function setDriveBusy(busy: boolean) {
   ($("#drive-restore-btn") as HTMLButtonElement).disabled = busy;
 }
 
+// ---------- shell-level toasts (non-modal backup/restore feedback) ----------
+// Cloned from #toast-template; all dynamic strings set via textContent (ADR-8),
+// never innerHTML. Toasts never join overlayStack, never trap focus, and are
+// not dismissed by Escape (Escape stays owned by overlays — nano lock #4).
+type ToastTone = "ok" | "error" | "info";
+interface ToastOpts {
+  tone: ToastTone;
+  title: string;
+  msg?: string;
+  // Success/info auto-dismiss after this many ms; errors are always persistent.
+  timeout?: number;
+}
+const TOAST_MAX = 3;
+const SUCCESS_TOAST_MS = 5000;
+// Per-toast dismiss timers so hover/focus can pause and blur can resume.
+const toastTimers = new WeakMap<HTMLElement, { remaining: number; startedAt: number; id: number | null }>();
+
+function dropToastNow(toast: HTMLElement) {
+  const timer = toastTimers.get(toast);
+  if (timer?.id !== null && timer?.id !== undefined) clearTimeout(timer.id);
+  toastTimers.delete(toast);
+  toast.remove();
+}
+
+function removeToast(toast: HTMLElement) {
+  const timer = toastTimers.get(toast);
+  if (timer?.id !== null && timer?.id !== undefined) clearTimeout(timer.id);
+  toastTimers.delete(toast);
+  toast.classList.remove("toast-in");
+  // Let the exit transition run, then drop the node. Under reduced motion the
+  // global kill switch means transitionend never fires, so the timer removes it.
+  let done = false;
+  const drop = () => { if (done) return; done = true; toast.remove(); };
+  toast.addEventListener("transitionend", drop, { once: true });
+  window.setTimeout(drop, 160);
+}
+
+function armToastTimer(toast: HTMLElement, ms: number) {
+  const fire = () => removeToast(toast);
+  const state = { remaining: ms, startedAt: Date.now(), id: window.setTimeout(fire, ms) };
+  toastTimers.set(toast, state);
+  const pause = () => {
+    const t = toastTimers.get(toast);
+    if (!t || t.id === null) return;
+    clearTimeout(t.id);
+    t.remaining = Math.max(0, t.remaining - (Date.now() - t.startedAt));
+    t.id = null;
+  };
+  const resume = () => {
+    const t = toastTimers.get(toast);
+    if (!t || t.id !== null) return;
+    t.startedAt = Date.now();
+    t.id = window.setTimeout(fire, t.remaining);
+  };
+  toast.addEventListener("mouseenter", pause);
+  toast.addEventListener("mouseleave", resume);
+  toast.addEventListener("focusin", pause);
+  toast.addEventListener("focusout", resume);
+}
+
+function showToast({ tone, title, msg = "", timeout }: ToastOpts) {
+  const stack = $("#toast-stack");
+  const tpl = $<HTMLTemplateElement>("#toast-template");
+  const node = tpl.content.firstElementChild!.cloneNode(true) as HTMLElement;
+  node.classList.add(`toast--${tone}`);
+  // Errors interrupt (role=alert); success/neutral are polite (role=status).
+  node.setAttribute("role", tone === "error" ? "alert" : "status");
+  node.querySelector<HTMLElement>(".toast-title")!.textContent = title;
+  node.querySelector<HTMLElement>(".toast-msg")!.textContent = msg;
+  const close = node.querySelector<HTMLButtonElement>(".toast-close")!;
+  close.addEventListener("click", () => removeToast(node));
+  // Newest first (prepend). The stack is column-reverse so this reads as
+  // stacking upward from the bottom-right corner.
+  stack.prepend(node);
+
+  // Eviction: at most TOAST_MAX visible. Never silently drop an error — evict
+  // the oldest success/neutral first; if everything visible is an error, keep
+  // them all rather than losing evidence. Overflow eviction is synchronous:
+  // using the animated remover here would leave the victim in the DOM during
+  // this loop, repeatedly select it, and block the UI thread forever.
+  const toasts = () => [...stack.querySelectorAll<HTMLElement>(".toast")];
+  while (toasts().length > TOAST_MAX) {
+    const all = toasts();
+    const evictable = all.filter((t) => !t.classList.contains("toast--error"));
+    if (evictable.length === 0) break; // all errors — keep them
+    dropToastNow(evictable[evictable.length - 1]); // oldest non-error (bottom of DOM)
+  }
+
+  // Run the entry transition on the next frame (after layout picks up the
+  // initial opacity:0/translateX). Final state is toast-in = opacity:1.
+  requestAnimationFrame(() => node.classList.add("toast-in"));
+
+  // Errors are persistent; success/neutral auto-dismiss (pausable on hover/focus).
+  const ms = timeout ?? (tone === "error" ? 0 : SUCCESS_TOAST_MS);
+  if (ms > 0) armToastTimer(node, ms);
+}
+
 async function driveBackup() {
   if (drivePending || googleAccount === null) return;
   const pass = await passphrasePrompt(
@@ -507,9 +615,13 @@ async function driveBackup() {
   setDriveStatus("Encrypting and uploading…");
   try {
     const res = await invoke<BackupResult>("drive_backup", { passphrase: pass });
-    setDriveStatus(`Backed up ${res.name} (${res.bytes} bytes).`, "ok");
+    // Terminal outcome -> durable shell toast (survives the popover closing).
+    // Clear the inline progress line so it does not double the message.
+    setDriveStatus("");
+    showToast({ tone: "ok", title: "Backup complete", msg: `Backed up ${res.name} (${res.bytes} bytes).` });
   } catch (e) {
-    setDriveStatus(`Backup failed: ${msg(e)}`, "error");
+    setDriveStatus("");
+    showToast({ tone: "error", title: "Backup failed", msg: msg(e) });
   } finally {
     setDriveBusy(false);
   }
@@ -523,7 +635,15 @@ async function driveRestore() {
   try {
     const backups = await invoke<BackupMeta[]>("drive_list_backups");
     if (backups.length === 0) {
-      setDriveStatus("No backups found on Drive.", "error");
+      // Neutral empty state, not an error (nano lock #5): persistent info toast
+      // so the user can read it; copy is locked.
+      setDriveStatus("");
+      showToast({
+        tone: "info",
+        title: "Nothing to restore",
+        msg: "No backups on Drive yet. Back up first to enable restore.",
+        timeout: 0,
+      });
       setDriveBusy(false);
       return;
     }
@@ -548,12 +668,15 @@ async function driveRestore() {
     if (pass === null) { setDriveBusy(false); return; }
     setDriveStatus("Downloading and decrypting…");
     const res = await invoke<RestoreResult>("drive_restore", { fileId, passphrase: pass });
-    setDriveStatus(
-      `Restored ${res.restored.length} file(s). Previous files saved to ${res.pre_restore_dir}.`,
-      "ok",
-    );
+    setDriveStatus("");
+    showToast({
+      tone: "ok",
+      title: "Restore complete",
+      msg: `Restored ${res.restored.length} file(s). Previous files saved to ${res.pre_restore_dir}.`,
+    });
   } catch (e) {
-    setDriveStatus(`Restore failed: ${msg(e)}`, "error");
+    setDriveStatus("");
+    showToast({ tone: "error", title: "Restore failed", msg: msg(e) });
   } finally {
     setDriveBusy(false);
   }
@@ -594,6 +717,10 @@ function initGoogleAccount() {
   window.addEventListener("keydown", (event) => {
     const popover = $("#signin-popover");
     if (popover.hidden) return;
+    // When an overlay (e.g. the passphrase dialog) is open over the popover, the
+    // overlay owns Tab and Escape (nano lock #4). The popover must not also close
+    // on Escape or it would hide the drive button before focus is restored to it.
+    if (overlayStack.length > 0) return;
     if (event.key === "Tab") cycleFocusWithin(popover, event);
     else if (event.key === "Escape") {
       event.preventDefault();
@@ -609,6 +736,9 @@ let dialogResolve: ((id: string) => void) | null = null;
 let dialogEscapeId = "cancel";
 // Set while the passphrase dialog is open; Escape invokes it (= cancel).
 let passDialogResolve: (() => void) | null = null;
+// Pending pass-dialog exit-transition fallback timer (reduced-motion never
+// fires transitionend); cleared on reopen so it cannot re-hide a live dialog.
+let passDialogExitTimer: number | null = null;
 
 function focusables(root: HTMLElement): HTMLElement[] {
   return [...root.querySelectorAll<HTMLElement>("button, input, textarea, select")].filter(
@@ -655,6 +785,18 @@ function openOverlay(sel: string, focusTarget?: HTMLElement) {
     if (overlayStack.length === 1) $("#app").setAttribute("inert", "");
   }
   el.classList.remove("hidden");
+  // Scoped fade+lift entry for the passphrase overlay only (nano lock #2): the
+  // display flip lands first, then .ov-enter runs the 120ms transition on the
+  // next frame. A stale pending close timer is cleared so a rapid reopen does
+  // not re-hide the dialog mid-entry.
+  if (el.id === "pass-dialog") {
+    if (passDialogExitTimer !== null) { clearTimeout(passDialogExitTimer); passDialogExitTimer = null; }
+    el.classList.remove("ov-enter");
+    requestAnimationFrame(() => {
+      // Guard: only animate in if the overlay is still open this frame.
+      if (!el.classList.contains("hidden")) el.classList.add("ov-enter");
+    });
+  }
   if (!overlayKeydown) {
     overlayKeydown = (ev) => {
       const top = overlayStack[overlayStack.length - 1];
@@ -674,16 +816,36 @@ function openOverlay(sel: string, focusTarget?: HTMLElement) {
 
 function closeOverlay(sel: string) {
   const el = $(sel);
-  el.classList.add("hidden");
   const i = overlayStack.findIndex((o) => o.el === el);
-  if (i === -1) return;
+  if (i === -1) { el.classList.add("hidden"); return; }
   const [closed] = overlayStack.splice(i, 1);
+  // Stack bookkeeping, inert release, and focus restore happen now so the exit
+  // animation never races focus restoration (spec §2.1).
   if (overlayStack.length === 0) {
     window.removeEventListener("keydown", overlayKeydown as (ev: KeyboardEvent) => void);
     overlayKeydown = null;
     $("#app").removeAttribute("inert");
   }
-  closed.restore?.focus();
+  if (el.id === "pass-dialog") {
+    // Fade out, then reapply .hidden. Under reduced motion transitionend may not
+    // fire, so a 140ms fallback timer reapplies .hidden deterministically. Focus
+    // is restored once the dialog is actually hidden so the still-fixed scrim
+    // cannot swallow it — deterministic, so it never races the exit (spec §2.1).
+    el.classList.remove("ov-enter");
+    let hidden = false;
+    const hide = () => {
+      if (hidden) return;
+      hidden = true;
+      if (passDialogExitTimer !== null) { clearTimeout(passDialogExitTimer); passDialogExitTimer = null; }
+      el.classList.add("hidden");
+      closed.restore?.focus();
+    };
+    el.addEventListener("transitionend", hide, { once: true });
+    passDialogExitTimer = window.setTimeout(hide, 140);
+  } else {
+    el.classList.add("hidden");
+    closed.restore?.focus();
+  }
 }
 
 type DialogAction = { label: string; id: string; style?: "primary" | "danger" | "default" };
