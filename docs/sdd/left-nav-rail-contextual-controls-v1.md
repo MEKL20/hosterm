@@ -95,7 +95,7 @@ Ownership table (who renders, who owns state):
 | Navigation rail | `#nav-rail` | 3 rail items + account control | — (static shell) |
 | Rail item | `button.rail-item[data-view]` | icon + accessible label | `activeSection` (§3) via `aria-current` |
 | Account control | `#user-chip` (moved to `.rail-foot`) | signed-out/in chip via existing templates | `googleAccount` (existing) |
-| Account popover | `#signin-popover` (re-anchored) | existing sign-in/Drive/sign-out + **Settings item** | overlay stack + `googleAccount` |
+| Account popover | `#signin-popover` (re-anchored) | existing sign-in/Drive/sign-out + **Settings item** | non-modal popover (NOT `overlayStack`) + `googleAccount` |
 | Section panel | `#section-panel` | active section body + scoped controls | `activeSection` + panel-collapsed flag |
 | Panel head | `.panel-head` | brand + `#btn-add` | visibility derived from `activeSection` |
 | Host controls | `.panel-host-controls` | `#btn-raw`/`#btn-local`/`#btn-reload` | visibility derived from `activeSection` |
@@ -251,34 +251,43 @@ error copy is **byte-identical** to today (AC-M4) — no copy touched.
 
 ### 6.3 Popover anchoring, outside-click, Escape, focus trap/restore (AC-M2, AC-M6)
 
-The account popover reuses the existing dismissal wiring (main.ts `initGoogleAccount` L562-594):
+The account popover is a **non-modal menu** and MUST NOT use `overlayStack`/`openOverlay`/
+`closeOverlay`. This is forced by live code: `openOverlay` sets `inert` on all of `#app` when the
+stack goes from empty to one (main.ts L627). `#signin-popover` lives inside `.rail-foot` → `#nav-rail`
+→ `#app`, so routing it through `openOverlay` would make the popover **itself** inert — breaking the
+mandated focus trap and every click inside the menu. The shared modal stack is therefore the wrong
+tool here; the account popover keeps its own non-modal open/close path (evolving `initGoogleAccount`
+L562-594), and `#app` is **never** made inert for this popover.
+
+Design (ADR-NAV-1, frozen — one design, no fallback):
+
 - **Anchor:** popover anchors to `#user-chip` at the rail bottom. Because the chip moves from the
   footer to `.rail-foot`, the popover's CSS position changes from "above the footer chip" to
   "to the right of / above the rail-bottom chip" — purpose: stay on-screen when the chip sits at
   bottom-left (R5). Positioning is CSS-only; no JS geometry math (keep it simple).
-- **Open:** chip click toggles `#signin-popover.hidden` via existing `setGooglePopover` path.
-- **Outside-click close:** existing document click handler (L582-588) — close when the target is
-  outside both chip and popover. Preserved verbatim.
-- **Escape close + restore:** existing keydown handler (L589-593) closes and the chip regains focus.
-  Preserved. The popover keeps `role="dialog"` + `aria-labelledby` (L86).
-- **Focus trap:** the account popover is NOT currently in `overlayStack` (it uses its own handlers,
-  not `openOverlay`). To satisfy AC-M2 (focus trapped inside) and AC-M6 (restore to the account
-  control), the SDD mandates routing the popover through the shared `openOverlay`/`closeOverlay`
-  stack (main.ts L623-671) OR replicating its Tab-cycle + restore behavior. **Decision
-  (ADR-NAV-1):** route the account popover through `openOverlay("#signin-popover", firstItem)` /
-  `closeOverlay("#signin-popover")` so it inherits the proven focus trap, `inert` backdrop, Escape,
-  and focus-restore — adding an `onOverlayEscape` arm for `#signin-popover`. This replaces the
-  bespoke chip Escape/outside-click handlers with the one shared overlay contract, removing a second
-  focus-management code path (anti-duplication). Outside-click close is re-added as a popover-
-  specific listener registered on open and removed on close (the shared stack does not do outside-
-  click; it uses `inert`, but the account popover is a non-modal menu so outside-click is kept).
+- **Open:** chip click toggles `#signin-popover.hidden` via the existing `setGooglePopover` path.
+  Opening never pushes `overlayStack` and never sets `inert` on `#app`.
+- **Shared focus-trap helper (anti-duplication):** the Tab-cycle algorithm currently inlined in
+  `overlayKeydown` (main.ts L637-651) is extracted into one reusable helper, e.g.
+  `cycleFocusWithin(root: HTMLElement, ev: KeyboardEvent)`, which wraps Tab/Shift+Tab focus within
+  `focusables(root)`. `overlayKeydown` calls `cycleFocusWithin(top.el, ev)` and the account-popover
+  keydown handler calls `cycleFocusWithin($("#signin-popover"), ev)`. There is exactly **one**
+  focus-trap algorithm, reused — not a second or third copy.
+- **One init-time keydown handler:** the account popover registers a **single** keydown handler at
+  init (inside `initGoogleAccount`), NOT per open — so there is no listener registered/leaked on each
+  open. While the popover is open (`!#signin-popover.hidden`): Tab calls `cycleFocusWithin` to trap
+  focus inside the popover (AC-M2); Escape closes the popover and restores focus to `#user-chip`
+  (AC-M6). While the popover is closed the handler is a no-op (guards on the `.hidden` state).
+- **Outside-click close:** the existing document click handler (L582-588) is preserved — close when
+  the target is outside both the chip and the popover. It is registered once (not per open, no leak)
+  and restores focus only where appropriate (a click into the rest of the app moves focus to the
+  clicked target, so the handler does not force focus back to `#user-chip` on outside-click; focus is
+  restored to `#user-chip` only on the Escape path, which has no other focus target).
+- The popover keeps `role="dialog"` + `aria-labelledby` (index.html L86).
 
-> Implementation note for lead/QA: whichever path is chosen, the acceptance bar is AC-M2 + AC-M6:
-> Tab stays inside the open popover, Escape closes and restores focus to `#user-chip`, outside-click
-> closes. ADR-NAV-1 recommends the shared stack; if the shared stack's `inert` backdrop conflicts
-> with the non-modal menu feel, the fallback is to keep the bespoke handlers but ADD a Tab-cycle
-> trap mirroring L637-651. Either way, there must be exactly one focus-trap implementation reused,
-> not a third copy.
+Acceptance bar (AC-M2 + AC-M6): Tab stays inside the open popover, Escape closes and restores focus to
+`#user-chip`, outside-click closes. There is no `inert` on `#app` for this popover and no second
+focus-trap implementation.
 
 ---
 
@@ -303,9 +312,14 @@ Semantics:
   panel control. The current `.sb-nav:focus-visible { outline:none; border-color }` pattern is
   **replaced** by the global `:focus-visible` ring to avoid a removed-indicator-without-replacement
   regression on the new rail items (R-32 hard gate).
-- Within the open account menu, Tab cycles inside the popover only (§6.3).
-- Ctrl+K (host search focus) stays gated on `overlayStack.length === 0` (existing L3932) and on
+- Within the open account menu, Tab cycles inside the popover only, via the shared
+  `cycleFocusWithin` helper (§6.3); the account popover is non-modal and is NOT on `overlayStack`.
+- Ctrl+K (host search focus) is gated on **all three**: `overlayStack.length === 0` (no modal open,
+  existing L3932) **AND** the account popover is closed (`#signin-popover` has `.hidden`) **AND**
   `activeSection === "host"` (AC-H5: it focuses `#host-search`, which only exists/visible on Hosts).
+  The popover-closed clause is required precisely because the non-modal popover never enters
+  `overlayStack`, so the `overlayStack.length === 0` check alone would not suppress Ctrl+K while the
+  account menu is open.
 
 ---
 
@@ -399,14 +413,14 @@ below (smoke counts may only grow, AGENTS.md §4). CSP-violation counter stays 0
 | AC-H2 host search+list | smoke: `#host-search` + `#host-list` present in panel on Hosts. |
 | AC-H3 brand + Add host | smoke: `.panel-head` text `hosterm`, `#btn-add` present + opens editor (existing). |
 | AC-H4 raw/local/reload shown + behavior | smoke: all three present on Hosts; click-through invokes existing mock paths. |
-| AC-H5 Ctrl+K focuses search | smoke: dispatch Ctrl+K with overlayStack empty on Hosts → `#host-search` focused. |
+| AC-H5 Ctrl+K focuses search | smoke: on Hosts with `overlayStack` empty AND account popover closed, Ctrl+K → `#host-search` focused; AND Ctrl+K is a no-op while the account popover is open (§7 gate). |
 | AC-H6 error/empty states | smoke: reuse existing host-list error/empty fixtures (`boom`/`empty`) inside the panel. |
 | AC-K1 keys content only | smoke: on Keys, `#sb-keys-list`/`#sb-keys-add` present. |
 | AC-K2 no host controls focusable | smoke: on Keys, `#btn-add`/`#btn-raw`/`#btn-local`/`#btn-reload` **not present as focusable** (query focusables, assert absent). |
 | AC-K3 aria-current Keys | smoke: Keys `.rail-item[aria-current="page"]`, exactly one current. |
 | AC-A1/A2/A3 Ansible | smoke: mirror K1/K2/K3 for Ansible (`#sb-ansible-open` present; host controls not focusable; aria-current). |
 | AC-M1 account control at rail bottom | smoke: `#user-chip` is a descendant of `.rail-foot` inside `#nav-rail`. |
-| AC-M2 menu opens, focus trapped | smoke: activate chip → popover open, Tab stays inside popover. |
+| AC-M2 menu opens, focus trapped | smoke: activate chip → popover open, `#app` NOT `inert`, `overlayStack` length 0, Tab stays inside popover (shared `cycleFocusWithin`). |
 | AC-M3 signed-out items | smoke: signed-out → `#signin-btn` + `#acct-settings-btn` present. |
 | AC-M4 signed-in items + Drive copy | smoke: signed-in (mock `googleAccount`) → backup/restore/signout/settings present; Drive status copy byte-identical. |
 | AC-M5 Settings in both states | smoke: click `#acct-settings-btn` signed-out AND signed-in → Settings panel opens. |
@@ -449,12 +463,22 @@ Settings) — no new harness. The migration rewrites old checks that asserted th
 
 ### ADRs
 
-- **ADR-NAV-1 — Account popover uses the shared overlay stack.** The rail-bottom account popover
-  routes through `openOverlay`/`closeOverlay` (main.ts L623-671) to inherit one proven focus trap +
-  Escape + restore, plus a popover-scoped outside-click listener registered on open / removed on
-  close. Rationale: avoid a second focus-management code path; satisfy AC-M2/AC-M6 with the existing
-  contract. Fallback (if the `inert` backdrop conflicts with the non-modal menu): keep bespoke
-  handlers but reuse a single Tab-cycle trap — never a third copy (§6.3).
+- **ADR-NAV-1 — Account popover is a non-modal path, NOT the shared overlay stack (frozen, no
+  fallback).** `#signin-popover` stays inside `.rail-foot`/`#nav-rail`/`#app` and is never passed to
+  `openOverlay`/`closeOverlay`. Forcing reason: `openOverlay` sets `inert` on `#app` (main.ts L627);
+  because the popover is a descendant of `#app`, the shared stack would inert the popover itself and
+  kill the mandated focus trap and in-menu clicks. Design: (1) the popover keeps its own non-modal
+  open/close (`setGooglePopover`, `initGoogleAccount` L562-594) and `#app` is never made inert for
+  it; (2) the Tab-cycle algorithm in `overlayKeydown` (L637-651) is extracted into one reusable
+  helper `cycleFocusWithin(root, ev)` that BOTH `overlayKeydown` and the account-popover keydown
+  handler call — exactly one focus-trap algorithm, not a second/third copy; (3) the popover has ONE
+  init-time keydown handler (not per open): while open, Tab → `cycleFocusWithin($("#signin-popover"))`
+  traps focus (AC-M2); Escape closes and restores focus to `#user-chip` (AC-M6); (4) the existing
+  outside-click close stays, registered once (no per-open listener, no leak), and restores focus only
+  where appropriate (Escape restores to `#user-chip`; outside-click lets focus follow the clicked
+  target); (5) Ctrl+K requires `overlayStack.length === 0` AND popover closed AND Hosts (§7).
+  Rationale: a single frozen non-modal design satisfies AC-M2/AC-M6 without the `inert` self-defeat
+  and without duplicating the focus trap. There is no "whichever path" fallback.
 - **ADR-NAV-2 — Section-scoped controls hide via `display:none`, never a tabbable technique.**
   `#btn-add` and host controls are removed from layout (class/attr toggling `display:none`) when not
   Hosts, which removes them from the tab order by spec. `visibility:hidden`/`opacity:0`/off-screen
