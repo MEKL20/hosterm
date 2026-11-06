@@ -8,6 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Windows releases are currently **unsigned** (Authenticode signing postponed —
 see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
+## [0.14.2] - 2026-11-07
+
+### Added
+- Backup, restore, and empty-Drive outcomes now appear as accessible shell-level
+  toasts that remain visible after the Google account menu closes.
+- The signed-in account menu now has a clearer identity row and grouped Google
+  Drive actions while preserving the Dusk visual system.
+
+### Fixed
+- Google sign-in no longer reports success when the authorization exchange omits
+  a durable refresh token. It now fails before presenting an account and gives
+  actionable re-authorization guidance instead of letting the first Drive action
+  fail as “not signed in.”
+- The backup passphrase prompt is now a fixed, smoothly animated overlay, so it
+  no longer displaces the rail, section panel, or workspace.
+- Toast overflow eviction is synchronous, preventing a fourth notification from
+  hanging the UI while retaining persistent error evidence.
+
+### Security
+- OAuth remains PKCE S256 with state validation, a loopback-only single-shot
+  listener, `drive.file` scope, OS-keyring refresh-token storage, and no token
+  logging. Dynamic account and Drive messages continue to render as inert text.
+
 ## [0.14.1] - 2026-11-07
 
 ### Fixed
