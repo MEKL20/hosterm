@@ -2337,6 +2337,16 @@ await page.keyboard.press("Control+k");
 check("NAV RAIL: Ctrl+K is blocked while account menu is open",
   await page.evaluate(() => document.activeElement?.id === "signin-btn"));
 
+await page.locator("#tabbar").click();
+const accountOutsideClosed = await page.evaluate(() => ({
+  hidden: document.getElementById("signin-popover").hidden,
+  expanded: document.getElementById("user-chip").getAttribute("aria-expanded"),
+}));
+check("NAV RAIL: outside click closes account menu",
+  accountOutsideClosed.hidden && accountOutsideClosed.expanded === "false",
+  JSON.stringify(accountOutsideClosed));
+await page.locator("#user-chip").click();
+
 // Real sign-in: the 40ms mock delay lets us observe the pending state before
 // the account resolves (signed-out → pending → signed-in).
 const googleSigninCallsBefore = calls.length;
