@@ -958,6 +958,23 @@ mod tests {
     }
 
     #[test]
+    fn manifest_enables_native_windows_keyring() {
+        // keyring 3.x has no default platform features. If windows-native is
+        // removed, Windows silently compiles with the mock credential store:
+        // set_password succeeds on one Entry, then a new Entry reads NoEntry.
+        // Keep this manifest-level regression guard runnable on every host.
+        let manifest = include_str!("../Cargo.toml");
+        let dependency = manifest
+            .lines()
+            .find(|line| line.trim_start().starts_with("keyring ="))
+            .expect("keyring dependency must remain declared");
+        assert!(
+            dependency.contains("\"windows-native\""),
+            "Windows builds must use Credential Manager, never keyring's mock store"
+        );
+    }
+
+    #[test]
     fn durable_refresh_rejects_empty_refresh_token() {
         // An empty string is not a usable token; treat it like None.
         let err = durable_refresh_or_error(Some(String::new())).unwrap_err();

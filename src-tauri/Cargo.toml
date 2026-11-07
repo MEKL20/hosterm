@@ -1,6 +1,6 @@
 [package]
 name = "hosterm"
-version = "0.14.2"
+version = "0.14.3"
 description = "SSH client desktop, source of truth = ~/.ssh/config"
 authors = ["MEKL20"]
 edition = "2021"
@@ -21,7 +21,10 @@ portable-pty = "0.8"
 dirs = "5"
 # Google OAuth (BE-OAUTH, TSD §1 — EXACT pins, rustls-only, vetted publishers).
 reqwest = { version = "=0.12.9", default-features = false, features = ["rustls-tls", "json", "blocking"] }
-keyring = { version = "=3.6.3", features = ["sync-secret-service", "crypto-rust"] }
+# keyring has no default platform backends. Without windows-native a Windows
+# build silently falls back to its per-Entry mock store, so OAuth appears to
+# succeed but the next Drive call cannot read the saved refresh token.
+keyring = { version = "=3.6.3", features = ["sync-secret-service", "crypto-rust", "windows-native"] }
 sha2 = "=0.10.9"
 base64 = "=0.22.1"
 rand = "=0.8.5"

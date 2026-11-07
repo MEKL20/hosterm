@@ -464,6 +464,18 @@ body.panel-collapsed #sb-resize { display: none; }
   border: 1px solid var(--border); border-radius: 4px; font-size: 13px;
 }
 .pass-confirm-row[hidden] { display: none; }
+/* Reveal toggle: a quiet text control under the fields, right-aligned so it
+   reads as a secondary affordance to the inputs above it, not a primary action.
+   Dusk --dim ink keeps it below the Back up / Restore CTA in the actions row;
+   --accent only on focus, matching the toast-close focus treatment. */
+.pass-reveal {
+  display: block; margin: 8px 0 0 auto; padding: 2px 4px;
+  background: none; border: 0; cursor: pointer;
+  font-size: 11.5px; color: var(--dim);
+}
+.pass-reveal:hover { color: var(--text); }
+.pass-reveal:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+.pass-reveal[aria-pressed="true"] { color: var(--text); }
 .pass-error { margin-top: 8px; font-size: 11.5px; color: var(--danger); }
 .pass-error[hidden] { display: none; }
 

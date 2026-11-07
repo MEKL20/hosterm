@@ -2541,6 +2541,64 @@ check("FE-FIX F-1: shell (app/rail/panel) does not move between closed and open"
 check("FE-FIX F-1: shell inert + initial focus on the passphrase input",
   passGeo.appInert && passGeo.focused === "pass-input");
 
+// -- FE-FIX t_058b9aee: Show/Hide passphrase reveal toggle (backup = both fields) --
+// Opens masked with aria-pressed=false; toggling unmasks the active field AND
+// the confirm field together, flips aria-pressed and the label; the control is
+// keyboard-focusable. Plaintext stays confined to the inputs (type attr only).
+const revealClosed = await page.evaluate(() => {
+  const btn = document.getElementById("pass-reveal");
+  return {
+    pressed: btn.getAttribute("aria-pressed"),
+    label: btn.textContent.trim(),
+    inputType: document.getElementById("pass-input").type,
+    confirmType: document.getElementById("pass-confirm").type,
+  };
+});
+check("FE-FIX t_058b9aee: reveal opens masked — aria-pressed=false, label 'Show passphrase', both fields type=password",
+  revealClosed.pressed === "false" && revealClosed.label === "Show passphrase" &&
+  revealClosed.inputType === "password" && revealClosed.confirmType === "password",
+  JSON.stringify(revealClosed));
+await page.locator("#pass-input").fill("reveal-me");
+await page.locator("#pass-confirm").fill("reveal-me");
+await page.locator("#pass-reveal").focus();
+const revealFocusable = await page.evaluate(() => document.activeElement?.id === "pass-reveal");
+check("FE-FIX t_058b9aee: reveal button is keyboard-focusable", revealFocusable);
+await page.keyboard.press("Enter"); // keyboard-operate the toggle
+await page.waitForTimeout(40);
+const revealOn = await page.evaluate(() => {
+  const btn = document.getElementById("pass-reveal");
+  const inp = document.getElementById("pass-input");
+  const conf = document.getElementById("pass-confirm");
+  return {
+    pressed: btn.getAttribute("aria-pressed"),
+    label: btn.textContent.trim(),
+    inputType: inp.type, confirmType: conf.type,
+    inputVal: inp.value, confirmVal: conf.value, // plaintext still only in the inputs
+  };
+});
+check("FE-FIX t_058b9aee: toggling reveal unmasks BOTH fields (type=text), aria-pressed=true, label 'Hide passphrase'",
+  revealOn.pressed === "true" && revealOn.label === "Hide passphrase" &&
+  revealOn.inputType === "text" && revealOn.confirmType === "text" &&
+  revealOn.inputVal === "reveal-me" && revealOn.confirmVal === "reveal-me",
+  JSON.stringify(revealOn));
+await page.locator("#pass-reveal").click(); // toggle back to masked
+await page.waitForTimeout(40);
+const revealOff = await page.evaluate(() => {
+  const btn = document.getElementById("pass-reveal");
+  return {
+    pressed: btn.getAttribute("aria-pressed"), label: btn.textContent.trim(),
+    inputType: document.getElementById("pass-input").type,
+    confirmType: document.getElementById("pass-confirm").type,
+  };
+});
+check("FE-FIX t_058b9aee: toggling reveal again re-masks both fields (type=password), aria-pressed=false",
+  revealOff.pressed === "false" && revealOff.label === "Show passphrase" &&
+  revealOff.inputType === "password" && revealOff.confirmType === "password",
+  JSON.stringify(revealOff));
+// Restore the pre-reveal-test precondition: focus back on the passphrase input
+// so the Escape focus-restore check below starts from the dialog's initial state.
+await page.locator("#pass-input").focus();
+
 // Enter a value, assert Escape cancels, restores Backup-button focus, wipes inputs.
 await page.evaluate(() => {
   document.getElementById("pass-input").value = "secretpass";
@@ -2676,7 +2734,9 @@ await page.waitForTimeout(220);
 check("FE-FIX §2.3: Enter on the close button dismisses the success toast",
   (await page.locator("#toast-stack .toast").count()) === 0);
 
-// backup failure -> persistent role=alert --error toast (close-only).
+// backup failure -> role=alert --error toast that AUTO-DISMISSES at 5000ms
+// (t_058b9aee: the Drive backup/restore terminal outcome must not require a
+// click; the close button remains only as an early-dismiss affordance).
 driveBackupFail = true;
 await ensureDrive();
 await page.locator("#drive-backup-btn").click();
@@ -2692,25 +2752,24 @@ check("FE-FIX ADR-8: hostile error text renders inert in the toast (0 child node
   toasts[0].msg === DRIVE_ERR && toasts[0].msgKids === 0 &&
   (await page.evaluate(() => typeof window.__pwn === "undefined")),
   JSON.stringify(toasts[0]));
-// Error is persistent (no auto-dismiss timer armed at all). A short real-time
-// sample only shows it has not vanished immediately; the authoritative proof
-// that it outlives the full 5000ms success window is the deterministic
-// fake-clock check below (clockPage), which fast-forwards past 5s.
+// A short real-time sample only shows it has not vanished immediately; the
+// authoritative proof that it auto-closes at the 5000ms boundary is the
+// deterministic fake-clock check below (clockPage), which fast-forwards past 5s.
 await page.waitForTimeout(600);
-check("FE-FIX §2.3: error toast is still present shortly after creation (600ms real-time sample)",
+check("FE-FIX t_058b9aee: backup error toast is still present shortly after creation (600ms real-time sample)",
   (await page.locator("#toast-stack .toast--error").count()) === 1);
-driveBackupFail = false;
-
-// -- FE-FIX 5: restore success/failure + neutral no-backups map to the right toast role/copy --
 // No close control on error other than the close button (close-only, no 'Try again').
 check("FE-FIX nano-lock #3: error toast has no retry/action control, only the close button",
   await page.evaluate(() => {
     const t = document.querySelector("#toast-stack .toast--error");
     return t && t.querySelectorAll("button").length === 1 && t.querySelector(".toast-close") !== null;
   }));
-// Clear the standing error so the stack is clean for the restore checks.
-await page.locator("#toast-stack .toast--error .toast-close").click();
+// Early dismiss via the close button still works; clear it for the restore checks.
+await page.locator("#toast-stack .toast--error .toast-close").first().click();
 await page.waitForTimeout(200);
+driveBackupFail = false;
+
+// -- FE-FIX 5: restore success/failure + neutral no-backups map to the right toast role/copy --
 
 driveListMode = "empty";
 await ensureDrive();
@@ -2731,6 +2790,15 @@ driveRestoreFail = false;
 await ensureDrive();
 await page.locator("#drive-restore-btn").click();
 await page.locator("#pass-dialog:not(.hidden)").waitFor({ timeout: 2000 });
+// Reset-to-masked on every open: a later prompt opens masked regardless of the
+// reveal state a prior prompt was left in (t_058b9aee).
+const reopenReveal = await page.evaluate(() => ({
+  pressed: document.getElementById("pass-reveal").getAttribute("aria-pressed"),
+  inputType: document.getElementById("pass-input").type,
+}));
+check("FE-FIX t_058b9aee: a later passphrase prompt opens masked (reveal reset to aria-pressed=false, type=password)",
+  reopenReveal.pressed === "false" && reopenReveal.inputType === "password",
+  JSON.stringify(reopenReveal));
 await page.locator("#pass-input").fill("restorepw");
 await page.locator("#pass-ok").click();
 await page.waitForTimeout(140);
@@ -2749,23 +2817,22 @@ await page.locator("#pass-input").fill("restorepw");
 await page.locator("#pass-ok").click();
 await page.waitForTimeout(140);
 toasts = await toastInfo();
-check("FE-FIX §2.3: restore failure raises a persistent role=alert --error toast",
+check("FE-FIX t_058b9aee: restore failure raises a role=alert --error toast (auto-dismiss at 5000ms)",
   toasts.length === 1 && toasts[0].role === "alert" && toasts[0].error && toasts[0].title === "Restore failed",
   JSON.stringify(toasts));
 await page.locator("#toast-stack .toast-close").first().click();
 await page.waitForTimeout(200);
 driveRestoreFail = false;
 
-// -- FE-FIX 6: max-stack/eviction (newest-first, max 3, never drop an error) + no CSP violations --
-// Push an error, then three successes; the error must remain (4 arrive, max 3).
-driveBackupFail = true;
-await ensureDrive();
-await page.locator("#drive-backup-btn").click();
-await page.locator("#pass-input").fill("e1"); await page.locator("#pass-confirm").fill("e1");
-await page.locator("#pass-ok").click();
-await page.waitForTimeout(120);
+// -- FE-FIX 6: max-stack/eviction (newest-first, max 3) + no CSP violations --
+// Push four successes; the stack caps at TOAST_MAX=3, newest-first (prepend).
+// NB t_058b9aee: Drive toasts now all auto-dismiss at 5000ms, and a real-time
+// four-toast sequence spans >5s of dialog open/close latency, so the long-lived
+// "never evict an error" property can no longer be observed across a slow
+// real-time loop — it is proven deterministically on the fake-clock page below
+// (check (c): four simultaneous errors all preserved at creation, no silent drop).
 driveBackupFail = false;
-for (const p of ["s1", "s2", "s3"]) {
+for (const p of ["s1", "s2", "s3", "s4"]) {
   await ensureDrive();
   await page.locator("#drive-backup-btn").click();
   await page.locator("#pass-input").fill(p); await page.locator("#pass-confirm").fill(p);
@@ -2776,13 +2843,13 @@ const stackState = await page.evaluate(() => {
   const list = [...document.querySelectorAll("#toast-stack .toast")];
   return {
     count: list.length,
-    hasError: list.some((t) => t.classList.contains("toast--error")),
+    allOk: list.every((t) => t.classList.contains("toast--ok")),
     // newest-first: DOM-first node is the most recent (prepend)
     firstIsSuccess: list[0]?.classList.contains("toast--ok"),
   };
 });
-check("FE-FIX §2.3: stack caps at 3 visible, newest-first, and never evicts the error",
-  stackState.count === 3 && stackState.hasError && stackState.firstIsSuccess,
+check("FE-FIX §2.3: stack caps at 3 visible, newest-first (prepend)",
+  stackState.count === 3 && stackState.allOk && stackState.firstIsSuccess,
   JSON.stringify(stackState));
 const feFixCsp = await page.evaluate(() => window.__cspViolations || []);
 check("FE-FIX: toast surface carries no CSP violations (counter stays 0)",
@@ -2865,9 +2932,12 @@ const focusResumed = await clockToastCount();
 check("FE-FIX §2.3: keyboard focus pauses the success auto-dismiss (survives 8000ms held), resumes on blur",
   focusHeld === 1 && focusResumed === 0, JSON.stringify({ focusHeld, focusResumed }));
 
-// (c) more than three simultaneous errors are ALL preserved (never silently
-// dropped): with TOAST_MAX=3, four errors must all remain because eviction only
-// drops non-errors. Fast-forward past 5000ms to prove none auto-dismiss either.
+// (c) more than three simultaneous Drive-backup errors are ALL preserved at
+// creation (never silently dropped): with TOAST_MAX=3, four errors remain
+// because overflow eviction only drops non-errors. They then AUTO-DISMISS once
+// the 5000ms budget elapses (t_058b9aee: Drive backup/restore error toasts are
+// bounded like the success toasts; eviction and auto-dismiss are orthogonal —
+// eviction never silently drops an error, the timer closes it after 5s).
 await clockPage.evaluate(() => { document.querySelectorAll("#toast-stack .toast-close").forEach((b) => b.click()); });
 await clockPage.clock.runFor(300);
 driveBackupFail = true;
@@ -2880,11 +2950,11 @@ for (const pw of ["e1", "e2", "e3", "e4"]) {
   await clockPage.clock.runFor(80);
 }
 const fourErrorsImmediate = await clockPage.locator("#toast-stack .toast--error").count();
-await clockPage.clock.runFor(6000); // well past 5000ms — errors never auto-dismiss
-const fourErrorsPersist = await clockPage.locator("#toast-stack .toast--error").count();
-check("FE-FIX §2.3: four simultaneous errors are all preserved (no silent drop) and never auto-dismiss",
-  fourErrorsImmediate === 4 && fourErrorsPersist === 4,
-  JSON.stringify({ fourErrorsImmediate, fourErrorsPersist }));
+await clockPage.clock.runFor(6000); // well past 5000ms — bounded backup errors auto-dismiss
+const fourErrorsAfter = await clockPage.locator("#toast-stack .toast--error").count();
+check("FE-FIX t_058b9aee: four simultaneous backup errors are all preserved at creation (no silent drop), then auto-dismiss after 5000ms",
+  fourErrorsImmediate === 4 && fourErrorsAfter === 0,
+  JSON.stringify({ fourErrorsImmediate, fourErrorsAfter }));
 const clockCsp = await clockPage.evaluate(() => (window.__cspViolations || []).length);
 check("FE-FIX §2.3: fake-clock timer page raises no CSP violations", clockCsp === 0, String(clockCsp));
 driveBackupFail = false;

@@ -436,6 +436,7 @@ function passphrasePrompt(
     const input = $("#pass-input") as HTMLInputElement;
     const confirmRow = $("#pass-confirm-row");
     const confirmInput = $("#pass-confirm") as HTMLInputElement;
+    const revealBtn = $("#pass-reveal") as HTMLButtonElement;
     const err = $("#pass-error");
     input.value = "";
     confirmInput.value = "";
@@ -447,12 +448,29 @@ function passphrasePrompt(
     $("#pass-label").textContent = confirm ? "New passphrase" : "Passphrase";
     ($("#pass-ok") as HTMLButtonElement).textContent = okLabel;
 
+    // Always open masked: the reveal is opt-in per prompt, never sticky, so a
+    // passphrase is never unmasked by a prior session's choice. Toggling flips
+    // both the active field and (during backup) the confirm field together;
+    // the plaintext stays in the input and never leaves it.
+    const setRevealed = (on: boolean) => {
+      const type = on ? "text" : "password";
+      input.type = type;
+      confirmInput.type = type;
+      revealBtn.setAttribute("aria-pressed", String(on));
+      revealBtn.textContent = on ? "Hide passphrase" : "Show passphrase";
+    };
+    setRevealed(false);
+    const onReveal = () => setRevealed(revealBtn.getAttribute("aria-pressed") !== "true");
+
     const cleanup = () => {
-      // Wipe plaintext from the inputs before the nodes go back to hidden.
+      // Wipe plaintext from the inputs before the nodes go back to hidden, and
+      // re-mask so the next open starts hidden regardless of this choice.
       input.value = "";
       confirmInput.value = "";
+      setRevealed(false);
       okBtn.removeEventListener("click", onOk);
       cancelBtn.removeEventListener("click", onCancel);
+      revealBtn.removeEventListener("click", onReveal);
       input.removeEventListener("keydown", onKey);
       confirmInput.removeEventListener("keydown", onKey);
     };
@@ -485,6 +503,7 @@ function passphrasePrompt(
     const cancelBtn = $("#pass-cancel") as HTMLButtonElement;
     okBtn.addEventListener("click", onOk);
     cancelBtn.addEventListener("click", onCancel);
+    revealBtn.addEventListener("click", onReveal);
     input.addEventListener("keydown", onKey);
     confirmInput.addEventListener("keydown", onKey);
     passDialogResolve = onCancel;
@@ -621,7 +640,9 @@ async function driveBackup() {
     showToast({ tone: "ok", title: "Backup complete", msg: `Backed up ${res.name} (${res.bytes} bytes).` });
   } catch (e) {
     setDriveStatus("");
-    showToast({ tone: "error", title: "Backup failed", msg: msg(e) });
+    // Backup outcome toasts auto-dismiss at 5000ms so the user never has to
+    // click Close; the close button stays as an early-dismiss affordance.
+    showToast({ tone: "error", title: "Backup failed", msg: msg(e), timeout: SUCCESS_TOAST_MS });
   } finally {
     setDriveBusy(false);
   }
@@ -676,7 +697,9 @@ async function driveRestore() {
     });
   } catch (e) {
     setDriveStatus("");
-    showToast({ tone: "error", title: "Restore failed", msg: msg(e) });
+    // Restore outcome shares the 5000ms bounded lifetime (same helper), so the
+    // terminal failure auto-closes too; close button remains for early dismiss.
+    showToast({ tone: "error", title: "Restore failed", msg: msg(e), timeout: SUCCESS_TOAST_MS });
   } finally {
     setDriveBusy(false);
   }
@@ -710,6 +733,11 @@ function initGoogleAccount() {
   document.addEventListener("click", (event) => {
     const popover = $("#signin-popover");
     const target = event.target as Node;
+    // When an overlay (e.g. the passphrase dialog) is open over the popover, the
+    // overlay owns interaction (nano lock #4) — a click on an overlay control
+    // (the Show passphrase toggle) sits outside the popover but must NOT close
+    // it, or Escape's focus restore would target a hidden Backup button.
+    if (overlayStack.length > 0) return;
     if (!popover.hidden && !chip.contains(target) && !popover.contains(target)) {
       setGooglePopover(false);
     }
@@ -2306,7 +2334,7 @@ function refreshHostDots() {
 }
 
 // app version for the status bar; keep in sync with package.json / tauri.conf.json
-const APP_VERSION = "v0.14.2";
+const APP_VERSION = "v0.14.3";
 
 // status bar updater (§4.3): dipanggil dari activateTab (semua jenis tab),
 // openTerminal/splitTerminal/closeTab dan busy() SFTP.

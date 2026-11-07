@@ -453,6 +453,11 @@
           <input id="pass-confirm" class="pass-input" type="password" autocomplete="off"
                  spellcheck="false" aria-labelledby="pass-confirm-label" />
         </div>
+        <!-- Visibility toggle: unmasks the passphrase field(s) so a typo in a
+             value that is never echoed back can be caught. Defaults to masked
+             on every open/close (set in passphrasePrompt); aria-pressed carries
+             the state to assistive tech. Plaintext stays confined to the input. -->
+        <button id="pass-reveal" class="pass-reveal" type="button" aria-pressed="false">Show passphrase</button>
         <div id="pass-error" class="pass-error" role="alert" hidden></div>
         <div class="modal-actions">
           <button id="pass-cancel" type="button">Cancel</button>

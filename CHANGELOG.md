@@ -8,6 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Windows releases are currently **unsigned** (Authenticode signing postponed —
 see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
+## [0.14.3] - 2026-11-07
+
+### Added
+- Backup and restore passphrase prompts now include one keyboard-accessible
+  Show/Hide control. It reveals both backup fields together and always resets to
+  masked when the prompt closes or reopens.
+
+### Fixed
+- Windows Google sign-in now stores its refresh token in Windows Credential
+  Manager. Previous Windows builds omitted keyring's `windows-native` feature,
+  silently used a per-entry mock store, and therefore lost the token between
+  sign-in and the first Drive backup.
+- Backup and restore success or failure notifications now auto-close after five
+  seconds, while retaining the Close button for early dismissal.
+
+### Security
+- OAuth remains PKCE S256 with state validation, a loopback-only single-shot
+  listener, `drive.file` scope, CI-injected client credentials, OS-keyring
+  refresh-token storage, and no token logging. Passphrases remain ephemeral and
+  are wiped and re-masked when the prompt closes.
+
 ## [0.14.2] - 2026-11-07
 
 ### Added
