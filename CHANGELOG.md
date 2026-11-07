@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Windows releases are currently **unsigned** (Authenticode signing postponed —
 see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
+## [0.14.8] - 2026-11-07
+
+### Fixed
+- The restore backup chooser could open fully transparent (invisible) because
+  its new fade-in styling was applied but the entry animation was only ever
+  triggered for the passphrase dialog. The chooser now fades in and is visible.
+
 ## [0.14.7] - 2026-11-07
 
 ### Changed

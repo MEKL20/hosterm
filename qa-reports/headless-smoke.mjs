@@ -2854,6 +2854,19 @@ driveRestoreFail = false;
 await ensureDrive();
 await page.locator("#drive-restore-btn").click();
 await page.locator("#restore-dialog:not(.hidden)").waitFor({ timeout: 2000 });
+// v0.14.7 regression guard: #restore-dialog defaults to opacity:0 in CSS and
+// only becomes visible once openOverlay adds .ov-enter. A bug where the entry
+// class was pass-dialog-only left the picker present-but-invisible while still
+// passing :not(.hidden). Assert it is actually painted (opacity ~1, visible).
+await page.waitForTimeout(220); // let the 120ms fade-in settle
+const restoreVisible = await page.evaluate(() => {
+  const el = document.querySelector("#restore-dialog");
+  const cs = getComputedStyle(el);
+  return { opacity: Number(cs.opacity), display: cs.display, ovEnter: el.classList.contains("ov-enter") };
+});
+check("v0.14.7 regression: restore picker is actually visible (opacity ~1, not transparent)",
+  restoreVisible.opacity >= 0.99 && restoreVisible.display !== "none" && restoreVisible.ovEnter,
+  JSON.stringify(restoreVisible));
 await page.locator("#restore-ok").click();
 await page.locator("#pass-dialog:not(.hidden)").waitFor({ timeout: 2000 });
 // Reset-to-masked on every open: a later prompt opens masked regardless of the

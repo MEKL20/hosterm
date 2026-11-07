@@ -953,11 +953,12 @@ function openOverlay(sel: string, focusTarget?: HTMLElement) {
     if (overlayStack.length === 1) $("#app").setAttribute("inert", "");
   }
   el.classList.remove("hidden");
-  // Scoped fade+lift entry for the passphrase overlay only (nano lock #2): the
-  // display flip lands first, then .ov-enter runs the 120ms transition on the
-  // next frame. A stale pending close timer is cleared so a rapid reopen does
-  // not re-hide the dialog mid-entry.
-  if (el.id === "pass-dialog") {
+  // Scoped fade+lift entry for the animated overlays (nano lock #2): the display
+  // flip lands first, then .ov-enter runs the 120ms transition on the next
+  // frame. A stale pending close timer is cleared so a rapid reopen does not
+  // re-hide the dialog mid-entry. These dialogs default to opacity:0 in CSS, so
+  // they MUST gain .ov-enter here or they render invisible (v0.14.7 regression).
+  if (el.id === "pass-dialog" || el.id === "restore-dialog") {
     if (passDialogExitTimer !== null) { clearTimeout(passDialogExitTimer); passDialogExitTimer = null; }
     el.classList.remove("ov-enter");
     requestAnimationFrame(() => {
@@ -994,11 +995,13 @@ function closeOverlay(sel: string) {
     overlayKeydown = null;
     $("#app").removeAttribute("inert");
   }
-  if (el.id === "pass-dialog") {
+  if (el.id === "pass-dialog" || el.id === "restore-dialog") {
     // Fade out, then reapply .hidden. Under reduced motion transitionend may not
     // fire, so a 140ms fallback timer reapplies .hidden deterministically. Focus
     // is restored once the dialog is actually hidden so the still-fixed scrim
     // cannot swallow it — deterministic, so it never races the exit (spec §2.1).
+    // Stripping .ov-enter also returns the element to opacity:0 while hidden so
+    // the next open re-runs the entry transition cleanly.
     el.classList.remove("ov-enter");
     let hidden = false;
     const hide = () => {
@@ -2474,7 +2477,7 @@ function refreshHostDots() {
 }
 
 // app version for the status bar; keep in sync with package.json / tauri.conf.json
-const APP_VERSION = "v0.14.7";
+const APP_VERSION = "v0.14.8";
 
 // status bar updater (§4.3): dipanggil dari activateTab (semua jenis tab),
 // openTerminal/splitTerminal/closeTab dan busy() SFTP.
