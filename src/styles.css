@@ -458,24 +458,35 @@ body.panel-collapsed #sb-resize { display: none; }
 
 /* Passphrase dialog */
 .pass-label { display: block; margin: 8px 0 4px; font-size: 11.5px; color: var(--dim); }
+/* Field wrapper: positions the embedded eye over the input's trailing edge so
+   the reveal sits on the field it governs. position:relative anchors the
+   absolute eye; the input reserves right padding so masked bullets never slide
+   under the button. */
+.pass-field { position: relative; }
 .pass-input {
-  width: 100%; height: 32px; padding: 0 10px; box-sizing: border-box;
+  width: 100%; height: 32px; padding: 0 40px 0 10px; box-sizing: border-box;
   background: var(--bg); color: var(--text);
   border: 1px solid var(--border); border-radius: 4px; font-size: 13px;
 }
 .pass-confirm-row[hidden] { display: none; }
-/* Reveal toggle: a quiet text control under the fields, right-aligned so it
-   reads as a secondary affordance to the inputs above it, not a primary action.
-   Dusk --dim ink keeps it below the Back up / Restore CTA in the actions row;
-   --accent only on focus, matching the toast-close focus treatment. */
-.pass-reveal {
-  display: block; margin: 8px 0 0 auto; padding: 2px 4px;
-  background: none; border: 0; cursor: pointer;
-  font-size: 11.5px; color: var(--dim);
+/* Embedded eye toggle: a 32x32 tap target pinned to the field's right edge,
+   vertically centered. --dim ink reads as a secondary affordance inside the
+   field; --text on hover/revealed, --accent ring only on focus (matches the
+   toast-close focus treatment). The two SVGs occupy the same slot; aria-pressed
+   swaps which one shows, so no JS innerHTML is ever needed (ADR-8). */
+.pass-eye {
+  position: absolute; top: 50%; right: 4px; transform: translateY(-50%);
+  width: 32px; height: 32px; display: grid; place-items: center;
+  background: none; border: 0; cursor: pointer; color: var(--dim); padding: 0;
 }
-.pass-reveal:hover { color: var(--text); }
-.pass-reveal:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
-.pass-reveal[aria-pressed="true"] { color: var(--text); }
+.pass-eye:hover { color: var(--text); }
+.pass-eye:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
+.pass-eye[aria-pressed="true"] { color: var(--text); }
+/* Default (masked, aria-pressed=false): show the open eye, hide eye-off. When
+   revealed (aria-pressed=true) the pair swaps. Static markup, CSS-driven. */
+.pass-eye .eye-hide { display: none; }
+.pass-eye[aria-pressed="true"] .eye-show { display: none; }
+.pass-eye[aria-pressed="true"] .eye-hide { display: block; }
 .pass-error { margin-top: 8px; font-size: 11.5px; color: var(--danger); }
 .pass-error[hidden] { display: none; }
 

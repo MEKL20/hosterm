@@ -436,7 +436,8 @@ function passphrasePrompt(
     const input = $("#pass-input") as HTMLInputElement;
     const confirmRow = $("#pass-confirm-row");
     const confirmInput = $("#pass-confirm") as HTMLInputElement;
-    const revealBtn = $("#pass-reveal") as HTMLButtonElement;
+    const eyeBtn = $("#pass-eye") as HTMLButtonElement;
+    const confirmEyeBtn = $("#pass-confirm-eye") as HTMLButtonElement;
     const err = $("#pass-error");
     input.value = "";
     confirmInput.value = "";
@@ -448,29 +449,41 @@ function passphrasePrompt(
     $("#pass-label").textContent = confirm ? "New passphrase" : "Passphrase";
     ($("#pass-ok") as HTMLButtonElement).textContent = okLabel;
 
-    // Always open masked: the reveal is opt-in per prompt, never sticky, so a
-    // passphrase is never unmasked by a prior session's choice. Toggling flips
-    // both the active field and (during backup) the confirm field together;
-    // the plaintext stays in the input and never leaves it.
-    const setRevealed = (on: boolean) => {
-      const type = on ? "text" : "password";
-      input.type = type;
-      confirmInput.type = type;
-      revealBtn.setAttribute("aria-pressed", String(on));
-      revealBtn.textContent = on ? "Hide passphrase" : "Show passphrase";
+    // Always open masked: the reveal is opt-in per prompt and per field, never
+    // sticky, so a passphrase is never unmasked by a prior session's choice.
+    // Each eye toggles ONLY its own field — the primary eye the passphrase, the
+    // confirm eye the confirm field — so revealing one does not leak the other.
+    // The plaintext stays in the input and never leaves it.
+    const setFieldRevealed = (
+      field: HTMLInputElement,
+      btn: HTMLButtonElement,
+      on: boolean,
+    ) => {
+      field.type = on ? "text" : "password";
+      btn.setAttribute("aria-pressed", String(on));
+      const label = on ? "Hide passphrase" : "Show passphrase";
+      btn.setAttribute("aria-label", label);
+      btn.setAttribute("title", label);
     };
-    setRevealed(false);
-    const onReveal = () => setRevealed(revealBtn.getAttribute("aria-pressed") !== "true");
+    setFieldRevealed(input, eyeBtn, false);
+    setFieldRevealed(confirmInput, confirmEyeBtn, false);
+    const onEye = () =>
+      setFieldRevealed(input, eyeBtn, eyeBtn.getAttribute("aria-pressed") !== "true");
+    const onConfirmEye = () =>
+      setFieldRevealed(confirmInput, confirmEyeBtn, confirmEyeBtn.getAttribute("aria-pressed") !== "true");
 
     const cleanup = () => {
       // Wipe plaintext from the inputs before the nodes go back to hidden, and
-      // re-mask so the next open starts hidden regardless of this choice.
+      // re-mask both fields so the next open starts hidden regardless of this
+      // choice.
       input.value = "";
       confirmInput.value = "";
-      setRevealed(false);
+      setFieldRevealed(input, eyeBtn, false);
+      setFieldRevealed(confirmInput, confirmEyeBtn, false);
       okBtn.removeEventListener("click", onOk);
       cancelBtn.removeEventListener("click", onCancel);
-      revealBtn.removeEventListener("click", onReveal);
+      eyeBtn.removeEventListener("click", onEye);
+      confirmEyeBtn.removeEventListener("click", onConfirmEye);
       input.removeEventListener("keydown", onKey);
       confirmInput.removeEventListener("keydown", onKey);
     };
@@ -503,7 +516,8 @@ function passphrasePrompt(
     const cancelBtn = $("#pass-cancel") as HTMLButtonElement;
     okBtn.addEventListener("click", onOk);
     cancelBtn.addEventListener("click", onCancel);
-    revealBtn.addEventListener("click", onReveal);
+    eyeBtn.addEventListener("click", onEye);
+    confirmEyeBtn.addEventListener("click", onConfirmEye);
     input.addEventListener("keydown", onKey);
     confirmInput.addEventListener("keydown", onKey);
     passDialogResolve = onCancel;
@@ -2334,7 +2348,7 @@ function refreshHostDots() {
 }
 
 // app version for the status bar; keep in sync with package.json / tauri.conf.json
-const APP_VERSION = "v0.14.3";
+const APP_VERSION = "v0.14.4";
 
 // status bar updater (§4.3): dipanggil dari activateTab (semua jenis tab),
 // openTerminal/splitTerminal/closeTab dan busy() SFTP.

@@ -446,18 +446,57 @@
         <h2 id="pass-title"></h2>
         <p id="pass-msg"></p>
         <label id="pass-label" class="pass-label" for="pass-input"></label>
-        <input id="pass-input" class="pass-input" type="password" autocomplete="off"
-               spellcheck="false" aria-labelledby="pass-title" />
+        <!-- Eye toggles live INSIDE each field wrapper so the reveal affordance
+             sits on the field it governs, not as a separate control below both.
+             Each button carries its OWN field's state via aria-pressed; the
+             eye/eye-off SVGs are static markup (one shown by CSS per state), so
+             no innerHTML ever touches remote-origin or plaintext data (ADR-8).
+             Plaintext stays confined to the input (type attr only). -->
+        <div class="pass-field">
+          <input id="pass-input" class="pass-input" type="password" autocomplete="off"
+                 spellcheck="false" aria-labelledby="pass-title" />
+          <button id="pass-eye" class="pass-eye" type="button" aria-pressed="false"
+                  aria-label="Show passphrase" title="Show passphrase">
+            <svg class="eye-show" viewBox="0 0 24 24" width="18" height="18" fill="none"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                 stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/>
+              <circle cx="12" cy="12" r="3"/>
+            </svg>
+            <svg class="eye-hide" viewBox="0 0 24 24" width="18" height="18" fill="none"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                 stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c6.5 0 10 7 10 7a18.5 18.5 0 0 1-2.16 3.19"/>
+              <path d="M6.61 6.61A18.5 18.5 0 0 0 2 12s3.5 7 10 7a9.12 9.12 0 0 0 4.1-.95"/>
+              <path d="M9.88 9.88a3 3 0 0 0 4.24 4.24"/>
+              <path d="M2 2l20 20"/>
+            </svg>
+          </button>
+        </div>
         <div id="pass-confirm-row" class="pass-confirm-row" hidden>
           <label id="pass-confirm-label" class="pass-label" for="pass-confirm">Confirm passphrase</label>
-          <input id="pass-confirm" class="pass-input" type="password" autocomplete="off"
-                 spellcheck="false" aria-labelledby="pass-confirm-label" />
+          <div class="pass-field">
+            <input id="pass-confirm" class="pass-input" type="password" autocomplete="off"
+                   spellcheck="false" aria-labelledby="pass-confirm-label" />
+            <button id="pass-confirm-eye" class="pass-eye" type="button" aria-pressed="false"
+                    aria-label="Show passphrase" title="Show passphrase">
+              <svg class="eye-show" viewBox="0 0 24 24" width="18" height="18" fill="none"
+                   stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                   stroke-linejoin="round" aria-hidden="true" focusable="false">
+                <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/>
+                <circle cx="12" cy="12" r="3"/>
+              </svg>
+              <svg class="eye-hide" viewBox="0 0 24 24" width="18" height="18" fill="none"
+                   stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                   stroke-linejoin="round" aria-hidden="true" focusable="false">
+                <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c6.5 0 10 7 10 7a18.5 18.5 0 0 1-2.16 3.19"/>
+                <path d="M6.61 6.61A18.5 18.5 0 0 0 2 12s3.5 7 10 7a9.12 9.12 0 0 0 4.1-.95"/>
+                <path d="M9.88 9.88a3 3 0 0 0 4.24 4.24"/>
+                <path d="M2 2l20 20"/>
+              </svg>
+            </button>
+          </div>
         </div>
-        <!-- Visibility toggle: unmasks the passphrase field(s) so a typo in a
-             value that is never echoed back can be caught. Defaults to masked
-             on every open/close (set in passphrasePrompt); aria-pressed carries
-             the state to assistive tech. Plaintext stays confined to the input. -->
-        <button id="pass-reveal" class="pass-reveal" type="button" aria-pressed="false">Show passphrase</button>
         <div id="pass-error" class="pass-error" role="alert" hidden></div>
         <div class="modal-actions">
           <button id="pass-cancel" type="button">Cancel</button>

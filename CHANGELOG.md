@@ -8,6 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Windows releases are currently **unsigned** (Authenticode signing postponed —
 see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
+## [0.14.4] - 2026-11-07
+
+### Added
+- New encrypted backup snapshots are stored inside an app-created
+  `HostermBackups` Google Drive folder. Existing app-created backups at Drive
+  root remain discoverable for restore compatibility.
+- Each backup passphrase field now has its own accessible eye icon embedded in
+  the field, with independent reveal state and masked reset on close or reopen.
+
+### Fixed
+- Drive media downloads now remain byte-exact instead of passing encrypted
+  `.htbk` data through UTF-8 text decoding, fixing restore failures reported as
+  `malformed .htbk container: ct_len mismatch`.
+- Windows backup names now use `%COMPUTERNAME%` instead of falling back to
+  `unknown-host`; filename components are sanitized before upload.
+
+### Changed
+- Repeated backups remain timestamped snapshots: each Backup action creates a
+  new file rather than overwriting an earlier snapshot.
+
+### Security
+- OAuth remains limited to `drive.file`; folder metadata contains only the
+  fixed folder name and MIME type. Ciphertext is never decoded as text, and
+  passphrases remain ephemeral, wiped, and re-masked on prompt close.
+
 ## [0.14.3] - 2026-11-07
 
 ### Added

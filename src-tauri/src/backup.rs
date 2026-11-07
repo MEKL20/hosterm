@@ -204,13 +204,25 @@ fn expand_tilde(p: &str, home: &PathBuf) -> PathBuf {
     }
 }
 
-/// Local hostname for the manifest + appProperties (non-secret). Falls back to
-/// "unknown-host" if it cannot be read. Env override for deterministic tests.
+/// Local hostname for the manifest + appProperties (non-secret). Windows uses
+/// COMPUTERNAME; Unix prefers /etc/hostname. Env override stays first for tests.
 fn hostname() -> String {
-    if let Ok(h) = std::env::var("HOSTERM_BACKUP_HOST") {
-        return h;
+    for key in ["HOSTERM_BACKUP_HOST", "COMPUTERNAME"] {
+        if let Ok(h) = std::env::var(key) {
+            let h = h.trim();
+            if !h.is_empty() {
+                return h.to_string();
+            }
+        }
     }
-    std::fs::read_to_string("/etc/hostname")
+    if let Some(host) = std::fs::read_to_string("/etc/hostname")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    {
+        return host;
+    }
+    std::env::var("HOSTNAME")
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
@@ -482,7 +494,23 @@ pub fn run_backup(
 fn backup_filename(host: &str, created_at: &str) -> String {
     // Keep it filesystem/Drive friendly: no colons in the name.
     let safe_ts = created_at.replace(':', "");
-    format!("hosterm-backup-{host}-{safe_ts}.htbk")
+    let safe_host: String = host
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let safe_host = safe_host.trim_matches('-');
+    let safe_host = if safe_host.is_empty() {
+        "unknown-host"
+    } else {
+        safe_host
+    };
+    format!("hosterm-backup-{safe_host}-{safe_ts}.htbk")
 }
 
 // ---- LIST orchestration --------------------------------------------------
@@ -690,7 +718,10 @@ pub mod prod {
             host: &str,
         ) -> Result<(String, String, u64, String), String> {
             let props = crate::drive::build_app_properties(schema, created_at, host);
-            let file = self.client.upload(name, media, &props)?;
+            let folder_id = self.client.ensure_backup_folder()?;
+            let file = self
+                .client
+                .upload_in_folder(name, media, &props, &folder_id)?;
             let bytes = file
                 .size
                 .as_deref()
@@ -892,6 +923,32 @@ mod tests {
         // settings.json under data dir.
         std::fs::create_dir_all(sb.data()).unwrap();
         std::fs::write(sb.data().join("settings.json"), br#"{"version":1,"theme":"dusk"}"#).unwrap();
+    }
+
+    #[test]
+    fn windows_computername_is_used_when_no_test_override_exists() {
+        let _g = env_lock();
+        let old_override = std::env::var_os("HOSTERM_BACKUP_HOST");
+        let old_computername = std::env::var_os("COMPUTERNAME");
+        std::env::remove_var("HOSTERM_BACKUP_HOST");
+        std::env::set_var("COMPUTERNAME", "MEKL-PC");
+        assert_eq!(hostname(), "MEKL-PC");
+        match old_override {
+            Some(v) => std::env::set_var("HOSTERM_BACKUP_HOST", v),
+            None => std::env::remove_var("HOSTERM_BACKUP_HOST"),
+        }
+        match old_computername {
+            Some(v) => std::env::set_var("COMPUTERNAME", v),
+            None => std::env::remove_var("COMPUTERNAME"),
+        }
+    }
+
+    #[test]
+    fn backup_filename_sanitizes_host_component() {
+        assert_eq!(
+            backup_filename("MEKL PC/Desk", "2026-11-07T05:05:21Z"),
+            "hosterm-backup-MEKL-PC-Desk-2026-11-07T050521Z.htbk"
+        );
     }
 
     #[test]

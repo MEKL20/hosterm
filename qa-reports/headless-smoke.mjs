@@ -282,7 +282,8 @@ process.on("SIGINT", () => bail("SIGINT"));
 let page;
 for (let attempt = 1; ; attempt++) {
   try {
-    browser = await chromium.launch();
+    const executablePath = process.env.HOSTERM_PLAYWRIGHT_EXECUTABLE;
+    browser = await chromium.launch(executablePath ? { executablePath } : undefined);
     // Pin a Linux UA for the default page: the app computes isWindows from
     // navigator.userAgent (main.ts:1290), and the "missing (Linux)" scenario
     // below asserts the ssh guide is NOT shown. Without this, the default page
@@ -2541,61 +2542,88 @@ check("FE-FIX F-1: shell (app/rail/panel) does not move between closed and open"
 check("FE-FIX F-1: shell inert + initial focus on the passphrase input",
   passGeo.appInert && passGeo.focused === "pass-input");
 
-// -- FE-FIX t_058b9aee: Show/Hide passphrase reveal toggle (backup = both fields) --
-// Opens masked with aria-pressed=false; toggling unmasks the active field AND
-// the confirm field together, flips aria-pressed and the label; the control is
-// keyboard-focusable. Plaintext stays confined to the inputs (type attr only).
-const revealClosed = await page.evaluate(() => {
-  const btn = document.getElementById("pass-reveal");
+// -- FE-FIX t_5fe89707: per-field embedded eye toggles (each eye its own field) --
+// Eyes live INSIDE each field wrapper. Both open masked (aria-pressed=false,
+// aria-label 'Show passphrase', type=password). Each eye toggles ONLY its own
+// field: revealing the passphrase does not unmask the confirm field and vice
+// versa. Buttons are keyboard-focusable, >=32px targets. Plaintext stays
+// confined to the inputs (type attr only). The icon swap is CSS-driven off
+// aria-pressed, so the SVG markup is static (no innerHTML — ADR-8).
+const eyeClosed = await page.evaluate(() => {
+  const eye = document.getElementById("pass-eye");
+  const confEye = document.getElementById("pass-confirm-eye");
+  const r = eye.getBoundingClientRect();
   return {
-    pressed: btn.getAttribute("aria-pressed"),
-    label: btn.textContent.trim(),
+    pressed: eye.getAttribute("aria-pressed"),
+    label: eye.getAttribute("aria-label"),
+    title: eye.getAttribute("title"),
+    confPressed: confEye.getAttribute("aria-pressed"),
     inputType: document.getElementById("pass-input").type,
     confirmType: document.getElementById("pass-confirm").type,
+    w: Math.round(r.width), h: Math.round(r.height),
   };
 });
-check("FE-FIX t_058b9aee: reveal opens masked — aria-pressed=false, label 'Show passphrase', both fields type=password",
-  revealClosed.pressed === "false" && revealClosed.label === "Show passphrase" &&
-  revealClosed.inputType === "password" && revealClosed.confirmType === "password",
-  JSON.stringify(revealClosed));
+check("FE-FIX t_5fe89707: both eyes open masked — aria-pressed=false, aria-label/title 'Show passphrase', both fields type=password",
+  eyeClosed.pressed === "false" && eyeClosed.label === "Show passphrase" &&
+  eyeClosed.title === "Show passphrase" && eyeClosed.confPressed === "false" &&
+  eyeClosed.inputType === "password" && eyeClosed.confirmType === "password",
+  JSON.stringify(eyeClosed));
+check("FE-FIX t_5fe89707: eye button is a >=32px target",
+  eyeClosed.w >= 32 && eyeClosed.h >= 32, JSON.stringify(eyeClosed));
 await page.locator("#pass-input").fill("reveal-me");
-await page.locator("#pass-confirm").fill("reveal-me");
-await page.locator("#pass-reveal").focus();
-const revealFocusable = await page.evaluate(() => document.activeElement?.id === "pass-reveal");
-check("FE-FIX t_058b9aee: reveal button is keyboard-focusable", revealFocusable);
-await page.keyboard.press("Enter"); // keyboard-operate the toggle
+await page.locator("#pass-confirm").fill("confirm-me");
+await page.locator("#pass-eye").focus();
+const eyeFocusable = await page.evaluate(() => document.activeElement?.id === "pass-eye");
+check("FE-FIX t_5fe89707: passphrase eye is keyboard-focusable", eyeFocusable);
+await page.keyboard.press("Enter"); // keyboard-operate the primary eye
 await page.waitForTimeout(40);
-const revealOn = await page.evaluate(() => {
-  const btn = document.getElementById("pass-reveal");
+const primaryOn = await page.evaluate(() => {
+  const eye = document.getElementById("pass-eye");
+  const confEye = document.getElementById("pass-confirm-eye");
   const inp = document.getElementById("pass-input");
   const conf = document.getElementById("pass-confirm");
   return {
-    pressed: btn.getAttribute("aria-pressed"),
-    label: btn.textContent.trim(),
+    pressed: eye.getAttribute("aria-pressed"), label: eye.getAttribute("aria-label"),
+    confPressed: confEye.getAttribute("aria-pressed"),
     inputType: inp.type, confirmType: conf.type,
     inputVal: inp.value, confirmVal: conf.value, // plaintext still only in the inputs
   };
 });
-check("FE-FIX t_058b9aee: toggling reveal unmasks BOTH fields (type=text), aria-pressed=true, label 'Hide passphrase'",
-  revealOn.pressed === "true" && revealOn.label === "Hide passphrase" &&
-  revealOn.inputType === "text" && revealOn.confirmType === "text" &&
-  revealOn.inputVal === "reveal-me" && revealOn.confirmVal === "reveal-me",
-  JSON.stringify(revealOn));
-await page.locator("#pass-reveal").click(); // toggle back to masked
+check("FE-FIX t_5fe89707: toggling the primary eye unmasks ONLY the passphrase (type=text, aria-pressed=true, label 'Hide passphrase') — confirm stays masked",
+  primaryOn.pressed === "true" && primaryOn.label === "Hide passphrase" &&
+  primaryOn.inputType === "text" && primaryOn.confirmType === "password" &&
+  primaryOn.confPressed === "false" &&
+  primaryOn.inputVal === "reveal-me" && primaryOn.confirmVal === "confirm-me",
+  JSON.stringify(primaryOn));
+await page.locator("#pass-confirm-eye").click(); // reveal only the confirm field
 await page.waitForTimeout(40);
-const revealOff = await page.evaluate(() => {
-  const btn = document.getElementById("pass-reveal");
+const confirmOn = await page.evaluate(() => {
+  const confEye = document.getElementById("pass-confirm-eye");
   return {
-    pressed: btn.getAttribute("aria-pressed"), label: btn.textContent.trim(),
+    confPressed: confEye.getAttribute("aria-pressed"), confLabel: confEye.getAttribute("aria-label"),
     inputType: document.getElementById("pass-input").type,
     confirmType: document.getElementById("pass-confirm").type,
   };
 });
-check("FE-FIX t_058b9aee: toggling reveal again re-masks both fields (type=password), aria-pressed=false",
-  revealOff.pressed === "false" && revealOff.label === "Show passphrase" &&
-  revealOff.inputType === "password" && revealOff.confirmType === "password",
-  JSON.stringify(revealOff));
-// Restore the pre-reveal-test precondition: focus back on the passphrase input
+check("FE-FIX t_5fe89707: the confirm eye toggles ONLY the confirm field (type=text, aria-pressed=true); passphrase stays revealed independently",
+  confirmOn.confPressed === "true" && confirmOn.confLabel === "Hide passphrase" &&
+  confirmOn.confirmType === "text" && confirmOn.inputType === "text",
+  JSON.stringify(confirmOn));
+await page.locator("#pass-eye").click(); // re-mask the passphrase; confirm stays revealed
+await page.waitForTimeout(40);
+const primaryOff = await page.evaluate(() => {
+  const eye = document.getElementById("pass-eye");
+  return {
+    pressed: eye.getAttribute("aria-pressed"), label: eye.getAttribute("aria-label"),
+    inputType: document.getElementById("pass-input").type,
+    confirmType: document.getElementById("pass-confirm").type,
+  };
+});
+check("FE-FIX t_5fe89707: re-masking the primary eye restores type=password/aria-pressed=false and leaves the confirm field revealed (independent state)",
+  primaryOff.pressed === "false" && primaryOff.label === "Show passphrase" &&
+  primaryOff.inputType === "password" && primaryOff.confirmType === "text",
+  JSON.stringify(primaryOff));
+// Restore the pre-eye-test precondition: focus back on the passphrase input
 // so the Escape focus-restore check below starts from the dialog's initial state.
 await page.locator("#pass-input").focus();
 
@@ -2791,13 +2819,15 @@ await ensureDrive();
 await page.locator("#drive-restore-btn").click();
 await page.locator("#pass-dialog:not(.hidden)").waitFor({ timeout: 2000 });
 // Reset-to-masked on every open: a later prompt opens masked regardless of the
-// reveal state a prior prompt was left in (t_058b9aee).
+// eye state a prior prompt was left in (t_5fe89707 — wipe + remask on reopen).
 const reopenReveal = await page.evaluate(() => ({
-  pressed: document.getElementById("pass-reveal").getAttribute("aria-pressed"),
+  pressed: document.getElementById("pass-eye").getAttribute("aria-pressed"),
+  label: document.getElementById("pass-eye").getAttribute("aria-label"),
   inputType: document.getElementById("pass-input").type,
 }));
-check("FE-FIX t_058b9aee: a later passphrase prompt opens masked (reveal reset to aria-pressed=false, type=password)",
-  reopenReveal.pressed === "false" && reopenReveal.inputType === "password",
+check("FE-FIX t_5fe89707: a later passphrase prompt opens masked (eye reset to aria-pressed=false, label 'Show passphrase', type=password)",
+  reopenReveal.pressed === "false" && reopenReveal.label === "Show passphrase" &&
+  reopenReveal.inputType === "password",
   JSON.stringify(reopenReveal));
 await page.locator("#pass-input").fill("restorepw");
 await page.locator("#pass-ok").click();

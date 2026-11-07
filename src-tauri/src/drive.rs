@@ -38,6 +38,9 @@ const UPLOAD_UPDATE_BASE: &str = "https://www.googleapis.com/upload/drive/v3/fil
 const FILES_LIST_ENDPOINT: &str = "https://www.googleapis.com/drive/v3/files";
 /// Media download: GET .../files/{id}?alt=media.
 const FILES_GET_BASE: &str = "https://www.googleapis.com/drive/v3/files/";
+/// Human-visible Drive folder used for all newly-created backups.
+pub const BACKUP_FOLDER_NAME: &str = "HostermBackups";
+const FOLDER_MIME_TYPE: &str = "application/vnd.google-apps.folder";
 
 /// Fields we ask Drive to echo back on create/list so we can populate metadata
 /// without a second round-trip. Kept tight: no fields that would leak.
@@ -55,11 +58,12 @@ const MULTIPART_BOUNDARY: &str = "hosterm_htbk_boundary_7c1f";
 // (status, body) so the 401→refresh→retry policy lives ABOVE the seam in
 // `DriveClient`, keeping the seam dumb and the retry logic unit-testable.
 
-/// A completed HTTP response: numeric status + body text.
+/// A completed HTTP response: numeric status + byte-exact body. Metadata
+/// callers parse JSON from the bytes; media downloads return them unchanged.
 #[derive(Debug, Clone)]
 pub struct HttpResponse {
     pub status: u16,
-    pub body: String,
+    pub body: Vec<u8>,
 }
 
 impl HttpResponse {
@@ -75,6 +79,14 @@ impl HttpResponse {
 /// so the retry wrapper can swap it after a refresh. Implementations MUST NOT
 /// log tokens or bodies.
 pub trait DriveHttp {
+    /// POST a JSON metadata body (used to create the backup folder).
+    fn post_json(
+        &self,
+        url: &str,
+        access_token: &str,
+        body: Vec<u8>,
+    ) -> Result<HttpResponse, String>;
+
     /// POST a multipart/related body (metadata + media) to `url`.
     fn post_multipart(
         &self,
@@ -103,6 +115,23 @@ pub trait DriveHttp {
 pub struct ReqwestDriveHttp;
 
 impl DriveHttp for ReqwestDriveHttp {
+    fn post_json(
+        &self,
+        url: &str,
+        access_token: &str,
+        body: Vec<u8>,
+    ) -> Result<HttpResponse, String> {
+        let client = build_client()?;
+        let resp = client
+            .post(url)
+            .bearer_auth(access_token)
+            .header(reqwest::header::CONTENT_TYPE, "application/json; charset=UTF-8")
+            .body(body)
+            .send()
+            .map_err(|e| format!("drive metadata request failed: {e}"))?;
+        into_response(resp)
+    }
+
     fn post_multipart(
         &self,
         url: &str,
@@ -161,9 +190,12 @@ fn build_client() -> Result<reqwest::blocking::Client, String> {
 fn into_response(resp: reqwest::blocking::Response) -> Result<HttpResponse, String> {
     let status = resp.status().as_u16();
     let body = resp
-        .text()
+        .bytes()
         .map_err(|e| format!("drive response read failed: {e}"))?;
-    Ok(HttpResponse { status, body })
+    Ok(HttpResponse {
+        status,
+        body: body.to_vec(),
+    })
 }
 
 // ---- appProperties (cleartext — must leak NOTHING) -----------------------
@@ -187,16 +219,32 @@ pub fn build_app_properties(schema: u32, created_at: &str, host: &str) -> Vec<(S
 /// (`hosterm-backup-<host>-<UTC-iso>.htbk`), which is NOT secret (it is the
 /// Drive file name, visible in the user's own Drive). appProperties are the
 /// only *searchable* cleartext facets and are leak-checked above.
-fn metadata_json(name: &str, app_properties: &[(String, String)]) -> String {
+fn metadata_json(
+    name: &str,
+    app_properties: &[(String, String)],
+    parent_id: Option<&str>,
+) -> String {
     let props = app_properties
         .iter()
         .map(|(k, v)| format!("{}:{}", json_str(k), json_str(v)))
         .collect::<Vec<_>>()
         .join(",");
+    let parent = parent_id
+        .map(|id| format!(",\"parents\":[{}]", json_str(id)))
+        .unwrap_or_default();
     format!(
-        "{{\"name\":{},\"appProperties\":{{{}}}}}",
-        json_str(name),
-        props
+        "{{\"name\":{},\"appProperties\":{{{}}}{}}}",
+        json_str(name), props, parent
+    )
+}
+
+/// Folder metadata contains only the fixed public display name and Drive MIME
+/// type. No host, filename, passphrase, or token material is attached.
+fn folder_metadata_json() -> String {
+    format!(
+        "{{\"name\":{},\"mimeType\":{}}}",
+        json_str(BACKUP_FOLDER_NAME),
+        json_str(FOLDER_MIME_TYPE)
     )
 }
 
@@ -321,6 +369,42 @@ impl<'a> DriveClient<'a> {
         op(self.http, &self.access_token)
     }
 
+    /// Find the app-created HostermBackups folder, or create it once when
+    /// absent. `drive.file` limits both operations to files this app created.
+    pub fn ensure_backup_folder(&mut self) -> Result<String, String> {
+        let q = format!(
+            "name='{}' and mimeType='{}' and trashed=false",
+            BACKUP_FOLDER_NAME, FOLDER_MIME_TYPE
+        );
+        let url = format!(
+            "{FILES_LIST_ENDPOINT}?q={}&fields={}&spaces=drive&orderBy=createdTime asc",
+            urlencode(&q),
+            urlencode("files(id,name)")
+        );
+        let resp = self.with_retry(|http, tok| http.get(&url, tok))?;
+        if !resp.is_success() {
+            return Err(format!("drive folder lookup failed: HTTP {}", resp.status));
+        }
+        let list: FileList = serde_json::from_slice(&resp.body)
+            .map_err(|_| "malformed drive folder lookup response".to_string())?;
+        if let Some(folder) = list.files.into_iter().next() {
+            return Ok(folder.id);
+        }
+
+        let create_url = format!("{FILES_LIST_ENDPOINT}?fields={}", urlencode("id,name"));
+        let body = folder_metadata_json().into_bytes();
+        let resp = self.with_retry(|http, tok| http.post_json(&create_url, tok, body.clone()))?;
+        if !resp.is_success() {
+            return Err(format!("drive folder create failed: HTTP {}", resp.status));
+        }
+        let folder: DriveFile = serde_json::from_slice(&resp.body)
+            .map_err(|_| "malformed drive folder create response".to_string())?;
+        if folder.id.is_empty() {
+            return Err("drive folder create response missing id".to_string());
+        }
+        Ok(folder.id)
+    }
+
     /// Multipart create: upload a new `.htbk` with cleartext appProperties.
     /// `name` = backup filename; `media` = the encrypted `.htbk` bytes.
     pub fn upload(
@@ -329,7 +413,28 @@ impl<'a> DriveClient<'a> {
         media: &[u8],
         app_properties: &[(String, String)],
     ) -> Result<DriveFile, String> {
-        let metadata = metadata_json(name, app_properties);
+        self.upload_with_parent(name, media, app_properties, None)
+    }
+
+    /// Multipart create inside a specific Drive folder.
+    pub fn upload_in_folder(
+        &mut self,
+        name: &str,
+        media: &[u8],
+        app_properties: &[(String, String)],
+        folder_id: &str,
+    ) -> Result<DriveFile, String> {
+        self.upload_with_parent(name, media, app_properties, Some(folder_id))
+    }
+
+    fn upload_with_parent(
+        &mut self,
+        name: &str,
+        media: &[u8],
+        app_properties: &[(String, String)],
+        parent_id: Option<&str>,
+    ) -> Result<DriveFile, String> {
+        let metadata = metadata_json(name, app_properties, parent_id);
         let body = build_multipart_body(MULTIPART_BOUNDARY, &metadata, media);
         let url = format!("{UPLOAD_CREATE_ENDPOINT}&fields={FILE_FIELDS}");
         let resp = self.with_retry(|http, tok| {
@@ -338,7 +443,7 @@ impl<'a> DriveClient<'a> {
         if !resp.is_success() {
             return Err(format!("drive upload failed: HTTP {}", resp.status));
         }
-        serde_json::from_str::<DriveFile>(&resp.body)
+        serde_json::from_slice::<DriveFile>(&resp.body)
             .map_err(|_| "malformed drive create response".to_string())
     }
 
@@ -355,7 +460,7 @@ impl<'a> DriveClient<'a> {
         if !resp.is_success() {
             return Err(format!("drive update failed: HTTP {}", resp.status));
         }
-        serde_json::from_str::<DriveFile>(&resp.body)
+        serde_json::from_slice::<DriveFile>(&resp.body)
             .map_err(|_| "malformed drive update response".to_string())
     }
 
@@ -376,7 +481,7 @@ impl<'a> DriveClient<'a> {
         if !resp.is_success() {
             return Err(format!("drive list failed: HTTP {}", resp.status));
         }
-        let list: FileList = serde_json::from_str(&resp.body)
+        let list: FileList = serde_json::from_slice(&resp.body)
             .map_err(|_| "malformed drive list response".to_string())?;
         Ok(list.files)
     }
@@ -389,7 +494,7 @@ impl<'a> DriveClient<'a> {
         if !resp.is_success() {
             return Err(format!("drive download failed: HTTP {}", resp.status));
         }
-        Ok(resp.body.into_bytes())
+        Ok(resp.body)
     }
 }
 
@@ -426,6 +531,8 @@ mod tests {
         seen: RefCell<Vec<(String, String, String)>>,
         /// Last multipart body captured (for body-shape assertions).
         last_multipart: RefCell<Option<(String, Vec<u8>)>>,
+        /// Last JSON metadata body captured (folder creation assertions).
+        last_json: RefCell<Option<Vec<u8>>>,
     }
 
     impl MockHttp {
@@ -434,6 +541,7 @@ mod tests {
                 responses: RefCell::new(responses),
                 seen: RefCell::new(Vec::new()),
                 last_multipart: RefCell::new(None),
+                last_json: RefCell::new(None),
             }
         }
         fn next(&self) -> HttpResponse {
@@ -444,6 +552,21 @@ mod tests {
     }
 
     impl DriveHttp for MockHttp {
+        fn post_json(
+            &self,
+            url: &str,
+            access_token: &str,
+            body: Vec<u8>,
+        ) -> Result<HttpResponse, String> {
+            self.seen.borrow_mut().push((
+                "POST_JSON".into(),
+                url.into(),
+                access_token.into(),
+            ));
+            *self.last_json.borrow_mut() = Some(body);
+            Ok(self.next())
+        }
+
         fn post_multipart(
             &self,
             url: &str,
@@ -482,13 +605,19 @@ mod tests {
     fn ok(body: &str) -> HttpResponse {
         HttpResponse {
             status: 200,
-            body: body.to_string(),
+            body: body.as_bytes().to_vec(),
+        }
+    }
+    fn ok_bytes(body: &[u8]) -> HttpResponse {
+        HttpResponse {
+            status: 200,
+            body: body.to_vec(),
         }
     }
     fn unauth() -> HttpResponse {
         HttpResponse {
             status: 401,
-            body: r#"{"error":{"code":401}}"#.to_string(),
+            body: br#"{"error":{"code":401}}"#.to_vec(),
         }
     }
 
@@ -517,7 +646,11 @@ mod tests {
     #[test]
     fn metadata_json_only_emits_name_and_appproperties() {
         let props = build_app_properties(1, "2026-11-03T18:00:00Z", "host-x");
-        let md = metadata_json("hosterm-backup-host-x-2026-11-03T18:00:00Z.htbk", &props);
+        let md = metadata_json(
+            "hosterm-backup-host-x-2026-11-03T18:00:00Z.htbk",
+            &props,
+            None,
+        );
         // Exactly the two top-level keys; parse it back and assert the shape.
         let v: serde_json::Value = serde_json::from_str(&md).unwrap();
         let obj = v.as_object().unwrap();
@@ -534,6 +667,61 @@ mod tests {
                 .into_iter()
                 .collect::<std::collections::BTreeSet<_>>()
         );
+    }
+
+    #[test]
+    fn metadata_json_adds_only_the_requested_parent() {
+        let props = build_app_properties(1, "t", "h");
+        let md = metadata_json("b.htbk", &props, Some("FOLDER1"));
+        let v: serde_json::Value = serde_json::from_str(&md).unwrap();
+        let keys: std::collections::BTreeSet<&str> = v
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|s| s.as_str())
+            .collect();
+        assert_eq!(
+            keys,
+            ["appProperties", "name", "parents"]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>()
+        );
+        assert_eq!(v["parents"], serde_json::json!(["FOLDER1"]));
+    }
+
+    #[test]
+    fn ensure_backup_folder_reuses_existing_app_created_folder() {
+        let mock = MockHttp::new(vec![ok(
+            r#"{"files":[{"id":"DIR1","name":"HostermBackups"}]}"#,
+        )]);
+        let mut client =
+            DriveClient::new(&mock, "AT".to_string(), Box::new(|| Ok("x".to_string())));
+        assert_eq!(client.ensure_backup_folder().unwrap(), "DIR1");
+        let seen = mock.seen.borrow();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].0, "GET");
+        assert!(seen[0].1.contains("HostermBackups"));
+        assert!(seen[0].1.contains("application%2Fvnd.google-apps.folder"));
+    }
+
+    #[test]
+    fn ensure_backup_folder_creates_it_without_secret_metadata_when_missing() {
+        let mock = MockHttp::new(vec![
+            ok(r#"{"files":[]}"#),
+            ok(r#"{"id":"DIR2","name":"HostermBackups"}"#),
+        ]);
+        let mut client =
+            DriveClient::new(&mock, "AT".to_string(), Box::new(|| Ok("x".to_string())));
+        assert_eq!(client.ensure_backup_folder().unwrap(), "DIR2");
+        let seen = mock.seen.borrow();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[0].0, "GET");
+        assert_eq!(seen[1].0, "POST_JSON");
+        let body = mock.last_json.borrow().clone().unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["name"], BACKUP_FOLDER_NAME);
+        assert_eq!(v["mimeType"], FOLDER_MIME_TYPE);
+        assert_eq!(v.as_object().unwrap().len(), 2);
     }
 
     // ---- multipart body shape -------------------------------------------
@@ -588,6 +776,42 @@ mod tests {
         let (bnd, body) = mock.last_multipart.borrow().clone().unwrap();
         assert_eq!(bnd, MULTIPART_BOUNDARY);
         assert!(body.windows(10).any(|w| w == b"ciphertext"));
+    }
+
+    #[test]
+    fn upload_in_folder_sets_drive_parent() {
+        let mock = MockHttp::new(vec![ok(r#"{"id":"FILEP"}"#)]);
+        let mut client =
+            DriveClient::new(&mock, "AT".to_string(), Box::new(|| Ok("x".to_string())));
+        let props = build_app_properties(1, "t", "h");
+        client
+            .upload_in_folder("b.htbk", b"ciphertext", &props, "DIR9")
+            .unwrap();
+        let (_, body) = mock.last_multipart.borrow().clone().unwrap();
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains(r#""parents":["DIR9"]"#));
+    }
+
+    #[test]
+    fn repeated_uploads_create_distinct_drive_files() {
+        let mock = MockHttp::new(vec![
+            ok(r#"{"id":"FILE-A"}"#),
+            ok(r#"{"id":"FILE-B"}"#),
+        ]);
+        let mut client =
+            DriveClient::new(&mock, "AT".to_string(), Box::new(|| Ok("x".to_string())));
+        let props = build_app_properties(1, "t", "h");
+        let first = client
+            .upload_in_folder("b-1.htbk", b"one", &props, "DIR9")
+            .unwrap();
+        let second = client
+            .upload_in_folder("b-2.htbk", b"two", &props, "DIR9")
+            .unwrap();
+        assert_ne!(first.id, second.id);
+        let seen = mock.seen.borrow();
+        assert_eq!(seen.len(), 2);
+        assert!(seen.iter().all(|entry| entry.0 == "POST_MULTIPART"));
+        assert!(seen.iter().all(|entry| entry.1.contains("uploadType=multipart")));
     }
 
     // ---- 401 → refresh → retry ------------------------------------------
@@ -695,12 +919,13 @@ mod tests {
     // ---- download / update ----------------------------------------------
 
     #[test]
-    fn download_returns_raw_bytes_via_alt_media() {
-        let mock = MockHttp::new(vec![ok("RAWBYTES")]);
+    fn download_returns_non_utf8_raw_bytes_via_alt_media() {
+        let raw = b"HTBK\x00\xff\xfe\x80ciphertext\x00";
+        let mock = MockHttp::new(vec![ok_bytes(raw)]);
         let mut client =
             DriveClient::new(&mock, "AT".to_string(), Box::new(|| Ok("x".to_string())));
         let bytes = client.download("FID9").unwrap();
-        assert_eq!(bytes, b"RAWBYTES");
+        assert_eq!(bytes, raw, "download must not perform UTF-8 decoding");
         let seen = mock.seen.borrow();
         assert_eq!(seen[0].0, "GET");
         assert!(seen[0].1.contains("FID9"));
