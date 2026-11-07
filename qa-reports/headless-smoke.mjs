@@ -2570,6 +2570,20 @@ check("FE-FIX t_5fe89707: both eyes open masked — aria-pressed=false, aria-lab
   JSON.stringify(eyeClosed));
 check("FE-FIX t_5fe89707: eye button is a >=32px target",
   eyeClosed.w >= 32 && eyeClosed.h >= 32, JSON.stringify(eyeClosed));
+// WebView2/Edge inject a native ::-ms-reveal eye into input[type=password] while
+// typing; without suppression the field shows TWO eyes on Windows. Headless
+// Chromium does not paint ::-ms-reveal, so assert the suppression rule is
+// present in the served stylesheet instead (regression guard for the two-eyes bug).
+const nativeRevealSuppressed = await page.evaluate(async () => {
+  const hrefs = [...document.querySelectorAll('link[rel="stylesheet"]')].map((l) => l.href);
+  for (const href of hrefs) {
+    const css = await fetch(href).then((r) => r.text()).catch(() => "");
+    if (/\.pass-input::-ms-reveal/.test(css) && /display:\s*none/.test(css)) return true;
+  }
+  return false;
+});
+check("FE-FIX two-eyes: native ::-ms-reveal/::-ms-clear suppressed on .pass-input (WebView2)",
+  nativeRevealSuppressed);
 await page.locator("#pass-input").fill("reveal-me");
 await page.locator("#pass-confirm").fill("confirm-me");
 await page.locator("#pass-eye").focus();

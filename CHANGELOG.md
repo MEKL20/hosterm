@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Windows releases are currently **unsigned** (Authenticode signing postponed —
 see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
+## [0.14.5] - 2026-11-07
+
+### Fixed
+- The backup/restore passphrase fields no longer show two eye icons on Windows.
+  WebView2's native password reveal control (`::-ms-reveal`/`::-ms-clear`) is now
+  suppressed so only hosterm's own embedded eye icon appears.
+
 ## [0.14.4] - 2026-11-07
 
 ### Added

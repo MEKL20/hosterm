@@ -468,6 +468,13 @@ body.panel-collapsed #sb-resize { display: none; }
   background: var(--bg); color: var(--text);
   border: 1px solid var(--border); border-radius: 4px; font-size: 13px;
 }
+/* WebView2/Edge (and Chromium) inject their OWN password reveal/clear buttons
+   into input[type=password] while typing. Without this they render alongside
+   our embedded .pass-eye, so the field shows TWO eye icons on Windows (the
+   headless Chromium smoke runner does not render ::-ms-reveal, so this slipped
+   past CI). Suppress the native controls; .pass-eye is the single reveal. */
+.pass-input::-ms-reveal,
+.pass-input::-ms-clear { display: none; width: 0; height: 0; }
 .pass-confirm-row[hidden] { display: none; }
 /* Embedded eye toggle: a 32x32 tap target pinned to the field's right edge,
    vertically centered. --dim ink reads as a secondary affordance inside the
