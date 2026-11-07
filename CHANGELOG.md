@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Windows releases are currently **unsigned** (Authenticode signing postponed —
 see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
+## [0.14.7] - 2026-11-07
+
+### Changed
+- The restore backup chooser is now a centered modal (matching the backup
+  passphrase dialog) instead of an inline panel, so it no longer disturbs the
+  surrounding layout.
+- Removed the sidebar collapse/expand arrow buttons. The section panel is now
+  toggled solely by clicking the active rail item (Hosts/Keys/Ansible).
+
 ## [0.14.6] - 2026-11-07
 
 ### Added

@@ -1,7 +1,7 @@
 {
   "name": "hosterm",
   "private": true,
-  "version": "0.14.6",
+  "version": "0.14.7",
   "license": "MIT",
   "type": "module",
   "scripts": {

@@ -2474,7 +2474,7 @@ function refreshHostDots() {
 }
 
 // app version for the status bar; keep in sync with package.json / tauri.conf.json
-const APP_VERSION = "v0.14.6";
+const APP_VERSION = "v0.14.7";
 
 // status bar updater (§4.3): dipanggil dari activateTab (semua jenis tab),
 // openTerminal/splitTerminal/closeTab dan busy() SFTP.
@@ -4338,7 +4338,6 @@ window.addEventListener("DOMContentLoaded", () => {
   setPanelCollapsed = (c: boolean) => {
     panelCollapsed = c;
     document.body.classList.toggle("panel-collapsed", c);
-    $("#btn-expand").classList.toggle("hidden", !c);
     syncRailExpanded();
     try { localStorage.setItem("hosterm.panel-collapsed", c ? "1" : ""); } catch { /* private mode */ }
     setTimeout(fitActiveSessions, 0);
@@ -4348,8 +4347,6 @@ window.addEventListener("DOMContentLoaded", () => {
     ? localStorage.getItem("hosterm.sb-collapsed") === "1"
     : storedPanel === "1";
   setPanelCollapsed(initialPanelCollapsed);
-  $("#btn-collapse").addEventListener("click", () => setPanelCollapsed(true));
-  $("#btn-expand").addEventListener("click", () => setPanelCollapsed(false));
   const narrowPanel = window.matchMedia("(max-width: 520px)");
   const collapseForNarrowWindow = () => { if (narrowPanel.matches) setPanelCollapsed(true); };
   narrowPanel.addEventListener("change", collapseForNarrowWindow);

@@ -204,7 +204,6 @@ select {
 }
 .rail-item:hover { background: var(--surface); color: var(--text); }
 .rail-item[aria-current="page"] { background: var(--surface); color: var(--accent); }
-#btn-expand { margin: 4px auto; }
 .rail-foot { margin-top: auto; padding: 6px; position: relative; }
 
 #section-panel {
@@ -1337,7 +1336,7 @@ body.sftp-dragging { user-select: none; cursor: grabbing; }
 }
 
 /* modals */
-#modal, #raw-modal, #key-modal, #dialog, #ssh-modal, #ansible-modal, #pass-dialog {
+#modal, #raw-modal, #key-modal, #dialog, #ssh-modal, #ansible-modal, #pass-dialog, #restore-dialog {
   position: fixed; inset: 0;
   background: rgba(0, 0, 0, .5);
   display: flex; align-items: center; justify-content: center;
@@ -1347,10 +1346,10 @@ body.sftp-dragging { user-select: none; cursor: grabbing; }
    0→1 and the box lifts 6px→0 over 120ms. .ov-enter is toggled on the next
    frame after display flips. Final state is opacity:1/transform:none so the
    reduced-motion kill switch (875-876) lands on the correct end state. */
-#pass-dialog { opacity: 0; transition: opacity 120ms ease; }
-#pass-dialog .modal-box { transform: translateY(6px); transition: transform 120ms ease; }
-#pass-dialog.ov-enter { opacity: 1; }
-#pass-dialog.ov-enter .modal-box { transform: none; }
+#pass-dialog, #restore-dialog { opacity: 0; transition: opacity 120ms ease; }
+#pass-dialog .modal-box, #restore-dialog .modal-box { transform: translateY(6px); transition: transform 120ms ease; }
+#pass-dialog.ov-enter, #restore-dialog.ov-enter { opacity: 1; }
+#pass-dialog.ov-enter .modal-box, #restore-dialog.ov-enter .modal-box { transform: none; }
 .hidden { display: none !important; }
 .modal-box {
   background: var(--bg);

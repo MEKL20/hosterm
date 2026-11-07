@@ -602,13 +602,13 @@ check("search: match renders", (await page.locator(".host-item").count()) === 1)
 await page.locator("#host-search").fill("");
 await page.waitForTimeout(150);
 
-// 9c. contextual panel collapse/expand + localStorage persistence
-await page.locator("#btn-collapse").click();
+// 9c. contextual panel collapse/expand via the active rail item (arrow buttons
+// removed v0.14.7 — clicking the already-active rail item toggles the panel).
+await page.locator('.rail-item[data-view="host"]').click();
 check("collapse: body class set", await page.evaluate(() => document.body.classList.contains("panel-collapsed")));
-check("collapse: expand button shown", await page.locator("#btn-expand").isVisible());
 const stored = await page.evaluate(() => localStorage.getItem("hosterm.panel-collapsed"));
 check("collapse: persisted", stored === "1");
-await page.locator("#btn-expand").click();
+await page.locator('.rail-item[data-view="host"]').click();
 check("expand: class removed", await page.evaluate(() => !document.body.classList.contains("panel-collapsed")));
 
 // 9d. Edit/Delete left the row (fix #4) -> context menu; Delete uses in-app dialog (not native confirm)
@@ -3237,8 +3237,8 @@ check("FE-FIX regression: sign out returns the chip to signed-out",
 // so later sections (U-D7 reloads -> U9 host controls) boot with #view-host
 // visible — do not leak narrow-window state downstream.
 await page.evaluate(() => { try { localStorage.removeItem("hosterm.panel-collapsed"); localStorage.removeItem("hosterm.sb-collapsed"); } catch { /* private mode */ } });
-if (await page.locator("#btn-expand").isVisible().catch(() => false)) {
-  await page.locator("#btn-expand").click();
+if (await page.evaluate(() => document.body.classList.contains("panel-collapsed"))) {
+  await page.locator('.rail-item[data-view="host"]').click();
   await page.waitForTimeout(40);
 }
 // End FE-FIX checks.
@@ -4157,7 +4157,9 @@ check("NAV RAIL: account menu stays inside the narrow viewport",
   JSON.stringify(narrowPopover));
 await page.keyboard.press("Escape");
 await page.setViewportSize({ width: 1280, height: 720 });
-await page.locator("#btn-expand").click();
+if (await page.evaluate(() => document.body.classList.contains("panel-collapsed"))) {
+  await page.locator('.rail-item[data-view="host"]').click();
+}
 
 console.log(results.join("\n"));
 const fails = results.filter((r) => r.startsWith("FAIL")).length;
