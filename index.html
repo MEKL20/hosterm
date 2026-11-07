@@ -11,13 +11,13 @@
     <div id="app">
       <nav id="nav-rail" aria-label="Sections">
         <div class="rail-nav">
-          <button class="rail-item" data-view="host" aria-current="page" aria-label="Hosts" title="Hosts">
+          <button class="rail-item" data-view="host" aria-current="page" aria-expanded="true" aria-label="Hosts" title="Hosts">
             <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="3" width="11" height="7" rx="1"/><line x1="5.5" y1="13" x2="10.5" y2="13"/><line x1="8" y1="10" x2="8" y2="13"/></svg>
           </button>
-          <button class="rail-item" data-view="keys" aria-current="false" aria-label="Keys" title="Keys">
+          <button class="rail-item" data-view="keys" aria-current="false" aria-expanded="false" aria-label="Keys" title="Keys">
             <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="5" cy="6" r="2.5"/><path d="M7 7.5 13 13.5"/><path d="M11 11.5l1.5-1.5"/></svg>
           </button>
-          <button class="rail-item" data-view="ansible" aria-current="false" aria-label="Ansible" title="Ansible">
+          <button class="rail-item" data-view="ansible" aria-current="false" aria-expanded="false" aria-label="Ansible" title="Ansible">
             <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2 13.5 13H2.5z"/><line x1="8" y1="6.5" x2="8" y2="9.5"/></svg>
           </button>
         </div>
@@ -445,6 +445,9 @@
       <div class="modal-box dialog-box">
         <h2 id="pass-title"></h2>
         <p id="pass-msg"></p>
+        <!-- Optional-passphrase helper (backup only). Shown when the prompt
+             accepts an empty passphrase; copy is static (textContent), ADR-8. -->
+        <p id="pass-helper" class="pass-helper" hidden></p>
         <label id="pass-label" class="pass-label" for="pass-input"></label>
         <!-- Eye toggles live INSIDE each field wrapper so the reveal affordance
              sits on the field it governs, not as a separate control below both.
@@ -501,6 +504,28 @@
         <div class="modal-actions">
           <button id="pass-cancel" type="button">Cancel</button>
           <button id="pass-ok" class="primary" type="button"></button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Restore backup picker. The user chooses WHICH backup to restore when
+         several exist. Each row is cloned from #restore-row-template and its
+         host/time text set via textContent (ADR-8 — Drive-origin strings are
+         hostile input). Single-select radiogroup, keyboard operable. -->
+    <div id="restore-dialog" class="hidden">
+      <div class="modal-box dialog-box">
+        <h2 id="restore-title">Restore from Google Drive</h2>
+        <p id="restore-msg">Choose which backup to restore. The newest is selected.</p>
+        <div id="restore-list" class="restore-list" role="radiogroup" aria-label="Available backups"></div>
+        <template id="restore-row-template">
+          <button class="restore-row" type="button" role="radio" aria-checked="false">
+            <span class="restore-host"></span>
+            <span class="restore-when"></span>
+          </button>
+        </template>
+        <div class="modal-actions">
+          <button id="restore-cancel" type="button">Cancel</button>
+          <button id="restore-ok" class="primary" type="button">Restore</button>
         </div>
       </div>
     </div>

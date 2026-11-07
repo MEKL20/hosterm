@@ -8,6 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Windows releases are currently **unsigned** (Authenticode signing postponed —
 see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
+## [0.14.6] - 2026-11-07
+
+### Added
+- The backup passphrase is now optional. Leaving it empty still encrypts the
+  backup, using a random key stored in this device's OS keyring (a dedicated
+  entry, separate from the Google sign-in token). Such a backup restores
+  automatically on the same device; restoring it on another machine needs that
+  device's key and fails with a clear message otherwise.
+- Restore now lets you pick which backup to restore from a list (newest first,
+  showing host and date/time), since there can be several.
+
+### Changed
+- Clicking the active sidebar rail item (Hosts/Keys/Ansible) now collapses or
+  expands the section panel; clicking another item switches section and expands.
+
+### Security
+- Empty-passphrase backups are never stored in plaintext. The device key lives
+  only in the OS keyring, never in the `.htbk` file, its Drive metadata, or logs.
+  Passphrase and device-key containers cannot be confused or downgraded, and
+  OAuth remains limited to `drive.file`.
+
 ## [0.14.5] - 2026-11-07
 
 ### Fixed

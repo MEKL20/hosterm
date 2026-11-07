@@ -50,6 +50,44 @@ use crate::crypto;
 /// Manifest schema version (TSD §4 — also the cleartext Drive `htbk_schema`).
 const SCHEMA: u32 = 1;
 
+/// Length of the device data key (matches crypto KEY_LEN = 32).
+const DEVICE_KEY_LEN: usize = 32;
+
+// ---- Device-key store seam (OS keyring, v0.14.6) -------------------------
+//
+// Optional-passphrase backups encrypt with a random 32-byte device key held in
+// the OS keyring under a DEDICATED entry, SEPARATE from the OAuth refresh_token
+// (oauth.rs owns service "hosterm" / account "google-refresh-token"; the device
+// backup key is service "hosterm" / account "backup-data-key"). The key is
+// base64-encoded for keyring string storage and NEVER logged. The trait lets
+// tests inject an in-memory mock (no real keyring); prod wraps `keyring::Entry`.
+
+/// Keyring coordinates for the device backup key — distinct from OAuth's entry.
+const DEVICE_KEY_SERVICE: &str = "hosterm";
+const DEVICE_KEY_ACCOUNT: &str = "backup-data-key";
+
+/// Abstracts read/write of the raw 32-byte device key. Production uses the OS
+/// keyring; tests use an in-memory map so no real keyring is touched.
+pub trait DeviceKeyStore {
+    /// Read the stored device key, or `Ok(None)` if no entry exists.
+    fn read_key(&self) -> Result<Option<Zeroizing<[u8; DEVICE_KEY_LEN]>>, String>;
+    /// Persist the device key (overwrites any existing entry).
+    fn store_key(&self, key: &[u8; DEVICE_KEY_LEN]) -> Result<(), String>;
+}
+
+/// Load the existing device key or generate+persist a fresh one. Used on the
+/// backup path when the user supplies no passphrase.
+fn load_or_create_device_key(
+    store: &dyn DeviceKeyStore,
+) -> Result<Zeroizing<[u8; DEVICE_KEY_LEN]>, String> {
+    if let Some(k) = store.read_key()? {
+        return Ok(k);
+    }
+    let key = crypto::random_device_key();
+    store.store_key(&key)?;
+    Ok(key)
+}
+
 /// Fixed permission for secrets / private keys / config on restore (0600).
 #[cfg(unix)]
 const RESTORE_MODE: u32 = 0o600;
@@ -453,11 +491,18 @@ fn encode_manifest(passphrase: &str, plaintext: Vec<u8>) -> Result<Vec<u8>, cryp
 }
 
 /// Gather → manifest → encrypt → upload. `passphrase` is held in Zeroizing and
-/// never logged. The uploaded media is the AEAD output of `crypto::encode`
+/// never logged. The uploaded media is the AEAD output of the chosen key mode
 /// (ciphertext-at-rest: no plaintext host alias / key material in the blob).
+///
+/// Key mode (v0.14.6): a NON-empty passphrase → user-passphrase mode (argon2id,
+/// kdf_id=1, unchanged). An EMPTY passphrase → device-keyring mode (kdf_id=2):
+/// a random 32-byte key is loaded-or-created in the OS keyring (via `store`)
+/// and used directly. The `.htbk` is encrypted in BOTH cases — a plaintext
+/// backup is never produced, and the device key is never logged.
 pub fn run_backup(
     backend: &mut dyn DriveBackend,
     passphrase: Zeroizing<String>,
+    store: &dyn DeviceKeyStore,
 ) -> Result<BackupResult, String> {
     let manifest = build_manifest()?;
     let created_at = manifest.created_at.clone();
@@ -469,8 +514,13 @@ pub fn run_backup(
         serde_json::to_vec(&manifest).map_err(|_| "manifest serialize failed".to_string())?,
     );
 
-    let blob = encode_manifest(passphrase.as_str(), plaintext.to_vec())
-        .map_err(|e| e.to_string())?;
+    let blob = if passphrase.is_empty() {
+        // Device-keyring mode: load-or-create the device key, encrypt with it.
+        let key = load_or_create_device_key(store)?;
+        crypto::encode_with_key(&key, plaintext.to_vec()).map_err(|e| e.to_string())?
+    } else {
+        encode_manifest(passphrase.as_str(), plaintext.to_vec()).map_err(|e| e.to_string())?
+    };
 
     let name = backup_filename(&host, &created_at);
     let (file_id, name, bytes, ret_created) =
@@ -515,10 +565,17 @@ fn backup_filename(host: &str, created_at: &str) -> String {
 
 // ---- LIST orchestration --------------------------------------------------
 
-/// List `.htbk` backups via cleartext appProperties (no decrypt).
+/// List `.htbk` backups via cleartext appProperties (no decrypt). Results are
+/// sorted newest-first (`created_at` descending) at this boundary so the FE
+/// restore picker renders them in the right order without re-sorting. The
+/// `created_at` values are RFC-3339 UTC (`YYYY-MM-DDTHH:MM:SSZ`) so lexical
+/// descending == chronological descending; legacy-root backups (whose
+/// `created_at` may fall back to Drive's createdTime) still sort and remain
+/// listable. Per-file metadata (file_id, name, host, created_at, schema) is the
+/// full set the picker needs; the caller passes a chosen `file_id` to restore.
 pub fn run_list(backend: &mut dyn DriveBackend) -> Result<Vec<BackupMeta>, String> {
     let remotes = backend.list(SCHEMA)?;
-    Ok(remotes
+    let mut metas: Vec<BackupMeta> = remotes
         .into_iter()
         .map(|r| BackupMeta {
             file_id: r.file_id,
@@ -527,7 +584,15 @@ pub fn run_list(backend: &mut dyn DriveBackend) -> Result<Vec<BackupMeta>, Strin
             host: r.host,
             schema: r.schema,
         })
-        .collect())
+        .collect();
+    // Newest first. Ties (or empty created_at) break by file_id for a stable,
+    // deterministic order.
+    metas.sort_by(|a, b| {
+        b.created_at
+            .cmp(&a.created_at)
+            .then_with(|| a.file_id.cmp(&b.file_id))
+    });
+    Ok(metas)
 }
 
 // ---- RESTORE orchestration (fail-safe, TSD §5) ---------------------------
@@ -543,13 +608,30 @@ pub fn run_restore(
     backend: &mut dyn DriveBackend,
     file_id: &str,
     passphrase: Zeroizing<String>,
+    store: &dyn DeviceKeyStore,
 ) -> Result<RestoreResult, String> {
-    // 1. Download + decode. A wrong passphrase / tampered blob fails on the
-    //    AEAD tag here and returns BEFORE anything on disk is touched.
+    // 1. Download + decode. A wrong passphrase / tampered blob / missing device
+    //    key fails here and returns BEFORE anything on disk is touched.
     let blob = backend.download(file_id)?;
-    let plaintext = Zeroizing::new(
-        crypto::decode(passphrase.as_str(), &blob).map_err(|e| e.to_string())?,
-    );
+
+    // Dispatch on the cleartext header key mode (v0.14.6): device-keyring
+    // containers read the key from the OS keyring; user-passphrase containers
+    // derive from the supplied passphrase exactly as before.
+    let plaintext = match crypto::header_key_mode(&blob).map_err(|e| e.to_string())? {
+        crypto::KeyMode::DeviceKeyring => {
+            let key = store.read_key()?.ok_or_else(|| {
+                "restore failed: this backup is encrypted with a device key stored in \
+this computer's keyring, but no such key was found (it was likely created on a \
+different machine). Restore it on the original computer, or use a \
+passphrase-protected backup."
+                    .to_string()
+            })?;
+            Zeroizing::new(crypto::decode_with_key(&key, &blob).map_err(|e| e.to_string())?)
+        }
+        crypto::KeyMode::UserPassphrase => {
+            Zeroizing::new(crypto::decode(passphrase.as_str(), &blob).map_err(|e| e.to_string())?)
+        }
+    };
     let manifest: Manifest = serde_json::from_slice(plaintext.as_slice())
         .map_err(|_| "restore failed: manifest in backup is not valid".to_string())?;
     if manifest.schema != SCHEMA {
@@ -763,9 +845,47 @@ pub mod prod {
         }
     }
 
-    /// `drive_backup` IPC body.
+    /// Production device-key store backed by the OS keyring. The 32-byte key is
+    /// stored base64-encoded (keyring entries are strings) under a DEDICATED
+    /// entry, separate from the OAuth refresh_token. The key never appears in
+    /// logs or errors.
+    pub struct KeyringDeviceKeyStore;
+
+    impl DeviceKeyStore for KeyringDeviceKeyStore {
+        fn read_key(&self) -> Result<Option<Zeroizing<[u8; DEVICE_KEY_LEN]>>, String> {
+            let entry = keyring::Entry::new(DEVICE_KEY_SERVICE, DEVICE_KEY_ACCOUNT)
+                .map_err(|e| format!("keyring open failed: {e}"))?;
+            match entry.get_password() {
+                Ok(b64) => {
+                    let raw = B64
+                        .decode(b64.trim().as_bytes())
+                        .map_err(|_| "device key in keyring is corrupt".to_string())?;
+                    if raw.len() != DEVICE_KEY_LEN {
+                        return Err("device key in keyring has wrong length".to_string());
+                    }
+                    let mut key = Zeroizing::new([0u8; DEVICE_KEY_LEN]);
+                    key.copy_from_slice(&raw);
+                    Ok(Some(key))
+                }
+                Err(keyring::Error::NoEntry) => Ok(None),
+                Err(e) => Err(format!("keyring read failed: {e}")),
+            }
+        }
+
+        fn store_key(&self, key: &[u8; DEVICE_KEY_LEN]) -> Result<(), String> {
+            let entry = keyring::Entry::new(DEVICE_KEY_SERVICE, DEVICE_KEY_ACCOUNT)
+                .map_err(|e| format!("keyring open failed: {e}"))?;
+            let b64 = B64.encode(key);
+            entry
+                .set_password(&b64)
+                .map_err(|e| format!("keyring store failed: {e}"))
+        }
+    }
+
+    /// `drive_backup` IPC body. An empty passphrase selects device-keyring mode.
     pub fn backup(passphrase: Zeroizing<String>) -> Result<BackupResult, String> {
-        with_client(|b| run_backup(b, passphrase))
+        let store = KeyringDeviceKeyStore;
+        with_client(|b| run_backup(b, passphrase, &store))
     }
 
     /// `drive_list_backups` IPC body.
@@ -778,7 +898,8 @@ pub mod prod {
         file_id: String,
         passphrase: Zeroizing<String>,
     ) -> Result<RestoreResult, String> {
-        with_client(|b| run_restore(b, &file_id, passphrase))
+        let store = KeyringDeviceKeyStore;
+        with_client(|b| run_restore(b, &file_id, passphrase, &store))
     }
 }
 
@@ -908,6 +1029,30 @@ mod tests {
         }
     }
 
+    /// In-memory device-key store for tests (no real OS keyring). Mirrors the
+    /// keyring's load-or-create and missing-entry semantics.
+    #[derive(Default)]
+    struct MockKeyStore {
+        key: RefCell<Option<[u8; DEVICE_KEY_LEN]>>,
+    }
+
+    impl MockKeyStore {
+        /// A store that already holds no key (fresh machine).
+        fn empty() -> Self {
+            Self::default()
+        }
+    }
+
+    impl DeviceKeyStore for MockKeyStore {
+        fn read_key(&self) -> Result<Option<Zeroizing<[u8; DEVICE_KEY_LEN]>>, String> {
+            Ok(self.key.borrow().map(Zeroizing::new))
+        }
+        fn store_key(&self, key: &[u8; DEVICE_KEY_LEN]) -> Result<(), String> {
+            *self.key.borrow_mut() = Some(*key);
+            Ok(())
+        }
+    }
+
     const PASS: &str = "correct horse battery staple";
 
     fn seed_sources(sb: &Sandbox) {
@@ -964,7 +1109,8 @@ mod tests {
         let orig_key = std::fs::read(sb.ssh("keys/id_test")).unwrap();
 
         let mut drive = FakeDrive::default();
-        let res = run_backup(&mut drive, Zeroizing::new(PASS.to_string())).unwrap();
+        let ks = MockKeyStore::empty();
+        let res = run_backup(&mut drive, Zeroizing::new(PASS.to_string()), &ks).unwrap();
         assert!(res.bytes > 0, "backup produced bytes");
         assert!(res.name.contains("test-box"), "filename carries host: {}", res.name);
 
@@ -974,7 +1120,7 @@ mod tests {
         std::fs::write(sb.data().join("settings.json"), b"{}").unwrap();
         std::fs::write(sb.ssh("keys/id_test"), b"CLOBBERED").unwrap();
 
-        let rr = run_restore(&mut drive, &res.file_id, Zeroizing::new(PASS.to_string())).unwrap();
+        let rr = run_restore(&mut drive, &res.file_id, Zeroizing::new(PASS.to_string()), &ks).unwrap();
         assert!(!rr.restored.is_empty());
         assert!(PathBuf::from(&rr.pre_restore_dir).is_dir(), "pre-restore dir exists");
 
@@ -992,7 +1138,8 @@ mod tests {
         seed_sources(&sb);
 
         let mut drive = FakeDrive::default();
-        let res = run_backup(&mut drive, Zeroizing::new(PASS.to_string())).unwrap();
+        let ks = MockKeyStore::empty();
+        let res = run_backup(&mut drive, Zeroizing::new(PASS.to_string()), &ks).unwrap();
 
         // Clobber targets, snapshot the clobbered state.
         std::fs::write(sb.ssh("config"), b"Host UNTOUCHED\n").unwrap();
@@ -1003,7 +1150,7 @@ mod tests {
         // Count pre-restore dirs before the failed attempt.
         let pre_before = count_pre_restore(&sb);
 
-        let err = run_restore(&mut drive, &res.file_id, Zeroizing::new("WRONG".to_string()))
+        let err = run_restore(&mut drive, &res.file_id, Zeroizing::new("WRONG".to_string()), &ks)
             .unwrap_err();
         assert!(
             err.contains("wrong passphrase") || err.contains("corrupt"),
@@ -1023,10 +1170,11 @@ mod tests {
         seed_sources(&sb);
 
         let mut drive = FakeDrive::default();
-        let res = run_backup(&mut drive, Zeroizing::new(PASS.to_string())).unwrap();
+        let ks = MockKeyStore::empty();
+        let res = run_backup(&mut drive, Zeroizing::new(PASS.to_string()), &ks).unwrap();
 
         // Leave the originals in place so they all get copied into pre-restore.
-        let rr = run_restore(&mut drive, &res.file_id, Zeroizing::new(PASS.to_string())).unwrap();
+        let rr = run_restore(&mut drive, &res.file_id, Zeroizing::new(PASS.to_string()), &ks).unwrap();
         let pre = PathBuf::from(&rr.pre_restore_dir);
         assert!(pre.is_dir());
         // config + secrets + settings + key = 4 existing targets copied.
@@ -1046,7 +1194,8 @@ mod tests {
         seed_sources(&sb);
 
         let mut drive = FakeDrive::default();
-        let _ = run_backup(&mut drive, Zeroizing::new(PASS.to_string())).unwrap();
+        let ks = MockKeyStore::empty();
+        let _ = run_backup(&mut drive, Zeroizing::new(PASS.to_string()), &ks).unwrap();
 
         // Grab the uploaded blob from the fake Drive.
         let blob = drive.store.borrow()[0].1.clone();
@@ -1094,13 +1243,48 @@ mod tests {
         seed_sources(&sb);
 
         let mut drive = FakeDrive::default();
-        let res = run_backup(&mut drive, Zeroizing::new(PASS.to_string())).unwrap();
+        let ks = MockKeyStore::empty();
+        let res = run_backup(&mut drive, Zeroizing::new(PASS.to_string()), &ks).unwrap();
         let metas = run_list(&mut drive).unwrap();
         assert_eq!(metas.len(), 1);
         assert_eq!(metas[0].file_id, res.file_id);
         assert_eq!(metas[0].host, "test-box");
         assert_eq!(metas[0].schema, SCHEMA);
         assert_eq!(metas[0].created_at, "2026-11-04T00:00:00Z");
+    }
+
+    #[test]
+    fn run_list_sorts_newest_first() {
+        // Seed three backups out of chronological order into the fake Drive and
+        // assert run_list returns them created_at descending (newest first).
+        let _g = env_lock();
+        let _sb = Sandbox::new("list-sort");
+        let mut drive = FakeDrive::default();
+        // Manually push (bypassing run_backup) so we control created_at.
+        for (id, ts) in [
+            ("2026-11-01T00:00:00Z"),
+            ("2026-11-05T00:00:00Z"),
+            ("2026-11-03T00:00:00Z"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            drive.store.borrow_mut().push((
+                format!("F{id}"),
+                vec![0u8; 8],
+                SCHEMA,
+                ts.to_string(),
+                "box".to_string(),
+                format!("hosterm-backup-box-{ts}.htbk"),
+            ));
+        }
+        let metas = run_list(&mut drive).unwrap();
+        let order: Vec<&str> = metas.iter().map(|m| m.created_at.as_str()).collect();
+        assert_eq!(
+            order,
+            vec!["2026-11-05T00:00:00Z", "2026-11-03T00:00:00Z", "2026-11-01T00:00:00Z"],
+            "list sorted newest-first"
+        );
     }
 
     #[test]
@@ -1126,9 +1310,10 @@ mod tests {
         let sb = Sandbox::new("perms");
         seed_sources(&sb);
         let mut drive = FakeDrive::default();
-        let res = run_backup(&mut drive, Zeroizing::new(PASS.to_string())).unwrap();
+        let ks = MockKeyStore::empty();
+        let res = run_backup(&mut drive, Zeroizing::new(PASS.to_string()), &ks).unwrap();
         std::fs::write(sb.ssh("keys/id_test"), b"CLOBBER").unwrap();
-        run_restore(&mut drive, &res.file_id, Zeroizing::new(PASS.to_string())).unwrap();
+        run_restore(&mut drive, &res.file_id, Zeroizing::new(PASS.to_string()), &ks).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -1146,11 +1331,123 @@ mod tests {
         let _sb = Sandbox::new("empty");
         // No config / secrets / settings / keys at all.
         let mut drive = FakeDrive::default();
-        let res = run_backup(&mut drive, Zeroizing::new(PASS.to_string())).unwrap();
+        let ks = MockKeyStore::empty();
+        let res = run_backup(&mut drive, Zeroizing::new(PASS.to_string()), &ks).unwrap();
         // Manifest has zero files but is still a valid encrypted backup.
-        let rr = run_restore(&mut drive, &res.file_id, Zeroizing::new(PASS.to_string())).unwrap();
+        let rr = run_restore(&mut drive, &res.file_id, Zeroizing::new(PASS.to_string()), &ks).unwrap();
         assert!(rr.restored.is_empty(), "nothing to restore on an empty backup");
         assert!(PathBuf::from(&rr.pre_restore_dir).is_dir());
+    }
+
+    // ---- device-keyring (optional-passphrase) backup/restore (v0.14.6) --
+
+    #[test]
+    fn empty_passphrase_device_key_roundtrip() {
+        let _g = env_lock();
+        let sb = Sandbox::new("devkey-roundtrip");
+        seed_sources(&sb);
+
+        let orig_cfg = std::fs::read(sb.ssh("config")).unwrap();
+        let orig_sec = std::fs::read(sb.ssh("hosterm.secrets")).unwrap();
+        let orig_key = std::fs::read(sb.ssh("keys/id_test")).unwrap();
+
+        let mut drive = FakeDrive::default();
+        let ks = MockKeyStore::empty();
+        // Empty passphrase → device-keyring mode. A fresh key is generated and
+        // stored in the mock keyring.
+        let res = run_backup(&mut drive, Zeroizing::new(String::new()), &ks).unwrap();
+        assert!(res.bytes > 0, "device-key backup produced bytes");
+        assert!(ks.key.borrow().is_some(), "device key persisted to keyring");
+
+        // The uploaded blob is encrypted (kdf_id=2) — NEVER plaintext.
+        let blob = drive.store.borrow()[0].1.clone();
+        assert_eq!(&blob[0..4], b"HTBK");
+        assert_eq!(blob[5], 2, "device-keyring kdf_id in header");
+        assert_eq!(
+            crypto::header_key_mode(&blob).unwrap(),
+            crypto::KeyMode::DeviceKeyring
+        );
+
+        // Clobber, then restore reads the key from the same keyring.
+        std::fs::write(sb.ssh("config"), b"Host CLOBBERED\n").unwrap();
+        std::fs::write(sb.ssh("keys/id_test"), b"CLOBBERED").unwrap();
+        let rr = run_restore(&mut drive, &res.file_id, Zeroizing::new(String::new()), &ks).unwrap();
+        assert!(!rr.restored.is_empty());
+
+        assert_eq!(std::fs::read(sb.ssh("config")).unwrap(), orig_cfg, "config restored (device key)");
+        assert_eq!(std::fs::read(sb.ssh("hosterm.secrets")).unwrap(), orig_sec, "secrets restored (device key)");
+        assert_eq!(std::fs::read(sb.ssh("keys/id_test")).unwrap(), orig_key, "key restored (device key)");
+    }
+
+    #[test]
+    fn device_key_reused_across_backups() {
+        let _g = env_lock();
+        let sb = Sandbox::new("devkey-reuse");
+        seed_sources(&sb);
+        let mut drive = FakeDrive::default();
+        let ks = MockKeyStore::empty();
+
+        let _ = run_backup(&mut drive, Zeroizing::new(String::new()), &ks).unwrap();
+        let key_after_first = ks.key.borrow().unwrap();
+        let _ = run_backup(&mut drive, Zeroizing::new(String::new()), &ks).unwrap();
+        let key_after_second = ks.key.borrow().unwrap();
+        assert_eq!(key_after_first, key_after_second, "same device key reused, not regenerated");
+    }
+
+    #[test]
+    fn device_key_restore_without_key_fails_cleanly() {
+        let _g = env_lock();
+        let sb = Sandbox::new("devkey-missing");
+        seed_sources(&sb);
+
+        // Snapshot the untouched targets so we can assert no write happened.
+        let orig_cfg = std::fs::read(sb.ssh("config")).unwrap();
+        let pre_before = count_pre_restore(&sb);
+
+        let mut drive = FakeDrive::default();
+        let backup_ks = MockKeyStore::empty();
+        let res = run_backup(&mut drive, Zeroizing::new(String::new()), &backup_ks).unwrap();
+
+        // Simulate restoring on a DIFFERENT machine: an empty keyring, no key.
+        let other_ks = MockKeyStore::empty();
+        let err = run_restore(&mut drive, &res.file_id, Zeroizing::new(String::new()), &other_ks)
+            .unwrap_err();
+        assert!(
+            err.contains("device key") && err.contains("keyring"),
+            "actionable missing-key error: {err}"
+        );
+
+        // Fail-safe: nothing on disk touched, no pre-restore dir created.
+        assert_eq!(std::fs::read(sb.ssh("config")).unwrap(), orig_cfg, "config untouched when key missing");
+        assert_eq!(count_pre_restore(&sb), pre_before, "no pre-restore dir when key missing");
+    }
+
+    #[test]
+    fn user_passphrase_roundtrip_still_works_after_device_mode_added() {
+        // Regression: adding device-key mode must not break existing
+        // user-passphrase containers (kdf_id=1). Backup with a passphrase, then
+        // restore with it; the device-key store is present but unused.
+        let _g = env_lock();
+        let sb = Sandbox::new("devkey-pw-compat");
+        seed_sources(&sb);
+        let orig_cfg = std::fs::read(sb.ssh("config")).unwrap();
+
+        let mut drive = FakeDrive::default();
+        let ks = MockKeyStore::empty();
+        let res = run_backup(&mut drive, Zeroizing::new(PASS.to_string()), &ks).unwrap();
+        // Passphrase backups must NOT touch the device key.
+        assert!(ks.key.borrow().is_none(), "passphrase mode never creates a device key");
+
+        let blob = drive.store.borrow()[0].1.clone();
+        assert_eq!(blob[5], 1, "user-passphrase kdf_id=1 in header");
+        assert_eq!(
+            crypto::header_key_mode(&blob).unwrap(),
+            crypto::KeyMode::UserPassphrase
+        );
+
+        std::fs::write(sb.ssh("config"), b"Host CLOBBERED\n").unwrap();
+        run_restore(&mut drive, &res.file_id, Zeroizing::new(PASS.to_string()), &ks).unwrap();
+        assert_eq!(std::fs::read(sb.ssh("config")).unwrap(), orig_cfg, "passphrase restore still works");
     }
 
     #[test]

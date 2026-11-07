@@ -28,7 +28,14 @@ use zeroize::Zeroizing;
 
 const MAGIC: &[u8; 4] = b"HTBK";
 const VERSION: u8 = 1;
+/// `kdf_id` = 1: argon2id over a user-supplied passphrase (original scheme).
 const KDF_ARGON2ID: u8 = 1;
+/// `kdf_id` = 2: NO key derivation — the 32-byte AEAD key is a random device
+/// key held in the OS keyring (optional-passphrase / device-keyring mode,
+/// v0.14.6). The salt field is still present and random-filled so the on-disk
+/// header layout is byte-identical to kdf_id=1; argon2 params are written as 0
+/// and ignored on decode. Backward compatible: a kdf_id=1 file is unaffected.
+const KDF_DEVICE_KEY: u8 = 2;
 const AEAD_XCHACHA: u8 = 1;
 
 const SALT_LEN: usize = 16;
@@ -74,8 +81,29 @@ impl std::fmt::Debug for Header {
 }
 
 impl Header {
+    // Retained for symmetry with `with_params`/`with_device_key` and the golden
+    // layout docs; the production encode path goes through `encode_with_params`.
+    #[allow(dead_code)]
     fn with_defaults(salt: [u8; SALT_LEN], nonce: [u8; NONCE_LEN]) -> Self {
         Header::with_params(salt, nonce, DEFAULT_M_COST, DEFAULT_T_COST, DEFAULT_P_COST)
+    }
+
+    /// Header for device-keyring mode (kdf_id=2). No argon2 derive is used, so
+    /// the cost params are written as 0 and ignored on decode; `salt` is kept
+    /// (random) purely so the on-disk layout stays byte-identical to kdf_id=1.
+    fn with_device_key(salt: [u8; SALT_LEN], nonce: [u8; NONCE_LEN]) -> Self {
+        Header {
+            version: VERSION,
+            kdf_id: KDF_DEVICE_KEY,
+            aead_id: AEAD_XCHACHA,
+            reserved: 0,
+            m_cost: 0,
+            t_cost: 0,
+            p_cost: 0,
+            salt,
+            nonce,
+            ct_len: 0,
+        }
     }
 
     /// Header with explicit argon2 params. Production uses `with_defaults`
@@ -139,7 +167,7 @@ impl Header {
             return Err(CryptoError::Malformed("unsupported version"));
         }
         let kdf_id = blob[5];
-        if kdf_id != KDF_ARGON2ID {
+        if kdf_id != KDF_ARGON2ID && kdf_id != KDF_DEVICE_KEY {
             return Err(CryptoError::Malformed("unsupported kdf_id"));
         }
         let aead_id = blob[6];
@@ -199,6 +227,30 @@ impl std::fmt::Display for CryptoError {
 }
 
 impl std::error::Error for CryptoError {}
+
+// ---- key mode (which scheme a container uses) ----------------------------
+
+/// How a `.htbk` container's AEAD key is obtained, read from the cleartext
+/// header `kdf_id`. The backup/restore layer dispatches on this so restore
+/// knows whether to prompt for a passphrase or read the device key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyMode {
+    /// kdf_id=1 — argon2id over a user-supplied passphrase.
+    UserPassphrase,
+    /// kdf_id=2 — random 32-byte device key stored in the OS keyring.
+    DeviceKeyring,
+}
+
+/// Parse ONLY the key mode from a container header (no decrypt, no key needed).
+/// Lets restore pick the right key path before asking for anything.
+pub fn header_key_mode(blob: &[u8]) -> Result<KeyMode, CryptoError> {
+    let header = Header::parse(blob)?;
+    match header.kdf_id {
+        KDF_ARGON2ID => Ok(KeyMode::UserPassphrase),
+        KDF_DEVICE_KEY => Ok(KeyMode::DeviceKeyring),
+        _ => Err(CryptoError::Malformed("unsupported kdf_id")),
+    }
+}
 
 // ---- KDF -----------------------------------------------------------------
 
@@ -367,6 +419,85 @@ pub fn decode(passphrase: &str, blob: &[u8]) -> Result<Vec<u8>, CryptoError> {
         .map_err(|_| CryptoError::TagFailed)?;
 
     Ok(plaintext)
+}
+
+// ---- device-keyring mode (kdf_id=2): raw 32-byte key, no argon2 ----------
+
+/// Encrypt a plaintext manifest into a device-keyring `.htbk` blob using a raw
+/// 32-byte AEAD key (NO passphrase, NO argon2). A fresh random salt + nonce are
+/// generated (OsRng); the salt is cosmetic for this mode (layout parity) and
+/// the 62-byte cleartext header — including `kdf_id=2` — is authenticated as
+/// AAD exactly as in the passphrase path. `plaintext` is zeroized before return.
+pub fn encode_with_key(key: &[u8; KEY_LEN], plaintext: Vec<u8>) -> Result<Vec<u8>, CryptoError> {
+    let mut salt = [0u8; SALT_LEN];
+    let mut nonce = [0u8; NONCE_LEN];
+    OsRng.fill_bytes(&mut salt);
+    OsRng.fill_bytes(&mut nonce);
+
+    let plaintext = Zeroizing::new(plaintext);
+    let mut header = Header::with_device_key(salt, nonce);
+
+    let aad = {
+        let full = header.to_prefix_bytes();
+        full[0..HEADER_LEN].to_vec()
+    };
+
+    let cipher = XChaCha20Poly1305::new(key.as_slice().into());
+    let ciphertext = cipher
+        .encrypt(
+            XNonce::from_slice(&header.nonce),
+            Payload {
+                msg: plaintext.as_slice(),
+                aad: &aad,
+            },
+        )
+        .map_err(|_| CryptoError::TagFailed)?;
+
+    header.ct_len = ciphertext.len() as u64;
+    let mut out = header.to_prefix_bytes();
+    out.extend_from_slice(&ciphertext);
+    Ok(out)
+}
+
+/// Decrypt a device-keyring `.htbk` blob with a raw 32-byte key. The container
+/// MUST be kdf_id=2 (a passphrase container would never have matched this key);
+/// any mismatch or tamper fails on the AEAD tag with no plaintext produced.
+pub fn decode_with_key(key: &[u8; KEY_LEN], blob: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    let header = Header::parse(blob)?;
+    if header.kdf_id != KDF_DEVICE_KEY {
+        return Err(CryptoError::Malformed("not a device-keyring container"));
+    }
+
+    let ct_start = HEADER_LEN + 8;
+    let ct_end = ct_start
+        .checked_add(header.ct_len as usize)
+        .ok_or(CryptoError::Malformed("ct_len overflow"))?;
+    if blob.len() != ct_end {
+        return Err(CryptoError::Malformed("ct_len mismatch"));
+    }
+    let ciphertext = &blob[ct_start..ct_end];
+    let aad = &blob[0..HEADER_LEN];
+
+    let cipher = XChaCha20Poly1305::new(key.as_slice().into());
+    let plaintext = cipher
+        .decrypt(
+            XNonce::from_slice(&header.nonce),
+            Payload {
+                msg: ciphertext,
+                aad,
+            },
+        )
+        .map_err(|_| CryptoError::TagFailed)?;
+
+    Ok(plaintext)
+}
+
+/// Generate a fresh random 32-byte device key (OsRng). Wrapped in `Zeroizing`
+/// so it is wiped on drop; the caller persists it into the OS keyring.
+pub fn random_device_key() -> Zeroizing<[u8; KEY_LEN]> {
+    let mut key = Zeroizing::new([0u8; KEY_LEN]);
+    OsRng.fill_bytes(key.as_mut());
+    key
 }
 
 // =========================================================================
@@ -539,5 +670,93 @@ mod tests {
         // Shrink the claimed ct_len; actual bytes no longer match.
         blob[62] = blob[62].wrapping_add(1);
         assert_eq!(decode("pw", &blob), Err(CryptoError::Malformed("ct_len mismatch")));
+    }
+
+    // ---- device-keyring mode (kdf_id=2) ---------------------------------
+
+    #[test]
+    fn device_key_roundtrip() {
+        let key = [0x5Au8; KEY_LEN];
+        let pt = sample_manifest();
+        let blob = encode_with_key(&key, pt.clone()).unwrap();
+        // Header advertises kdf_id=2.
+        assert_eq!(blob[5], 2, "kdf_id device-keyring");
+        assert_eq!(&blob[0..4], b"HTBK");
+        let out = decode_with_key(&key, &blob).unwrap();
+        assert_eq!(out, pt);
+    }
+
+    #[test]
+    fn device_key_header_mode_parsed() {
+        let key = [0x11u8; KEY_LEN];
+        let blob = encode_with_key(&key, sample_manifest()).unwrap();
+        assert_eq!(header_key_mode(&blob).unwrap(), KeyMode::DeviceKeyring);
+        // A passphrase blob reports UserPassphrase.
+        let pw_blob = enc_fast("pw", sample_manifest(), [1u8; SALT_LEN], [2u8; NONCE_LEN]);
+        assert_eq!(header_key_mode(&pw_blob).unwrap(), KeyMode::UserPassphrase);
+    }
+
+    #[test]
+    fn device_key_wrong_key_fails_on_tag() {
+        let blob = encode_with_key(&[0x01u8; KEY_LEN], sample_manifest()).unwrap();
+        assert_eq!(
+            decode_with_key(&[0x02u8; KEY_LEN], &blob),
+            Err(CryptoError::TagFailed)
+        );
+    }
+
+    #[test]
+    fn device_key_tampered_ciphertext_fails() {
+        let key = [0x7Fu8; KEY_LEN];
+        let mut blob = encode_with_key(&key, sample_manifest()).unwrap();
+        let last = blob.len() - 1;
+        blob[last] ^= 0x80;
+        assert_eq!(decode_with_key(&key, &blob), Err(CryptoError::TagFailed));
+    }
+
+    #[test]
+    fn device_key_tampered_header_fails_aad() {
+        let key = [0x3Cu8; KEY_LEN];
+        let mut blob = encode_with_key(&key, sample_manifest()).unwrap();
+        blob[38] ^= 0x01; // flip a nonce byte inside the authenticated header
+        assert_eq!(decode_with_key(&key, &blob), Err(CryptoError::TagFailed));
+    }
+
+    #[test]
+    fn device_key_rejects_passphrase_container() {
+        // decode_with_key must refuse a kdf_id=1 (passphrase) container.
+        let pw_blob = enc_fast("pw", sample_manifest(), [4u8; SALT_LEN], [5u8; NONCE_LEN]);
+        assert!(matches!(
+            decode_with_key(&[0u8; KEY_LEN], &pw_blob),
+            Err(CryptoError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn passphrase_decode_rejects_device_container() {
+        // The passphrase decode path must not accept a kdf_id=2 container as if
+        // it were argon2 — tag fails (different key) OR structural mismatch;
+        // either way no plaintext leaks.
+        let blob = encode_with_key(&[0x9Au8; KEY_LEN], sample_manifest()).unwrap();
+        assert!(decode("anything", &blob).is_err());
+    }
+
+    #[test]
+    fn random_device_key_is_random() {
+        let k1 = random_device_key();
+        let k2 = random_device_key();
+        assert_ne!(k1.as_slice(), k2.as_slice());
+        assert_eq!(k1.len(), KEY_LEN);
+    }
+
+    #[test]
+    fn device_key_ct_len_mismatch_rejected() {
+        let key = [0x22u8; KEY_LEN];
+        let mut blob = encode_with_key(&key, sample_manifest()).unwrap();
+        blob[62] = blob[62].wrapping_add(1);
+        assert_eq!(
+            decode_with_key(&key, &blob),
+            Err(CryptoError::Malformed("ct_len mismatch"))
+        );
     }
 }

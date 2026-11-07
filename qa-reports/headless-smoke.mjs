@@ -103,7 +103,12 @@ let googleStored = null;       // what google_account returns on load (null = si
 const DRIVE_ERR = 'Network failed <img src=x onerror=alert(1)>';
 let driveBackupFail = false;
 let driveRestoreFail = false;
-let driveListMode = "normal";  // normal|empty — empty exercises the neutral no-backups toast
+// normal|empty|multi|keyring. empty = neutral no-backups toast; multi = several
+// backups (picker ordering + select→file_id); keyring = the picked backup is a
+// device-keyring mode backup (restore must skip the passphrase prompt). A
+// hostile host name proves the picker rows render inert text (ADR-8).
+let driveListMode = "normal";
+const HOSTILE_HOST = 'ws<img src=x onerror=window.__pwn=1>';
 let storedUserSnippets = [];   // user-snippet CRUD store (read/write_user_snippets)
 let googleSignInFail = false;  // flip to exercise the auth-failed error path
 // FE-ANS Ansible v1 mock state.
@@ -209,6 +214,22 @@ const invoke = (cmd, args = {}) => {
     }
     case "drive_list_backups": {
       if (driveListMode === "empty") return Promise.resolve([]);
+      if (driveListMode === "multi") {
+        // Deliberately UNSORTED (oldest first) so the FE must sort newest-first.
+        // The hostile host name on the newest proves the row renders inert text.
+        return Promise.resolve([
+          { file_id: "f-old", name: "hosterm-backup-old.age", created_at: "2026-11-05T08:00:00Z", host: "db-core", schema: 1, key_mode: "user-passphrase" },
+          { file_id: "f-new", name: "hosterm-backup-new.age", created_at: "2026-11-07T10:00:00Z", host: HOSTILE_HOST, schema: 1, key_mode: "user-passphrase" },
+          { file_id: "f-mid", name: "hosterm-backup-mid.age", created_at: "2026-11-06T09:00:00Z", host: "ws", schema: 1, key_mode: "user-passphrase" },
+        ]);
+      }
+      if (driveListMode === "keyring") {
+        // The newest (pre-selected) backup is device-keyring mode => restore
+        // must NOT prompt for a passphrase.
+        return Promise.resolve([
+          { file_id: "f-keyring", name: "hosterm-backup-keyring.age", created_at: "2026-11-07T10:00:00Z", host: "ws", schema: 1, key_mode: "device-keyring" },
+        ]);
+      }
       return Promise.resolve([
         { file_id: "f-mock", name: "hosterm-backup.age", created_at: "2026-11-07T10:00:00Z", host: "ws", schema: 1 },
       ]);
@@ -2827,10 +2848,13 @@ await page.locator("#toast-stack .toast-close").first().click();
 await page.waitForTimeout(200);
 driveListMode = "normal";
 
-// restore success: confirm the passphrase (no-confirm field), expect an ok toast.
+// restore success: pick the (single) backup, confirm the passphrase (no-confirm
+// field), expect an ok toast. The restore picker now precedes the passphrase.
 driveRestoreFail = false;
 await ensureDrive();
 await page.locator("#drive-restore-btn").click();
+await page.locator("#restore-dialog:not(.hidden)").waitFor({ timeout: 2000 });
+await page.locator("#restore-ok").click();
 await page.locator("#pass-dialog:not(.hidden)").waitFor({ timeout: 2000 });
 // Reset-to-masked on every open: a later prompt opens masked regardless of the
 // eye state a prior prompt was left in (t_5fe89707 — wipe + remask on reopen).
@@ -2856,6 +2880,8 @@ await page.waitForTimeout(200);
 driveRestoreFail = true;
 await ensureDrive();
 await page.locator("#drive-restore-btn").click();
+await page.locator("#restore-dialog:not(.hidden)").waitFor({ timeout: 2000 });
+await page.locator("#restore-ok").click();
 await page.locator("#pass-dialog:not(.hidden)").waitFor({ timeout: 2000 });
 await page.locator("#pass-input").fill("restorepw");
 await page.locator("#pass-ok").click();
@@ -2866,6 +2892,155 @@ check("FE-FIX t_058b9aee: restore failure raises a role=alert --error toast (aut
   JSON.stringify(toasts));
 await page.locator("#toast-stack .toast-close").first().click();
 await page.waitForTimeout(200);
+driveRestoreFail = false;
+
+// ============================================================================
+// v0.14.6: optional backup passphrase + restore file picker + device-keyring
+// ============================================================================
+
+// -- v0.14.6 (1) OPTIONAL BACKUP PASSPHRASE: empty is accepted + helper copy --
+// The backup prompt shows the device-only helper line, keeps OK enabled with an
+// empty field, and submitting empty invokes drive_backup with an empty string.
+driveBackupFail = false;
+await ensureDrive();
+await page.locator("#drive-backup-btn").click();
+await page.locator("#pass-dialog:not(.hidden)").waitFor({ timeout: 2000 });
+const backupHelper = await page.evaluate(() => {
+  const h = document.getElementById("pass-helper");
+  const ok = document.getElementById("pass-ok");
+  return { text: h.textContent, hidden: h.hidden, okDisabled: ok.disabled };
+});
+check("v0.14.6 §1: backup prompt shows the device-only helper line (exact copy), OK not disabled",
+  backupHelper.text === "Leave empty to protect this backup with this device only." &&
+  !backupHelper.hidden && !backupHelper.okDisabled,
+  JSON.stringify(backupHelper));
+// Submit with BOTH fields empty — accepted, no "Enter a passphrase" / mismatch error.
+const callsBeforeEmptyBackup = calls.length;
+await page.locator("#pass-ok").click();
+await page.waitForTimeout(120);
+const emptyBackupCall = calls.slice(callsBeforeEmptyBackup).find((c) => c.cmd === "drive_backup");
+toasts = await toastInfo();
+check("v0.14.6 §1: empty passphrase is a valid backup — drive_backup invoked with passphrase='' and a success toast raised",
+  !!emptyBackupCall && emptyBackupCall.args.passphrase === "" &&
+  toasts.length === 1 && toasts[0].ok && toasts[0].title === "Backup complete",
+  JSON.stringify({ emptyBackupCall, toasts }));
+await page.locator("#toast-stack .toast-close").first().click();
+await page.waitForTimeout(200);
+// Typed-passphrase mismatch still enforced (confirm-match behaviour preserved).
+await ensureDrive();
+await page.locator("#drive-backup-btn").click();
+await page.locator("#pass-dialog:not(.hidden)").waitFor({ timeout: 2000 });
+await page.locator("#pass-input").fill("typed-one");
+await page.locator("#pass-confirm").fill("typed-two");
+await page.locator("#pass-ok").click();
+await page.waitForTimeout(80);
+const mismatchErr = await page.evaluate(() => {
+  const e = document.getElementById("pass-error");
+  return { shown: !e.hidden, text: e.textContent, dialogOpen: !document.getElementById("pass-dialog").classList.contains("hidden") };
+});
+check("v0.14.6 §1: a TYPED passphrase still enforces confirm-match (mismatch blocks submit)",
+  mismatchErr.shown && mismatchErr.text === "Passphrases do not match." && mismatchErr.dialogOpen,
+  JSON.stringify(mismatchErr));
+// Cancel out of the still-open dialog to clean up for the next block.
+await page.locator("#pass-cancel").click();
+await page.waitForTimeout(200);
+
+// -- v0.14.6 (2) RESTORE FILE PICKER: newest-first, host+time, select→file_id --
+driveListMode = "multi";
+await ensureDrive();
+await page.locator("#drive-restore-btn").click();
+await page.locator("#restore-dialog:not(.hidden)").waitFor({ timeout: 2000 });
+const picker = await page.evaluate(() => {
+  const rows = [...document.querySelectorAll("#restore-list .restore-row")];
+  return {
+    count: rows.length,
+    group: document.getElementById("restore-list").getAttribute("role"),
+    hosts: rows.map((r) => r.querySelector(".restore-host").textContent),
+    whens: rows.map((r) => r.querySelector(".restore-when").textContent),
+    checked: rows.map((r) => r.getAttribute("aria-checked")),
+    // newest row's host carries a hostile byte: must render inert (0 children)
+    firstHostKids: rows[0].querySelector(".restore-host").childElementCount,
+    pwn: typeof window.__pwn !== "undefined",
+    roles: rows.map((r) => r.getAttribute("role")),
+  };
+});
+check("v0.14.6 §2: picker renders one radio row per backup, newest first, only the first pre-selected",
+  picker.count === 3 && picker.group === "radiogroup" &&
+  JSON.stringify(picker.checked) === JSON.stringify(["true", "false", "false"]) &&
+  picker.roles.every((r) => r === "radio"),
+  JSON.stringify(picker));
+check("v0.14.6 §2: rows are newest-first with host + a formatted local time, hostile host rendered inert (ADR-8)",
+  // f-new (hostile host) is newest, then f-mid (ws), then f-old (db-core)
+  picker.hosts[1] === "ws" && picker.hosts[2] === "db-core" &&
+  picker.whens.every((w) => w.length > 0) &&
+  picker.firstHostKids === 0 && !picker.pwn,
+  JSON.stringify(picker));
+// Keyboard: ArrowDown moves selection to the middle (f-mid), then restore it.
+await page.locator("#restore-list .restore-row").first().focus();
+await page.keyboard.press("ArrowDown");
+const afterArrow = await page.evaluate(() => {
+  const rows = [...document.querySelectorAll("#restore-list .restore-row")];
+  return { checked: rows.map((r) => r.getAttribute("aria-checked")), focused: document.activeElement?.querySelector?.(".restore-host")?.textContent };
+});
+check("v0.14.6 §2: ArrowDown moves the radio selection down (keyboard operable)",
+  JSON.stringify(afterArrow.checked) === JSON.stringify(["false", "true", "false"]) &&
+  afterArrow.focused === "ws",
+  JSON.stringify(afterArrow));
+// Picking the middle backup (f-mid) proceeds to restore THAT file_id.
+const callsBeforePick = calls.length;
+await page.locator("#restore-ok").click();
+await page.locator("#pass-dialog:not(.hidden)").waitFor({ timeout: 2000 });
+await page.locator("#pass-input").fill("restorepw");
+await page.locator("#pass-ok").click();
+await page.waitForTimeout(140);
+const pickRestoreCall = calls.slice(callsBeforePick).find((c) => c.cmd === "drive_restore");
+const pickPreflightCall = calls.slice(callsBeforePick).find((c) => c.cmd === "drive_restore_preflight");
+check("v0.14.6 §2: selecting a non-newest backup restores THAT file_id (f-mid), preflight + restore both target it",
+  !!pickRestoreCall && pickRestoreCall.args.fileId === "f-mid" &&
+  !!pickPreflightCall && pickPreflightCall.args.fileId === "f-mid",
+  JSON.stringify({ pickRestoreCall, pickPreflightCall }));
+await page.locator("#toast-stack .toast-close").first().click();
+await page.waitForTimeout(200);
+// Cancelling the picker aborts restore (no drive_restore invoked).
+await ensureDrive();
+await page.locator("#drive-restore-btn").click();
+await page.locator("#restore-dialog:not(.hidden)").waitFor({ timeout: 2000 });
+const callsBeforeCancel = calls.length;
+await page.locator("#restore-cancel").click();
+await page.waitForTimeout(140);
+check("v0.14.6 §2: cancelling the picker aborts restore (no drive_restore, dialog closed)",
+  !calls.slice(callsBeforeCancel).some((c) => c.cmd === "drive_restore") &&
+  await page.evaluate(() => document.getElementById("restore-dialog").classList.contains("hidden")));
+
+// -- v0.14.6 (1b) RESTORE PROMPT SKIPPED FOR DEVICE-KEYRING MODE --
+driveListMode = "keyring";
+await ensureDrive();
+await page.locator("#drive-restore-btn").click();
+await page.locator("#restore-dialog:not(.hidden)").waitFor({ timeout: 2000 });
+const callsBeforeKeyring = calls.length;
+await page.locator("#restore-ok").click();
+// A device-keyring backup shows the confirm dialog (#dialog), NOT the passphrase
+// prompt (#pass-dialog). Confirm and restore proceeds with passphrase=null.
+await page.locator("#dialog:not(.hidden)").waitFor({ timeout: 2000 });
+const keyringGate = await page.evaluate(() => ({
+  passDialogHidden: document.getElementById("pass-dialog").classList.contains("hidden"),
+  confirmShown: !document.getElementById("dialog").classList.contains("hidden"),
+}));
+check("v0.14.6 §1b: device-keyring restore skips the passphrase prompt and shows a confirm dialog instead",
+  keyringGate.passDialogHidden && keyringGate.confirmShown,
+  JSON.stringify(keyringGate));
+await page.locator("#dialog button", { hasText: "Restore" }).click();
+await page.waitForTimeout(140);
+const keyringRestoreCall = calls.slice(callsBeforeKeyring).find((c) => c.cmd === "drive_restore");
+toasts = await toastInfo();
+check("v0.14.6 §1b: device-keyring restore invokes drive_restore with passphrase=null and succeeds",
+  !!keyringRestoreCall && keyringRestoreCall.args.passphrase === null &&
+  toasts.length === 1 && toasts[0].ok && toasts[0].title === "Restore complete",
+  JSON.stringify({ keyringRestoreCall, toasts }));
+await page.locator("#toast-stack .toast-close").first().click();
+await page.waitForTimeout(200);
+driveListMode = "normal";
+driveBackupFail = false;
 driveRestoreFail = false;
 
 // -- FE-FIX 6: max-stack/eviction (newest-first, max 3) + no CSP violations --
@@ -3674,6 +3849,65 @@ check("NAV RAIL: Ctrl+K is a no-op outside Hosts", await page.evaluate(() => doc
 await page.locator('.rail-item[data-view="host"]').click();
 await page.keyboard.press("Control+k");
 check("NAV RAIL: Ctrl+K focuses search on Hosts", await page.evaluate(() => document.activeElement?.id === "host-search"));
+
+// -- v0.14.6 (3) SIDEBAR TOGGLE VIA RAIL MENU --
+// We are on Hosts with the panel expanded. Clicking the ALREADY-ACTIVE Hosts
+// rail item collapses the panel; clicking it again expands it. aria-expanded on
+// the rail items stays in sync and the collapsed state persists.
+const railToggleStart = await page.evaluate(() => ({
+  collapsed: document.body.classList.contains("panel-collapsed"),
+  hostExpanded: document.querySelector('.rail-item[data-view="host"]').getAttribute("aria-expanded"),
+}));
+check("v0.14.6 §3: start on Hosts with the panel expanded and aria-expanded=true",
+  !railToggleStart.collapsed && railToggleStart.hostExpanded === "true",
+  JSON.stringify(railToggleStart));
+await page.locator('.rail-item[data-view="host"]').click();
+await page.waitForTimeout(60);
+const railCollapse = await page.evaluate(() => ({
+  collapsed: document.body.classList.contains("panel-collapsed"),
+  hostExpanded: document.querySelector('.rail-item[data-view="host"]').getAttribute("aria-expanded"),
+  persisted: localStorage.getItem("hosterm.panel-collapsed"),
+}));
+check("v0.14.6 §3: clicking the ACTIVE rail item collapses the panel, syncs aria-expanded=false, persists",
+  railCollapse.collapsed && railCollapse.hostExpanded === "false" && railCollapse.persisted === "1",
+  JSON.stringify(railCollapse));
+await page.locator('.rail-item[data-view="host"]').click();
+await page.waitForTimeout(60);
+const railReexpand = await page.evaluate(() => ({
+  collapsed: document.body.classList.contains("panel-collapsed"),
+  hostExpanded: document.querySelector('.rail-item[data-view="host"]').getAttribute("aria-expanded"),
+}));
+check("v0.14.6 §3: clicking the ACTIVE rail item again expands the panel (toggle), aria-expanded=true",
+  !railReexpand.collapsed && railReexpand.hostExpanded === "true",
+  JSON.stringify(railReexpand));
+// Collapse again, then click a DIFFERENT rail item: it switches section AND
+// ensures the panel is expanded (collapsed persistence is overridden by a switch).
+await page.locator('.rail-item[data-view="host"]').click(); // collapse
+await page.waitForTimeout(60);
+await page.locator('.rail-item[data-view="keys"]').click();  // switch while collapsed
+await page.waitForTimeout(60);
+const railSwitch = await page.evaluate(() => ({
+  collapsed: document.body.classList.contains("panel-collapsed"),
+  keysCurrent: document.querySelector('.rail-item[data-view="keys"]').getAttribute("aria-current"),
+  keysExpanded: document.querySelector('.rail-item[data-view="keys"]').getAttribute("aria-expanded"),
+  hostExpanded: document.querySelector('.rail-item[data-view="host"]').getAttribute("aria-expanded"),
+  keysVisible: !document.querySelector("#view-keys").classList.contains("hidden"),
+}));
+check("v0.14.6 §3: clicking a DIFFERENT rail item while collapsed switches section AND expands the panel",
+  !railSwitch.collapsed && railSwitch.keysCurrent === "page" && railSwitch.keysExpanded === "true" &&
+  railSwitch.hostExpanded === "false" && railSwitch.keysVisible,
+  JSON.stringify(railSwitch));
+// The rail items are keyboard operable (Enter activates the toggle on focus).
+await page.locator('.rail-item[data-view="keys"]').focus();
+await page.keyboard.press("Enter");
+await page.waitForTimeout(60);
+const railKeyboard = await page.evaluate(() => document.body.classList.contains("panel-collapsed"));
+check("v0.14.6 §3: the active rail item is keyboard operable (Enter toggles collapse)", railKeyboard);
+// Restore to Hosts expanded for the downstream Ansible checks.
+await page.locator('.rail-item[data-view="keys"]').click(); // active+collapsed -> expand
+await page.waitForTimeout(60);
+await page.locator('.rail-item[data-view="host"]').click(); // switch back to Hosts (expands)
+await page.waitForTimeout(60);
 
 ansibleCheckState = { missing: false };
 await page.locator('.rail-item[data-view="ansible"]').click();

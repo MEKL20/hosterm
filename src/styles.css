@@ -496,6 +496,31 @@ body.panel-collapsed #sb-resize { display: none; }
 .pass-eye[aria-pressed="true"] .eye-hide { display: block; }
 .pass-error { margin-top: 8px; font-size: 11.5px; color: var(--danger); }
 .pass-error[hidden] { display: none; }
+/* Optional-passphrase helper line (backup): a quiet secondary note under the
+   message. Hidden attribute collapses it when the prompt is passphrase-only. */
+.pass-helper { margin: 4px 0 0; font-size: 11.5px; color: var(--dim); }
+.pass-helper[hidden] { display: none; }
+
+/* Restore backup picker: a single-select list of backups (newest first). Each
+   row shows the host and a local timestamp; the selected row carries the
+   accent treatment that matches other selectable rows (bg --accent-soft +
+   accent outline — §6.4.2: bg+outline required together for non-text contrast).
+   Keyboard: roving tabindex, arrows move selection. */
+.restore-list {
+  display: flex; flex-direction: column; gap: 4px;
+  margin: 10px 0; max-height: 300px; overflow-y: auto;
+}
+.restore-row {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  width: 100%; box-sizing: border-box; text-align: left;
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: 4px;
+  background: var(--bg); color: var(--text); cursor: pointer; font: inherit;
+}
+.restore-row:hover { background: var(--raised); }
+.restore-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.restore-row.sel { background: var(--accent-soft); outline: 1px solid var(--accent); outline-offset: -1px; }
+.restore-host { font-size: 13px; font-weight: 600; }
+.restore-when { font-size: 11.5px; color: var(--dim); white-space: nowrap; }
 
 /* Keys manager list */
 .keys-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; max-height: 320px; overflow-y: auto; }

@@ -176,7 +176,11 @@ let googleError = "";
 
 // Drive backup/restore IPC result shapes (serde default snake_case, TSD §3).
 interface BackupResult { file_id: string; name: string; bytes: number; created_at: string }
-interface BackupMeta { file_id: string; name: string; created_at: string; host: string; schema: number }
+// `key_mode` is finalized by the backend card; until it ships we treat it as
+// optional. "device-keyring" => the backup is protected by the OS keyring and
+// restore needs no user passphrase; anything else (incl. undefined, legacy, or
+// "user-passphrase") => prompt for the passphrase on restore.
+interface BackupMeta { file_id: string; name: string; created_at: string; host: string; schema: number; key_mode?: string }
 interface RestoreResult { restored: string[]; pre_restore_dir: string }
 interface PreflightTarget { path_role: string; path: string; exists: boolean }
 interface RestorePreflight { targets: PreflightTarget[] }
@@ -431,6 +435,12 @@ function passphrasePrompt(
   message: string,
   okLabel: string,
   confirm: boolean,
+  // When true an EMPTY passphrase is a valid submission (backup: protect the
+  // backup with this device only). `helper` is a short static line shown under
+  // the message (empty => hidden). The confirm field is only enforced when a
+  // non-empty passphrase is actually typed.
+  allowEmpty = false,
+  helper = "",
 ): Promise<string | null> {
   return new Promise((resolve) => {
     const input = $("#pass-input") as HTMLInputElement;
@@ -439,11 +449,14 @@ function passphrasePrompt(
     const eyeBtn = $("#pass-eye") as HTMLButtonElement;
     const confirmEyeBtn = $("#pass-confirm-eye") as HTMLButtonElement;
     const err = $("#pass-error");
+    const helperEl = $("#pass-helper");
     input.value = "";
     confirmInput.value = "";
     err.hidden = true;
     err.textContent = "";
     confirmRow.hidden = !confirm;
+    helperEl.textContent = helper;
+    helperEl.hidden = !helper;
     $("#pass-title").textContent = title;
     $("#pass-msg").textContent = message;
     $("#pass-label").textContent = confirm ? "New passphrase" : "Passphrase";
@@ -480,6 +493,10 @@ function passphrasePrompt(
       confirmInput.value = "";
       setFieldRevealed(input, eyeBtn, false);
       setFieldRevealed(confirmInput, confirmEyeBtn, false);
+      // Reset the optional-passphrase helper so a later prompt (e.g. restore)
+      // does not inherit the backup copy.
+      helperEl.textContent = "";
+      helperEl.hidden = true;
       okBtn.removeEventListener("click", onOk);
       cancelBtn.removeEventListener("click", onCancel);
       eyeBtn.removeEventListener("click", onEye);
@@ -496,6 +513,10 @@ function passphrasePrompt(
     const onOk = () => {
       const value = input.value;
       if (!value) {
+        // Empty is a valid submission only when the prompt allows it (optional
+        // backup passphrase = device-only protection). When empty is accepted,
+        // the confirm field is irrelevant — no match check.
+        if (allowEmpty) { finish(""); return; }
         err.textContent = "Enter a passphrase.";
         err.hidden = false;
         return;
@@ -642,6 +663,8 @@ async function driveBackup() {
       + "encrypted file — without this passphrase the backup cannot be restored.",
     "Back up",
     true,
+    true,
+    "Leave empty to protect this backup with this device only.",
   );
   if (pass === null) return;
   setDriveBusy(true);
@@ -662,11 +685,86 @@ async function driveBackup() {
   }
 }
 
+// Format an ISO-8601 created_at for display in the local timezone. Falls back
+// to the raw string if parsing fails (never throws into the renderer).
+function formatBackupWhen(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString(undefined, {
+    year: "numeric", month: "short", day: "numeric",
+    hour: "2-digit", minute: "2-digit",
+  });
+}
+
+// Choose which backup to restore from a list (newest first). Returns the picked
+// BackupMeta or null if cancelled. Rows are cloned from the static template and
+// their host/time text is set via textContent — Drive-origin strings are
+// hostile input (ADR-8), never interpolated into innerHTML. The radiogroup is
+// keyboard operable (arrows move selection; the active row is pre-selected).
+function restorePicker(backups: BackupMeta[]): Promise<BackupMeta | null> {
+  return new Promise((resolve) => {
+    const list = $("#restore-list");
+    const tpl = $<HTMLTemplateElement>("#restore-row-template");
+    const okBtn = $("#restore-ok") as HTMLButtonElement;
+    const cancelBtn = $("#restore-cancel") as HTMLButtonElement;
+    list.textContent = "";
+    let selected = 0;
+    const rows: HTMLButtonElement[] = [];
+
+    const applySelection = () => {
+      rows.forEach((row, i) => {
+        const on = i === selected;
+        row.setAttribute("aria-checked", String(on));
+        row.tabIndex = on ? 0 : -1;
+        row.classList.toggle("sel", on);
+      });
+    };
+    const moveTo = (i: number) => {
+      selected = Math.max(0, Math.min(rows.length - 1, i));
+      applySelection();
+      rows[selected].focus();
+    };
+
+    backups.forEach((meta, i) => {
+      const row = tpl.content.firstElementChild!.cloneNode(true) as HTMLButtonElement;
+      row.querySelector<HTMLElement>(".restore-host")!.textContent = meta.host || "(unknown host)";
+      row.querySelector<HTMLElement>(".restore-when")!.textContent = formatBackupWhen(meta.created_at);
+      row.addEventListener("click", () => { selected = i; applySelection(); });
+      row.addEventListener("dblclick", () => { selected = i; applySelection(); onOk(); });
+      row.addEventListener("keydown", (ev: KeyboardEvent) => {
+        if (ev.key === "ArrowDown") { ev.preventDefault(); moveTo(selected + 1); }
+        else if (ev.key === "ArrowUp") { ev.preventDefault(); moveTo(selected - 1); }
+        else if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); selected = i; applySelection(); }
+      });
+      rows.push(row);
+      list.appendChild(row);
+    });
+    applySelection();
+
+    const cleanup = () => {
+      okBtn.removeEventListener("click", onOk);
+      cancelBtn.removeEventListener("click", onCancel);
+      restoreDialogResolve = null;
+    };
+    const finish = (value: BackupMeta | null) => {
+      cleanup();
+      closeOverlay("#restore-dialog");
+      resolve(value);
+    };
+    function onOk() { finish(backups[selected] ?? null); }
+    function onCancel() { finish(null); }
+
+    okBtn.addEventListener("click", onOk);
+    cancelBtn.addEventListener("click", onCancel);
+    restoreDialogResolve = onCancel;
+    openOverlay("#restore-dialog", rows[0] ?? okBtn);
+  });
+}
+
 async function driveRestore() {
   if (drivePending || googleAccount === null) return;
   setDriveBusy(true);
-  setDriveStatus("Finding the latest backup…");
-  let fileId: string;
+  setDriveStatus("Finding backups…");
   try {
     const backups = await invoke<BackupMeta[]>("drive_list_backups");
     if (backups.length === 0) {
@@ -684,8 +782,13 @@ async function driveRestore() {
     }
     // Newest first by created_at (ISO-8601 strings sort lexicographically).
     backups.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
-    fileId = backups[0].file_id;
+    setDriveStatus("");
+    // Let the user pick WHICH backup (there can be several).
+    const chosen = await restorePicker(backups);
+    if (chosen === null) { setDriveBusy(false); return; }
+    const fileId = chosen.file_id;
     // Overwrite warning: which real files this restore would replace.
+    setDriveStatus("Checking which files would be replaced…");
     const preflight = await invoke<RestorePreflight>("drive_restore_preflight", { fileId });
     const existing = preflight.targets.filter((t) => t.exists).map((t) => t.path);
     const warnBody = existing.length
@@ -694,15 +797,35 @@ async function driveRestore() {
         + "\n\nA timestamped copy of the current files is saved first."
       : "No existing files will be overwritten. A pre-restore copy is still made.";
     setDriveStatus("");
-    const pass = await passphrasePrompt(
-      "Restore from Google Drive",
-      warnBody,
-      "Restore",
-      false,
-    );
-    if (pass === null) { setDriveBusy(false); return; }
+    // Only prompt for a passphrase when this backup is user-passphrase mode.
+    // Device-keyring backups are restored via the OS keyring (no prompt). The
+    // backend's key_mode drives this; absent/legacy => prompt (safe default).
+    let passphrase: string | null = null;
+    if (chosen.key_mode !== "device-keyring") {
+      passphrase = await passphrasePrompt(
+        "Restore from Google Drive",
+        warnBody,
+        "Restore",
+        false,
+      );
+      if (passphrase === null) { setDriveBusy(false); return; }
+    } else {
+      // No passphrase prompt: confirm the overwrite warning before proceeding.
+      const choice = await dialog(
+        "Restore from Google Drive",
+        warnBody + "\n\nThis backup is protected by this device — no passphrase is needed.",
+        [
+          { label: "Restore", id: "restore", style: "primary" },
+          { label: "Cancel", id: "cancel" },
+        ],
+        "restore",
+        "cancel",
+      );
+      if (choice !== "restore") { setDriveBusy(false); return; }
+    }
     setDriveStatus("Downloading and decrypting…");
-    const res = await invoke<RestoreResult>("drive_restore", { fileId, passphrase: pass });
+    // Device-keyring restore passes no passphrase; the backend uses the keyring.
+    const res = await invoke<RestoreResult>("drive_restore", { fileId, passphrase });
     setDriveStatus("");
     showToast({
       tone: "ok",
@@ -778,6 +901,8 @@ let dialogResolve: ((id: string) => void) | null = null;
 let dialogEscapeId = "cancel";
 // Set while the passphrase dialog is open; Escape invokes it (= cancel).
 let passDialogResolve: (() => void) | null = null;
+// Set while the restore picker is open; Escape invokes it (= cancel).
+let restoreDialogResolve: (() => void) | null = null;
 // Pending pass-dialog exit-transition fallback timer (reduced-motion never
 // fires transitionend); cleared on reopen so it cannot re-hide a live dialog.
 let passDialogExitTimer: number | null = null;
@@ -811,6 +936,7 @@ function onOverlayEscape() {
   const top = overlayStack[overlayStack.length - 1];
   if (!top) return;
   if (top.el.id === "pass-dialog") { passDialogResolve?.(); }
+  else if (top.el.id === "restore-dialog") { restoreDialogResolve?.(); }
   else if (top.el.id === "dialog") resolveDialog(dialogEscapeId);
   else if (top.el.id === "modal") cancelEditor();
   else if (top.el.id === "raw-modal") cancelRaw();
@@ -2348,7 +2474,7 @@ function refreshHostDots() {
 }
 
 // app version for the status bar; keep in sync with package.json / tauri.conf.json
-const APP_VERSION = "v0.14.5";
+const APP_VERSION = "v0.14.6";
 
 // status bar updater (§4.3): dipanggil dari activateTab (semua jenis tab),
 // openTerminal/splitTerminal/closeTab dan busy() SFTP.
@@ -2660,6 +2786,26 @@ async function refreshKeyViews() {
 
 type Section = "host" | "keys" | "ansible";
 let activeSection: Section = "host";
+// Whether the contextual section panel is collapsed. Module-level so the rail
+// click handler (toggle on the active item) and selectSection (expand on a
+// section switch) share one source of truth. Mutated only via setPanelCollapsed.
+let panelCollapsed = false;
+
+// Collapse/expand the contextual section panel. Also keeps aria-expanded on the
+// rail items in sync (a rail item "expands" the panel when active), persists the
+// collapsed state, and refits terminals. Assigned the real impl in the wire-up;
+// a no-op stub keeps early calls safe before DOMContentLoaded.
+let setPanelCollapsed: (collapsed: boolean) => void = () => {};
+
+// Reflect the collapsed state on every rail item's aria-expanded: the active
+// item's panel is expanded iff the panel is not collapsed; inactive items point
+// at a collapsed (for them) panel.
+function syncRailExpanded() {
+  document.querySelectorAll<HTMLButtonElement>(".rail-item[data-view]").forEach((btn) => {
+    const active = btn.dataset.view === activeSection;
+    btn.setAttribute("aria-expanded", String(active && !panelCollapsed));
+  });
+}
 
 function selectSection(next: Section, focusPanel = true) {
   activeSection = next;
@@ -2674,9 +2820,22 @@ function selectSection(next: Section, focusPanel = true) {
   add.hidden = next !== "host";
   add.classList.toggle("hidden", next !== "host");
   if (next === "keys") void renderKeysList("#sb-keys-list", "#sb-keys-err");
+  syncRailExpanded();
   if (!focusPanel) return;
   const target = next === "host" ? "#host-search" : next === "keys" ? "#sb-keys-add" : "#sb-ansible-open";
   $(target).focus();
+}
+
+// Rail click behaviour (FR v0.14.6): clicking the ALREADY-ACTIVE rail item
+// toggles the panel collapsed/expanded; clicking a DIFFERENT item switches
+// section and ensures the panel is expanded.
+function onRailClick(next: Section) {
+  if (next === activeSection) {
+    setPanelCollapsed(!panelCollapsed);
+    return;
+  }
+  if (panelCollapsed) setPanelCollapsed(false);
+  selectSection(next);
 }
 
 async function deleteHostByName(name: string) {
@@ -4176,9 +4335,11 @@ window.addEventListener("DOMContentLoaded", () => {
       document.querySelector<HTMLElement>(".host-item")?.focus();
     }
   });
-  const setPanelCollapsed = (c: boolean) => {
+  setPanelCollapsed = (c: boolean) => {
+    panelCollapsed = c;
     document.body.classList.toggle("panel-collapsed", c);
     $("#btn-expand").classList.toggle("hidden", !c);
+    syncRailExpanded();
     try { localStorage.setItem("hosterm.panel-collapsed", c ? "1" : ""); } catch { /* private mode */ }
     setTimeout(fitActiveSessions, 0);
   };
@@ -4209,7 +4370,7 @@ window.addEventListener("DOMContentLoaded", () => {
   $("#k-cancel").addEventListener("click", closeKey);
   $("#k-save").addEventListener("click", saveKey);
   document.querySelectorAll<HTMLButtonElement>(".rail-item[data-view]").forEach((btn) => {
-    btn.addEventListener("click", () => selectSection((btn.dataset.view || "host") as Section));
+    btn.addEventListener("click", () => onRailClick((btn.dataset.view || "host") as Section));
   });
   // Inline "Add key" in the sidebar Keys view reuses the create-key modal.
   $("#sb-keys-add").addEventListener("click", () => { keyModalReturnsToKeys = true; openKeyModal(); });
