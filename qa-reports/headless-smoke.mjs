@@ -2857,18 +2857,37 @@ await page.locator("#restore-dialog:not(.hidden)").waitFor({ timeout: 2000 });
 // v0.14.7 regression guard: #restore-dialog defaults to opacity:0 in CSS and
 // only becomes visible once openOverlay adds .ov-enter. A bug where the entry
 // class was pass-dialog-only left the picker present-but-invisible while still
-// passing :not(.hidden). Assert it is actually painted (opacity ~1, visible).
-await page.waitForTimeout(220); // let the 120ms fade-in settle
+// passing :not(.hidden). Poll until opacity settles (robust across the 120ms
+// fade and CI/headless/reduced-motion timing — never a fixed sleep).
+await page.waitForFunction(() => {
+  const el = document.querySelector("#restore-dialog");
+  if (!el) return false;
+  const cs = getComputedStyle(el);
+  return Number(cs.opacity) >= 0.99 && cs.display !== "none";
+}, { timeout: 3000 });
 const restoreVisible = await page.evaluate(() => {
   const el = document.querySelector("#restore-dialog");
   const cs = getComputedStyle(el);
-  return { opacity: Number(cs.opacity), display: cs.display, ovEnter: el.classList.contains("ov-enter") };
+  return { opacity: Number(cs.opacity), display: cs.display };
 });
-check("v0.14.7 regression: restore picker is actually visible (opacity ~1, not transparent)",
-  restoreVisible.opacity >= 0.99 && restoreVisible.display !== "none" && restoreVisible.ovEnter,
+check("v0.14.7 regression: restore picker is actually visible (opacity settles to ~1, not transparent)",
+  restoreVisible.opacity >= 0.99 && restoreVisible.display !== "none",
   JSON.stringify(restoreVisible));
 await page.locator("#restore-ok").click();
 await page.locator("#pass-dialog:not(.hidden)").waitFor({ timeout: 2000 });
+// v0.14.8 Windows-CI regression guard: the restore dialog must close FULLY
+// (gain .hidden, so its fixed/inset:0 scrim stops intercepting pointer events)
+// once the passphrase dialog opens. A deferred fade-out left the scrim on top
+// for a frame and the passphrase OK click was intercepted on slower Windows CI.
+// Assert the restore dialog is truly hidden the moment #pass-dialog is up.
+const restoreClosed = await page.evaluate(() => {
+  const el = document.querySelector("#restore-dialog");
+  const cs = getComputedStyle(el);
+  return { hidden: el.classList.contains("hidden"), display: cs.display };
+});
+check("v0.14.8 regression: restore scrim is gone once passphrase prompt opens (no pointer interception)",
+  restoreClosed.hidden && restoreClosed.display === "none",
+  JSON.stringify(restoreClosed));
 // Reset-to-masked on every open: a later prompt opens masked regardless of the
 // eye state a prior prompt was left in (t_5fe89707 — wipe + remask on reopen).
 const reopenReveal = await page.evaluate(() => ({

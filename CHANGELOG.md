@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Windows releases are currently **unsigned** (Authenticode signing postponed —
 see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
+## [0.14.9] - 2026-11-07
+
+### Fixed
+- Restoring from Drive could get stuck after picking a backup: the chooser's
+  dimming overlay lingered for a moment and swallowed the first click on the
+  passphrase prompt. The chooser now closes immediately, so the passphrase
+  prompt is clickable right away.
+
 ## [0.14.8] - 2026-11-07
 
 ### Fixed

@@ -995,13 +995,23 @@ function closeOverlay(sel: string) {
     overlayKeydown = null;
     $("#app").removeAttribute("inert");
   }
-  if (el.id === "pass-dialog" || el.id === "restore-dialog") {
+  if (el.id === "restore-dialog") {
+    // Restore-dialog closes SYNCHRONOUSLY (no deferred fade-out): the restore
+    // flow opens #pass-dialog immediately after this close, and a deferred
+    // .hidden left this dialog's fixed/inset:0 scrim on top for a frame — on
+    // slower Windows CI that scrim intercepted the passphrase OK click and the
+    // suite timed out (v0.14.8 Windows-only failure; raced green on Linux). We
+    // keep the fade-IN (openOverlay adds .ov-enter) but drop the fade-OUT here.
+    // Stripping .ov-enter returns it to opacity:0 while hidden so the next open
+    // re-runs the entry transition cleanly.
+    el.classList.remove("ov-enter");
+    el.classList.add("hidden");
+    closed.restore?.focus();
+  } else if (el.id === "pass-dialog") {
     // Fade out, then reapply .hidden. Under reduced motion transitionend may not
     // fire, so a 140ms fallback timer reapplies .hidden deterministically. Focus
     // is restored once the dialog is actually hidden so the still-fixed scrim
     // cannot swallow it — deterministic, so it never races the exit (spec §2.1).
-    // Stripping .ov-enter also returns the element to opacity:0 while hidden so
-    // the next open re-runs the entry transition cleanly.
     el.classList.remove("ov-enter");
     let hidden = false;
     const hide = () => {
@@ -2477,7 +2487,7 @@ function refreshHostDots() {
 }
 
 // app version for the status bar; keep in sync with package.json / tauri.conf.json
-const APP_VERSION = "v0.14.8";
+const APP_VERSION = "v0.14.9";
 
 // status bar updater (§4.3): dipanggil dari activateTab (semua jenis tab),
 // openTerminal/splitTerminal/closeTab dan busy() SFTP.
