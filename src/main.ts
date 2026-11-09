@@ -2479,7 +2479,7 @@ function refreshHostDots() {
 }
 
 // app version for the status bar; keep in sync with package.json / tauri.conf.json
-const APP_VERSION = "v0.15.0";
+const APP_VERSION = "v0.15.1";
 
 // status bar updater (§4.3): dipanggil dari activateTab (semua jenis tab),
 // openTerminal/splitTerminal/closeTab dan busy() SFTP.
@@ -2709,16 +2709,28 @@ async function saveKey() {
 }
 
 // ---------- edit a managed identity key: rename + replace contents ----------
-// The name we are editing (original basename). Empty textarea = keep contents,
-// a non-empty textarea overwrites them. A changed name triggers a rename.
+// The name we are editing (original basename). The textarea is PREFILLED with
+// the current key on open (v0.15.1), so Save normally writes the same bytes
+// back (idempotent); clearing it keeps the write-only-if-non-empty guard, which
+// makes a blank textarea a rename-only operation. A changed name triggers a rename.
 let keyEditOriginal = "";
 
-function openEditKey(name: string) {
+async function openEditKey(name: string) {
   keyEditOriginal = name;
   ($("#ke-name") as HTMLInputElement).value = name;
-  ($("#ke-text") as HTMLTextAreaElement).value = "";
+  const text = $("#ke-text") as HTMLTextAreaElement;
+  text.value = "";
   $("#key-edit-err").textContent = "";
   openOverlay("#key-edit-modal", $("#ke-name"));
+  // Prefill the textarea with the current private key so small edits/renames
+  // don't force a full re-paste (MEKL, v0.15.1). By design the key bytes are
+  // shown in the DOM only while the user is editing; closeEditKey wipes them.
+  try {
+    text.value = await invoke<string>("read_identity_file", { name });
+  } catch (e) {
+    // Surface the failure instead of silently leaving the textarea blank.
+    $("#key-edit-err").textContent = `Could not load key contents: ${msg(e)}. You can still rename, or paste to replace.`;
+  }
 }
 
 function closeEditKey() {
@@ -2735,6 +2747,8 @@ async function saveEditKey() {
   if (!nextName) { err.textContent = "Key name is required."; return; }
   try {
     // Rename first (if changed), then overwrite contents on the current name.
+    // The textarea is prefilled, so an untouched key writes the same bytes back
+    // (idempotent); a cleared textarea skips the write and renames only.
     let current = keyEditOriginal;
     if (nextName !== keyEditOriginal) {
       await invoke<string>("rename_identity_file", { old: keyEditOriginal, new: nextName });

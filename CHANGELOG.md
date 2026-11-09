@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Windows releases are currently **unsigned** (Authenticode signing postponed —
 see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
+## [0.15.1] - 2026-11-09
+
+### Changed
+- Editing an SSH key now loads the current private key into the editor, so you
+  can tweak it in place instead of re-pasting the whole key. The editor still
+  clears the contents when closed, and only keys the app manages can be read
+  or edited.
+
 ## [0.15.0] - 2026-11-09
 
 ### Added

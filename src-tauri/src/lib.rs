@@ -795,6 +795,21 @@ fn rename_identity_file(old: String, new: String) -> Result<String, String> {
     Ok(format!("~/.ssh/keys/{}", new.trim()))
 }
 
+/// Read the contents of a key hosterm manages so the Edit dialog can prefill the
+/// textarea. Scoped to `~/.ssh/keys/` ONLY through the same `managed_key_path`
+/// trust boundary as write/rename: legacy `~/.ssh/*` keys are NOT readable here
+/// (consistent with legacy keys being read-only and having no Edit button), and
+/// traversal / path separators / out-of-dir names are refused. The key must
+/// exist. Contents are returned verbatim (no normalization) and NEVER logged.
+#[tauri::command]
+fn read_identity_file(name: String) -> Result<String, String> {
+    let (_dir, path) = managed_key_path(&name)?;
+    if !path.exists() {
+        return Err(format!("No key named '{}' in ~/.ssh/keys", name.trim()));
+    }
+    std::fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
 // ============================================================
 //  STORE  (settings + allowlist JSON in app-data; bundled snippets)
 // ============================================================
@@ -3481,6 +3496,39 @@ mod auth_key_tests {
     }
 
     #[test]
+    fn read_identity_file_roundtrips_managed_and_guards() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = tmp("rdkey");
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        // Managed key reads back verbatim (create normalizes to LF + trailing \n).
+        let body = "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n";
+        create_identity_file("id_r".into(), body.into()).unwrap();
+        assert_eq!(read_identity_file("id_r".into()).unwrap(), body);
+        // Missing key: clear error, no panic.
+        assert!(read_identity_file("no_such".into()).is_err());
+        // Traversal / separators / absolute / empty name rejected before any read.
+        assert!(read_identity_file("../evil".into()).is_err());
+        assert!(read_identity_file("a/b".into()).is_err());
+        assert!(read_identity_file("/etc/passwd".into()).is_err());
+        assert!(read_identity_file("".into()).is_err());
+        std::env::remove_var("HOSTERM_CONFIG");
+    }
+
+    #[test]
+    fn read_identity_file_cannot_read_legacy_ssh_key() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = tmp("rdkeyleg");
+        let dir = cfg.parent().unwrap();
+        // A legacy key lives directly in ~/.ssh, NOT in ~/.ssh/keys.
+        std::fs::write(dir.join("id_legacy"), "-----BEGIN LEGACY-----\norig\n").unwrap();
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        // read_identity_file only resolves names inside keys_dir(); the legacy name
+        // does not exist there → refused, and its contents never cross IPC.
+        assert!(read_identity_file("id_legacy".into()).is_err());
+        std::env::remove_var("HOSTERM_CONFIG");
+    }
+
+    #[test]
     fn list_identity_files_skips_pub_and_config() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let cfg = tmp("skip");
@@ -4674,6 +4722,7 @@ pub fn run() {
             delete_identity_file,
             write_identity_file,
             rename_identity_file,
+            read_identity_file,
             sftp_list,
             local_list,
             home_dir,

@@ -111,6 +111,10 @@ let driveListMode = "normal";
 const HOSTILE_HOST = 'ws<img src=x onerror=window.__pwn=1>';
 let storedUserSnippets = [];   // user-snippet CRUD store (read/write_user_snippets)
 let googleSignInFail = false;  // flip to exercise the auth-failed error path
+// v0.15.1: managed-key edit prefill. read_identity_file returns READ_KEY_BODY;
+// flip readKeyFail to exercise the read-failure error path in the Edit dialog.
+const READ_KEY_BODY = "-----BEGIN OPENSSH PRIVATE KEY-----\nprefilledbody\n-----END OPENSSH PRIVATE KEY-----\n";
+let readKeyFail = false;
 // FE-ANS Ansible v1 mock state.
 const ANSIBLE_PTY_ID = 7777;
 let ansibleCheckState = { missing: false };   // check_ansible result
@@ -194,6 +198,11 @@ const invoke = (cmd, args = {}) => {
     // v0.14.10 (3c): managed-key edit — rename + overwrite. Return the new path form.
     case "rename_identity_file": return Promise.resolve(`~/.ssh/keys/${args.new}`);
     case "write_identity_file": return Promise.resolve(`~/.ssh/keys/${args.name}`);
+    // v0.15.1: Edit prefill — read the managed key contents back for the textarea.
+    // `readKeyFail` lets a smoke check exercise the read-failure error path.
+    case "read_identity_file":
+      if (readKeyFail) return Promise.reject("No key named 'id_managed' in ~/.ssh/keys");
+      return Promise.resolve(READ_KEY_BODY);
     // U8 AC2: forget the stored sidecar password (frontend-only unit; the real
     // backend command is tracked in its own card — smoke asserts the invoke)
     case "forget_secret": return Promise.resolve();
@@ -3998,11 +4007,33 @@ await page.waitForTimeout(40);
 const editDialog = await page.evaluate(() => ({
   open: !document.getElementById("key-edit-modal").classList.contains("hidden"),
   name: document.getElementById("ke-name").value,
+  text: document.getElementById("ke-text").value,
   focused: document.activeElement?.id,
+  err: document.getElementById("key-edit-err").textContent,
 }));
+const editReadCalls = calls.filter((c) => c.cmd === "read_identity_file").map((c) => c.args.name);
 check("v0.14.10 (3c): Edit opens the editor prefilled with the managed key name, focused",
   editDialog.open && editDialog.name === "id_managed" && editDialog.focused === "ke-name",
-  JSON.stringify(editDialog));
+  JSON.stringify({ open: editDialog.open, name: editDialog.name, focused: editDialog.focused }));
+// v0.15.1: the textarea is PREFILLED with the current private key (read_identity_file),
+// not left blank — small edits/renames no longer force a full re-paste (MEKL).
+check("v0.15.1: Edit prefills #ke-text with the current private key via read_identity_file",
+  editReadCalls.includes("id_managed") &&
+  editDialog.text === "-----BEGIN OPENSSH PRIVATE KEY-----\nprefilledbody\n-----END OPENSSH PRIVATE KEY-----\n" &&
+  editDialog.err === "",
+  JSON.stringify({ readCalls: editReadCalls, textLen: editDialog.text.length, err: editDialog.err }));
+// v0.15.1: label/placeholder reflect prefill — no "paste to replace" / "overwrite" copy.
+const keTextMeta = await page.evaluate(() => {
+  const ta = document.getElementById("ke-text");
+  const label = ta.closest("label")?.textContent?.trim();
+  return { placeholder: ta.getAttribute("placeholder"), label };
+});
+check("v0.15.1: Edit label/placeholder reflect prefill (no 'paste to replace'/'overwrite')",
+  keTextMeta.placeholder === "Private key contents" &&
+  /^Private key\b/.test(keTextMeta.label || "") &&
+  !/paste to replace/i.test(keTextMeta.label || "") &&
+  !/overwrite/i.test(keTextMeta.placeholder || ""),
+  JSON.stringify(keTextMeta));
 await page.locator("#ke-name").fill("id_renamed");
 await page.locator("#ke-text").fill("-----BEGIN OPENSSH PRIVATE KEY-----\nnew\n");
 await page.locator("#ke-save").click();
@@ -4021,6 +4052,26 @@ check("v0.14.10 (3c): Save renames then overwrites via IPC with the right args, 
   lastWrite.args.contents.includes("new") &&
   (await page.evaluate(() => document.getElementById("key-edit-modal").classList.contains("hidden"))),
   JSON.stringify({ lastRename: lastRename?.args, lastWrite: { name: lastWrite?.args?.name } }));
+// v0.15.1: read failure surfaces an error in #key-edit-err and leaves the textarea
+// blank (not silently swallowed); focus still lands on #ke-name. The row renamed to
+// id_renamed by the roundtrip above, so re-render and target the fresh managed row.
+readKeyFail = true;
+await page.locator("#sb-keys-list .key-row").first().locator("button.key-edit").click();
+await page.waitForTimeout(40);
+const readFail = await page.evaluate(() => ({
+  open: !document.getElementById("key-edit-modal").classList.contains("hidden"),
+  text: document.getElementById("ke-text").value,
+  err: document.getElementById("key-edit-err").textContent,
+  focused: document.activeElement?.id,
+}));
+check("v0.15.1: Edit prefill read failure shows an error and leaves #ke-text blank",
+  readFail.open && readFail.text === "" &&
+  /could not load key contents/i.test(readFail.err || "") &&
+  readFail.focused === "ke-name",
+  JSON.stringify(readFail));
+await page.evaluate(() => { document.getElementById("ke-cancel").click(); });
+readKeyFail = false;
+await page.waitForTimeout(40);
 // Restore the precondition the next NAV-RAIL check assumes: focus on the Keys
 // view's first action (the edit roundtrip moved focus into/out of the dialog).
 await page.locator("#sb-keys-add").focus();
