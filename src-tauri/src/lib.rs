@@ -700,6 +700,101 @@ fn delete_identity_file(name: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Validate a managed-key filename and resolve it to its path inside keys_dir().
+/// Rejects empty names, path separators, traversal, and (defence in depth) any
+/// resolved path whose parent is not exactly keys_dir(). This is the single
+/// trust-boundary gate shared by every managed-key mutation.
+fn managed_key_path(name: &str) -> Result<(PathBuf, PathBuf), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Key name cannot be empty".into());
+    }
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err("Key name must be a plain filename (no path separators)".into());
+    }
+    let dir = keys_dir();
+    let path = dir.join(name);
+    if path.parent() != Some(dir.as_path()) {
+        return Err("Refusing to operate outside the managed keys directory".into());
+    }
+    Ok((dir, path))
+}
+
+/// Atomically overwrite a key hosterm manages with new contents. Scoped to
+/// `~/.ssh/keys/` ONLY (legacy ~/.ssh/* keys are never writable here). The key
+/// must already exist — this is an edit, not a create (use create_identity_file
+/// for a new key). Write is atomic: sibling temp → chmod 0600 → rename over the
+/// target, so a crash mid-write leaves the original key intact. Contents are
+/// never logged. LF-normalized with a guaranteed trailing newline (ssh is picky).
+#[tauri::command]
+fn write_identity_file(name: String, contents: String) -> Result<String, String> {
+    let (dir, path) = managed_key_path(&name)?;
+    if contents.trim().is_empty() {
+        return Err("Private key text is empty".into());
+    }
+    if !path.exists() {
+        return Err(format!("No key named '{}' in ~/.ssh/keys", name.trim()));
+    }
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    }
+    let mut body = contents.replace("\r\n", "\n");
+    if !body.ends_with('\n') {
+        body.push('\n');
+    }
+    // Atomic write: sibling temp → chmod 0600 → rename over the target.
+    let tmp = {
+        let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or("key");
+        let mut t = path.clone();
+        t.set_file_name(format!(".{}.hosterm-tmp-{}", fname, std::process::id()));
+        t
+    };
+    std::fs::write(&tmp, body).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| e.to_string())?;
+    }
+    std::fs::rename(&tmp, &path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        e.to_string()
+    })?;
+    Ok(format!("~/.ssh/keys/{}", name.trim()))
+}
+
+/// Rename a key hosterm manages. Both old and new names are validated against
+/// the managed-keys trust boundary (bare filename, no traversal, resolved parent
+/// == keys_dir()). The source must exist; the destination must NOT (never clobber
+/// another key). A matching `<old>.pub` is renamed alongside. Legacy ~/.ssh/*
+/// keys are never renamable here. Returns the new `~/.ssh/keys/<new>` path.
+#[tauri::command]
+fn rename_identity_file(old: String, new: String) -> Result<String, String> {
+    let (dir, old_path) = managed_key_path(&old)?;
+    let (_, new_path) = managed_key_path(&new)?;
+    if !old_path.exists() {
+        return Err(format!("No key named '{}' in ~/.ssh/keys", old.trim()));
+    }
+    if old_path == new_path {
+        // No-op rename: nothing to do, report the stable path.
+        return Ok(format!("~/.ssh/keys/{}", new.trim()));
+    }
+    if new_path.exists() {
+        return Err(format!("A key named '{}' already exists", new.trim()));
+    }
+    std::fs::rename(&old_path, &new_path).map_err(|e| e.to_string())?;
+    // Move the public half if present; its absence is not an error.
+    let old_pub = dir.join(format!("{}.pub", old.trim()));
+    if old_pub.exists() {
+        let new_pub = dir.join(format!("{}.pub", new.trim()));
+        let _ = std::fs::rename(&old_pub, &new_pub);
+    }
+    Ok(format!("~/.ssh/keys/{}", new.trim()))
+}
+
 // ============================================================
 //  STORE  (settings + allowlist JSON in app-data; bundled snippets)
 // ============================================================
@@ -3283,6 +3378,109 @@ mod auth_key_tests {
     }
 
     #[test]
+    fn write_identity_file_overwrites_managed_0600_atomic() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = tmp("wkey");
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        create_identity_file("id_w".into(), "-----BEGIN OLD-----\nold\n".into()).unwrap();
+        let on_disk = cfg.parent().unwrap().join("keys").join("id_w");
+        // Overwrite with new contents; CRLF normalized, trailing newline added.
+        let path = write_identity_file("id_w".into(), "-----BEGIN NEW-----\r\nnew".into()).unwrap();
+        assert_eq!(path, "~/.ssh/keys/id_w");
+        let content = std::fs::read_to_string(&on_disk).unwrap();
+        assert_eq!(content, "-----BEGIN NEW-----\nnew\n", "LF-normalized, trailing newline, replaced");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&on_disk).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+        // No temp residue left behind after the atomic rename.
+        let residue: Vec<_> = std::fs::read_dir(cfg.parent().unwrap().join("keys"))
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains("hosterm-tmp"))
+            .collect();
+        assert!(residue.is_empty(), "no temp file residue");
+        std::env::remove_var("HOSTERM_CONFIG");
+    }
+
+    #[test]
+    fn write_identity_file_rejects_missing_empty_and_traversal() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = tmp("wkeybad");
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        // Missing key: this is an edit, not a create.
+        assert!(write_identity_file("no_such".into(), "PRIVATE KEY\n".into()).is_err());
+        // Empty contents rejected.
+        create_identity_file("id_e".into(), "PRIVATE KEY\n".into()).unwrap();
+        assert!(write_identity_file("id_e".into(), "   ".into()).is_err());
+        // Traversal / separators / empty name rejected before any write.
+        assert!(write_identity_file("../evil".into(), "x\n".into()).is_err());
+        assert!(write_identity_file("a/b".into(), "x\n".into()).is_err());
+        assert!(write_identity_file("".into(), "x\n".into()).is_err());
+        std::env::remove_var("HOSTERM_CONFIG");
+    }
+
+    #[test]
+    fn write_identity_file_cannot_touch_legacy_ssh_key() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = tmp("wkeyleg");
+        let dir = cfg.parent().unwrap();
+        // A legacy key lives directly in ~/.ssh, NOT in ~/.ssh/keys.
+        std::fs::write(dir.join("id_legacy"), "-----BEGIN LEGACY-----\norig\n").unwrap();
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        // write_identity_file only ever resolves inside keys_dir(); a legacy name
+        // there does not exist, so the edit is refused and the legacy file on disk
+        // is left untouched.
+        assert!(write_identity_file("id_legacy".into(), "-----BEGIN PWN-----\nx\n".into()).is_err());
+        let legacy = std::fs::read_to_string(dir.join("id_legacy")).unwrap();
+        assert_eq!(legacy, "-----BEGIN LEGACY-----\norig\n", "legacy key unchanged");
+        std::env::remove_var("HOSTERM_CONFIG");
+    }
+
+    #[test]
+    fn rename_identity_file_moves_key_and_pub_and_guards() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = tmp("rnkey");
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        let keys = cfg.parent().unwrap().join("keys");
+        create_identity_file("id_old".into(), "-----BEGIN OPENSSH PRIVATE KEY-----\n".into()).unwrap();
+        std::fs::write(keys.join("id_old.pub"), "ssh-ed25519 AAAA\n").unwrap();
+        // Rename moves both halves.
+        let path = rename_identity_file("id_old".into(), "id_new".into()).unwrap();
+        assert_eq!(path, "~/.ssh/keys/id_new");
+        assert!(!keys.join("id_old").exists());
+        assert!(!keys.join("id_old.pub").exists());
+        assert!(keys.join("id_new").exists());
+        assert!(keys.join("id_new.pub").exists());
+        // Guards: missing source, traversal, clobber, bad names.
+        assert!(rename_identity_file("gone".into(), "whatever".into()).is_err());
+        assert!(rename_identity_file("id_new".into(), "../evil".into()).is_err());
+        assert!(rename_identity_file("../evil".into(), "id_z".into()).is_err());
+        // Clobber refused: create a second key, renaming onto it fails.
+        create_identity_file("id_other".into(), "-----BEGIN B-----\n".into()).unwrap();
+        assert!(rename_identity_file("id_new".into(), "id_other".into()).is_err());
+        assert!(keys.join("id_new").exists(), "source intact after refused clobber");
+        std::env::remove_var("HOSTERM_CONFIG");
+    }
+
+    #[test]
+    fn rename_identity_file_cannot_target_or_source_legacy() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = tmp("rnkeyleg");
+        let dir = cfg.parent().unwrap();
+        std::fs::write(dir.join("id_legacy"), "-----BEGIN LEGACY-----\norig\n").unwrap();
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        // rename only resolves names inside keys_dir(); a legacy source name does
+        // not exist there → refused, legacy file untouched.
+        assert!(rename_identity_file("id_legacy".into(), "id_new".into()).is_err());
+        let legacy = std::fs::read_to_string(dir.join("id_legacy")).unwrap();
+        assert_eq!(legacy, "-----BEGIN LEGACY-----\norig\n", "legacy key unchanged");
+        std::env::remove_var("HOSTERM_CONFIG");
+    }
+
+    #[test]
     fn list_identity_files_skips_pub_and_config() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let cfg = tmp("skip");
@@ -4474,6 +4672,8 @@ pub fn run() {
             list_identity_files,
             create_identity_file,
             delete_identity_file,
+            write_identity_file,
+            rename_identity_file,
             sftp_list,
             local_list,
             home_dir,

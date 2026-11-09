@@ -942,6 +942,7 @@ function onOverlayEscape() {
   else if (top.el.id === "raw-modal") cancelRaw();
   else if (top.el.id === "keys-modal") closeKeys();
   else if (top.el.id === "key-modal") closeKey();
+  else if (top.el.id === "key-edit-modal") closeEditKey();
   else if (top.el.id === "ssh-modal") closeOverlay("#ssh-modal"); // Escape = Continue anyway
   else if (top.el.id === "settings-scrim") void closeSettings();
 }
@@ -2412,18 +2413,9 @@ function renderHostList() {
     list.appendChild(none);
     return;
   }
-  // Single-line 28px rows (redesign §4.1): dot + name + (lock) + hover-only
-  // ⇅ / ⋯ buttons. Edit/Delete left the row -> context menu (fix #4).
-  let group = "";
+  // Single-line rows: dot + name + (lock) + hover-only ⇅ / ⋯ buttons.
+  // Flat alphabetical list — no prefix grouping headers (v0.14.10).
   for (const h of visible) {
-    const g = h.name.includes("-") ? h.name.slice(0, h.name.indexOf("-")) : h.name;
-    if (g !== group) {
-      group = g;
-      const head = document.createElement("div");
-      head.className = "h-group";
-      head.textContent = g.toUpperCase();
-      list.appendChild(head);
-    }
     const el = document.createElement("div");
     el.className = "host-item";
     el.dataset.host = h.name;
@@ -2487,7 +2479,7 @@ function refreshHostDots() {
 }
 
 // app version for the status bar; keep in sync with package.json / tauri.conf.json
-const APP_VERSION = "v0.14.9";
+const APP_VERSION = "v0.15.0";
 
 // status bar updater (§4.3): dipanggil dari activateTab (semua jenis tab),
 // openTerminal/splitTerminal/closeTab dan busy() SFTP.
@@ -2716,6 +2708,48 @@ async function saveKey() {
   }
 }
 
+// ---------- edit a managed identity key: rename + replace contents ----------
+// The name we are editing (original basename). Empty textarea = keep contents,
+// a non-empty textarea overwrites them. A changed name triggers a rename.
+let keyEditOriginal = "";
+
+function openEditKey(name: string) {
+  keyEditOriginal = name;
+  ($("#ke-name") as HTMLInputElement).value = name;
+  ($("#ke-text") as HTMLTextAreaElement).value = "";
+  $("#key-edit-err").textContent = "";
+  openOverlay("#key-edit-modal", $("#ke-name"));
+}
+
+function closeEditKey() {
+  keyEditOriginal = "";
+  ($("#ke-text") as HTMLTextAreaElement).value = ""; // never retain key bytes
+  closeOverlay("#key-edit-modal");
+}
+
+async function saveEditKey() {
+  const nextName = ($("#ke-name") as HTMLInputElement).value.trim();
+  const contents = ($("#ke-text") as HTMLTextAreaElement).value;
+  const err = $("#key-edit-err");
+  err.textContent = "";
+  if (!nextName) { err.textContent = "Key name is required."; return; }
+  try {
+    // Rename first (if changed), then overwrite contents on the current name.
+    let current = keyEditOriginal;
+    if (nextName !== keyEditOriginal) {
+      await invoke<string>("rename_identity_file", { old: keyEditOriginal, new: nextName });
+      current = nextName;
+    }
+    if (contents.trim()) {
+      await invoke<string>("write_identity_file", { name: current, contents });
+    }
+    closeEditKey();
+    await refreshKeyViews();
+  } catch (e) {
+    err.textContent = `Failed to save changes: ${msg(e)}. Check the name and try again.`;
+  }
+}
+
 // ---------- keys manager: list + add + delete ----------
 // Only keys under ~/.ssh/keys/ are deletable (the backend refuses anything
 // else); legacy ~/.ssh/* keys are shown read-only so the user still sees them.
@@ -2744,10 +2778,16 @@ async function renderKeysList(listSel = "#keys-list", errSel = "#keys-err") {
     const managed = path.startsWith("~/.ssh/keys/");
     const name = path.slice(path.lastIndexOf("/") + 1);
     const row = staticElement("div", "key-row");
-    const label = staticElement("span", "key-path");
-    label.textContent = path; // textContent escapes (ADR-8)
+    const label = staticElement("span", "key-name");
+    label.textContent = name; // basename only; textContent escapes (ADR-8)
+    label.title = path; // full path on hover, not as the row text
     row.appendChild(label);
     if (managed) {
+      const edit = staticElement("button", "key-edit", "Edit") as HTMLButtonElement;
+      edit.type = "button";
+      edit.setAttribute("aria-label", `Edit key ${name}`);
+      edit.addEventListener("click", () => { void openEditKey(name); });
+      row.appendChild(edit);
       const del = staticElement("button", "danger", "Delete") as HTMLButtonElement;
       del.type = "button";
       del.setAttribute("aria-label", `Delete key ${name}`);
@@ -4379,6 +4419,8 @@ window.addEventListener("DOMContentLoaded", () => {
   $("#f-newkey").addEventListener("click", openKeyModal);
   $("#k-cancel").addEventListener("click", closeKey);
   $("#k-save").addEventListener("click", saveKey);
+  $("#ke-cancel").addEventListener("click", closeEditKey);
+  $("#ke-save").addEventListener("click", () => { void saveEditKey(); });
   document.querySelectorAll<HTMLButtonElement>(".rail-item[data-view]").forEach((btn) => {
     btn.addEventListener("click", () => onRailClick((btn.dataset.view || "host") as Section));
   });

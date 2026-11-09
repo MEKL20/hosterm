@@ -157,7 +157,8 @@ const invoke = (cmd, args = {}) => {
     }
     case "read_config_raw": return Promise.resolve(sampleConfig);
     case "write_config_raw": return Promise.resolve();
-    case "list_identity_files": return Promise.resolve(["~/.ssh/id_test"]);
+    // One managed key (editable/deletable) + one legacy key (read-only).
+    case "list_identity_files": return Promise.resolve(["~/.ssh/keys/id_managed", "~/.ssh/id_test"]);
     case "sftp_list": {
       if (sftpFailFirst && args.host === "pw-host") { sftpFailFirst = false; return Promise.reject("sftp session unreachable"); }
       // U6: "/boom" rejects BOTH attempts (retry path too) → narrative error copy observable;
@@ -190,6 +191,9 @@ const invoke = (cmd, args = {}) => {
     case "pty_spawn": return Promise.resolve(4242);
     case "pty_resize": case "pty_kill": case "pty_write": case "clipboard_write": case "clipboard_read": return Promise.resolve("");
     case "save_host": case "delete_host": case "create_identity_file": return Promise.resolve();
+    // v0.14.10 (3c): managed-key edit — rename + overwrite. Return the new path form.
+    case "rename_identity_file": return Promise.resolve(`~/.ssh/keys/${args.new}`);
+    case "write_identity_file": return Promise.resolve(`~/.ssh/keys/${args.name}`);
     // U8 AC2: forget the stored sidecar password (frontend-only unit; the real
     // backend command is tracked in its own card — smoke asserts the invoke)
     case "forget_secret": return Promise.resolve();
@@ -1019,12 +1023,17 @@ check("no second-line subtitle element", (await page.locator(".host-item .h-sub"
 const rowTitle = await page.locator(".host-item").first().getAttribute("title");
 // Hosts render A-Z, so the first row is db-core (admin@203.0.113.20).
 check("subtitle lives in title tooltip", !!rowTitle && rowTitle.includes("admin@203.0.113.20"), rowTitle || "");
-// (2) group headers = alias prefix before "-", A-Z order; wildcard Host * never rendered
+// (2) v0.14.10 (1): flat alphabetical host list — NO prefix grouping headers.
 const groups = await page.locator(".h-group").allTextContents();
-check("group headers from '-' prefix", JSON.stringify(groups) === JSON.stringify(["DB", "PROD", "PW"]), groups.join("|"));
+check("v0.14.10 (1): zero .h-group headers (grouping removed)", groups.length === 0, groups.join("|"));
 const prodRow = page.locator(".host-item", { hasText: "prod-web" }).first();
-check("prod-web sits under PROD header",
-  (await prodRow.evaluate((el) => el.previousElementSibling?.textContent)) === "PROD");
+// Flat list: the only children of #host-list are host-item rows (no group heads),
+// so prod-web's previous sibling is another host-item, never a group label.
+check("v0.14.10 (1): #host-list children are all host-item rows (flat, A-Z)",
+  await page.evaluate(() => {
+    const kids = [...document.querySelectorAll("#host-list > *")];
+    return kids.length > 0 && kids.every((el) => el.classList.contains("host-item"));
+  }));
 check("wildcard Host * not rendered", (await page.locator(".host-item").count()) === 3 &&
   !(await page.locator("#host-list").textContent()).includes("*"));
 // (3) password marker: --warn lock only on has_password hosts
@@ -2208,6 +2217,42 @@ await page.waitForTimeout(150);
 const snippetReadsBefore = calls.filter((c) => c.cmd === "read_snippets").length;
 await page.locator("#mode-snippets").click();
 await page.locator(".snippet-item").first().waitFor({ timeout: 3000 });
+// v0.14.10 (2): the snippet CRUD form is HIDDEN on drawer open (list only);
+// clicking "+ New" reveals it; Cancel hides it again with no residual state.
+// Root cause fixed: .snip-form display:flex used to beat [hidden], so the form
+// showed before any New click and Cancel's hidden=true did nothing.
+const formOnOpen = await page.evaluate(() => {
+  const f = document.getElementById("snippet-form");
+  return { hiddenAttr: f.hidden, visible: f.getClientRects().length > 0 };
+});
+check("v0.14.10 (2): snippet form is hidden when the drawer first opens (no New yet)",
+  formOnOpen.hiddenAttr && !formOnOpen.visible, JSON.stringify(formOnOpen));
+await page.locator("#snippet-new").click();
+const formAfterNew = await page.evaluate(() => {
+  const f = document.getElementById("snippet-form");
+  return {
+    hiddenAttr: f.hidden, visible: f.getClientRects().length > 0,
+    title: document.getElementById("snippet-form-title").textContent,
+    focused: document.activeElement?.id,
+  };
+});
+check("v0.14.10 (2): '+ New' reveals the form (New snippet, name focused)",
+  !formAfterNew.hiddenAttr && formAfterNew.visible &&
+  formAfterNew.title === "New snippet" && formAfterNew.focused === "snippet-f-name",
+  JSON.stringify(formAfterNew));
+// Type something, then Cancel — must hide AND clear (no leftover state).
+await page.locator("#snippet-f-name").fill("scratch");
+await page.locator("#snippet-f-cancel").click();
+const formAfterCancel = await page.evaluate(() => {
+  const f = document.getElementById("snippet-form");
+  return {
+    hiddenAttr: f.hidden, visible: f.getClientRects().length > 0,
+    name: document.getElementById("snippet-f-name").value,
+  };
+});
+check("v0.14.10 (2): Cancel hides the form again and leaves no residual field state",
+  formAfterCancel.hiddenAttr && !formAfterCancel.visible,
+  JSON.stringify(formAfterCancel));
 const snippetMeta = await page.evaluate(() => {
   const drawer = document.getElementById("snippet-drawer");
   const command = document.querySelector(".snip-cmd");
@@ -3851,6 +3896,27 @@ check("NAV RAIL: Hosts / Keys / Ansible render with exactly Hosts current",
 check("NAV RAIL: account is rail-bottom and old settings/footer destinations are removed",
   sidebarNav.accountInRail && !sidebarNav.oldSettings && !sidebarNav.oldKeysButton && !sidebarNav.oldAnsibleButton,
   JSON.stringify(sidebarNav));
+// -- v0.14.10 (4)+(5): brand "hosterm" header removed from the section panel;
+// the Host view carries a titled head "Host" consistent with "SSH keys"/"Ansible". --
+const panelHeaders = await page.evaluate(() => {
+  const panel = document.getElementById("section-panel");
+  return {
+    brandGone: !panel.querySelector(".brand") && !panel.querySelector(".panel-head"),
+    // No sb-view head text equals the brand word anywhere in the panel.
+    hostermHeader: [...panel.querySelectorAll(".sb-view-title, .sb-view-head")]
+      .some((el) => /hosterm/i.test(el.textContent || "")),
+    hostTitle: document.querySelector("#view-host .sb-view-head .sb-view-title")?.textContent,
+    keysTitle: document.querySelector("#view-keys .sb-view-title")?.textContent,
+    hostAddInHead: !!document.querySelector("#view-host .sb-view-head #btn-add"),
+  };
+});
+check("v0.14.10 (4): no brand/'hosterm' header inside any section-panel view",
+  panelHeaders.brandGone && !panelHeaders.hostermHeader,
+  JSON.stringify(panelHeaders));
+check("v0.14.10 (5): Host view title is 'Host' (consistent with 'SSH keys'), add button in its head",
+  panelHeaders.hostTitle === "Host" && panelHeaders.keysTitle === "SSH keys" &&
+  panelHeaders.hostAddInHead,
+  JSON.stringify(panelHeaders));
 const shellGeometry = await page.evaluate(() => {
   const rail = document.getElementById("nav-rail").getBoundingClientRect();
   const panel = document.getElementById("section-panel").getBoundingClientRect();
@@ -3876,6 +3942,89 @@ check("NAV RAIL: Keys swaps inline, focuses its first action, and removes Host c
   keysInline.visible && keysInline.current === "page" && keysInline.focused === "sb-keys-add" &&
   keysInline.hostControlsHidden && !!keysInline.list,
   JSON.stringify({ ...keysInline, list: !!keysInline.list }));
+
+// -- v0.14.10 (3) SSH KEYS: basename label, Edit on managed rows, edit roundtrip --
+// list_identity_files mock returns one managed (~/.ssh/keys/id_managed) + one
+// legacy (~/.ssh/id_test) key. Wait for the async render to settle.
+await page.locator("#sb-keys-list .key-row").first().waitFor({ timeout: 3000 });
+const keyRows = await page.evaluate(() => {
+  const rows = [...document.querySelectorAll("#sb-keys-list .key-row")];
+  return rows.map((r) => {
+    const label = r.querySelector(".key-name");
+    return {
+      text: label?.textContent, title: label?.getAttribute("title"),
+      hasEdit: !!r.querySelector("button.key-edit"),
+      hasDelete: !!r.querySelector("button.danger"),
+      legacy: !!r.querySelector(".key-legacy"),
+    };
+  });
+});
+check("v0.14.10 (3a): key rows show the BASENAME, not the full path (path is the title)",
+  keyRows.length === 2 &&
+  keyRows[0].text === "id_managed" && keyRows[0].title === "~/.ssh/keys/id_managed" &&
+  keyRows[1].text === "id_test" && keyRows[1].title === "~/.ssh/id_test" &&
+  !keyRows.some((r) => (r.text || "").includes("/")),
+  JSON.stringify(keyRows));
+check("v0.14.10 (3c): Edit button only on the managed row; legacy row is read-only",
+  keyRows[0].hasEdit && keyRows[0].hasDelete && !keyRows[0].legacy &&
+  !keyRows[1].hasEdit && !keyRows[1].hasDelete && keyRows[1].legacy,
+  JSON.stringify(keyRows));
+// Layout: the sidebar keys list fills its view and is not clipped mid-row — the
+// list's bottom sits at or within the section-panel bottom (no overflow cutoff),
+// and it is a scroll container (overflow-y auto), not a fixed 320px cap.
+const keysLayout = await page.evaluate(() => {
+  const list = document.getElementById("sb-keys-list");
+  const panel = document.getElementById("section-panel");
+  const lr = list.getBoundingClientRect(), pr = panel.getBoundingClientRect();
+  return {
+    overflowY: getComputedStyle(list).overflowY,
+    maxHeight: getComputedStyle(list).maxHeight,
+    withinPanel: Math.round(lr.bottom) <= Math.round(pr.bottom) + 1,
+    hasHeight: lr.height > 0,
+  };
+});
+check("v0.14.10 (3b): sidebar keys list flexes within the panel (not clipped, no 320px cap)",
+  keysLayout.overflowY === "auto" && keysLayout.maxHeight === "none" &&
+  keysLayout.withinPanel && keysLayout.hasHeight,
+  JSON.stringify(keysLayout));
+// Edit roundtrip: click Edit on the managed row → dialog opens prefilled → change
+// the name + paste contents → Save → rename_identity_file + write_identity_file.
+const keyEditCallsBefore = {
+  rename: calls.filter((c) => c.cmd === "rename_identity_file").length,
+  write: calls.filter((c) => c.cmd === "write_identity_file").length,
+};
+await page.locator("#sb-keys-list .key-row").first().locator("button.key-edit").click();
+await page.waitForTimeout(40);
+const editDialog = await page.evaluate(() => ({
+  open: !document.getElementById("key-edit-modal").classList.contains("hidden"),
+  name: document.getElementById("ke-name").value,
+  focused: document.activeElement?.id,
+}));
+check("v0.14.10 (3c): Edit opens the editor prefilled with the managed key name, focused",
+  editDialog.open && editDialog.name === "id_managed" && editDialog.focused === "ke-name",
+  JSON.stringify(editDialog));
+await page.locator("#ke-name").fill("id_renamed");
+await page.locator("#ke-text").fill("-----BEGIN OPENSSH PRIVATE KEY-----\nnew\n");
+await page.locator("#ke-save").click();
+await page.waitForTimeout(60);
+const keyEditCalls = {
+  rename: calls.filter((c) => c.cmd === "rename_identity_file"),
+  write: calls.filter((c) => c.cmd === "write_identity_file"),
+};
+const lastRename = keyEditCalls.rename[keyEditCalls.rename.length - 1];
+const lastWrite = keyEditCalls.write[keyEditCalls.write.length - 1];
+check("v0.14.10 (3c): Save renames then overwrites via IPC with the right args, dialog closes",
+  keyEditCalls.rename.length === keyEditCallsBefore.rename + 1 &&
+  keyEditCalls.write.length === keyEditCallsBefore.write + 1 &&
+  lastRename.args.old === "id_managed" && lastRename.args.new === "id_renamed" &&
+  lastWrite.args.name === "id_renamed" &&
+  lastWrite.args.contents.includes("new") &&
+  (await page.evaluate(() => document.getElementById("key-edit-modal").classList.contains("hidden"))),
+  JSON.stringify({ lastRename: lastRename?.args, lastWrite: { name: lastWrite?.args?.name } }));
+// Restore the precondition the next NAV-RAIL check assumes: focus on the Keys
+// view's first action (the edit roundtrip moved focus into/out of the dialog).
+await page.locator("#sb-keys-add").focus();
+
 await page.keyboard.press("Control+k");
 check("NAV RAIL: Ctrl+K is a no-op outside Hosts", await page.evaluate(() => document.activeElement?.id === "sb-keys-add"));
 await page.locator('.rail-item[data-view="host"]').click();

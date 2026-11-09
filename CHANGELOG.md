@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Windows releases are currently **unsigned** (Authenticode signing postponed —
 see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
+## [0.15.0] - 2026-11-09
+
+### Added
+- SSH keys you created in the app can now be edited: an Edit button on each
+  managed key opens an editor to rename it and replace its contents. Legacy
+  keys outside the app's keys folder stay read-only.
+
+### Changed
+- The host list no longer groups hosts by the prefix before a dash; it is now
+  a single flat, alphabetically sorted list.
+- The SSH keys list shows just the key name (the full path is available on
+  hover) and fills the panel without being clipped.
+- Each sidebar section no longer shows a "hosterm" brand header; the host
+  section is titled "Host", matching "SSH keys" and "Ansible".
+
+### Fixed
+- The snippets panel no longer shows the editor form on open. It starts as the
+  snippet list; the form appears only after clicking "+ New", and Cancel now
+  closes it.
+
 ## [0.14.9] - 2026-11-07
 
 ### Fixed

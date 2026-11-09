@@ -217,14 +217,6 @@ select {
 }
 #sb-resize { width: 5px; cursor: col-resize; background: transparent; flex-shrink: 0; }
 #sb-resize:hover, #sb-resize.dragging { background: var(--accent); }
-.panel-head {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 12px;
-  border-bottom: 1px solid var(--border);
-}
-.brand { font-weight: 600; letter-spacing: .3px; }
-.panel-head button { width: 26px; height: 26px; }
-.head-acts { display: inline-flex; gap: 4px; }
 #host-search {
   margin: 8px 12px;
   width: calc(100% - 24px);
@@ -249,14 +241,6 @@ select {
 body.panel-collapsed #section-panel,
 body.panel-collapsed #sb-resize { display: none; }
 #host-list { flex: 1; min-height: 0; overflow-y: auto; padding: 8px; }
-.h-group {
-  font-size: 11px; letter-spacing: .6px; text-transform: uppercase;
-  color: var(--dim);
-  padding: 10px 8px 4px;
-  border-top: 1px solid var(--border);
-  margin-top: 4px;
-}
-.h-group:first-child { border-top: 0; margin-top: 0; padding-top: 4px; }
 /* U-D2 Dusk §13.3: host row 34px (Arus 28px → lebih lapang), gap 9px, radius --r-md */
 .host-item {
   height: 34px;
@@ -522,15 +506,20 @@ body.panel-collapsed #sb-resize { display: none; }
 .restore-when { font-size: 11.5px; color: var(--dim); white-space: nowrap; }
 
 /* Keys manager list */
-.keys-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; max-height: 320px; overflow-y: auto; }
+.keys-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; overflow-y: auto; }
+/* The modal list is a capped scroll region; the sidebar list (#view-keys
+   .keys-list, defined above) instead flexes to fill the view so it is never
+   clipped mid-row. */
+#keys-modal .keys-list { max-height: 320px; }
 .key-row {
   display: flex; align-items: center; gap: 8px;
   padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px;
   background: var(--surface);
 }
-.key-path { flex: 1; font-family: var(--mono, monospace); font-size: 12px; word-break: break-all; }
-.key-legacy { font-size: 11px; color: var(--dim); }
-.key-row button.danger { flex: none; height: 26px; padding: 0 10px; font-size: 12px; }
+.key-name { flex: 1; font-size: 12.5px; word-break: break-all; }
+.key-legacy { font-size: 11px; color: var(--dim); flex: none; }
+.key-row button.danger,
+.key-row button.key-edit { flex: none; height: 26px; padding: 0 10px; font-size: 12px; }
 
 /* tabs */
 /* U-D2 Dusk §13.3: tab bar 42px (Arus 36px) */
@@ -948,6 +937,10 @@ body.panel-collapsed #sb-resize { display: none; }
   margin: 0 0 10px; padding: 10px 12px;
   border: 1px solid var(--border); border-radius: 8px; background: var(--panel, var(--raised));
 }
+/* The form is hidden until "+ New" is clicked. A class selector's display:flex
+   would otherwise beat the UA [hidden]{display:none} rule (lower specificity),
+   so the form rendered on drawer open and Cancel's hidden=true did nothing. */
+.snip-form[hidden] { display: none; }
 .snip-form-title { font-size: 12.5px; font-weight: 600; color: var(--text); }
 .snip-field { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--dim); }
 .snip-field input, .snip-field textarea {
@@ -1336,7 +1329,7 @@ body.sftp-dragging { user-select: none; cursor: grabbing; }
 }
 
 /* modals */
-#modal, #raw-modal, #key-modal, #dialog, #ssh-modal, #ansible-modal, #pass-dialog, #restore-dialog {
+#modal, #raw-modal, #key-modal, #key-edit-modal, #dialog, #ssh-modal, #ansible-modal, #pass-dialog, #restore-dialog {
   position: fixed; inset: 0;
   background: rgba(0, 0, 0, .5);
   display: flex; align-items: center; justify-content: center;
