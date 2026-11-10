@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Windows releases are currently **unsigned** (Authenticode signing postponed —
 see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
+## [0.15.2] - 2026-11-11
+
+### Changed
+- The Edit SSH key dialog is now larger so a prefilled private key is
+  readable: the box is wider (up to 780px, clamped to the viewport and to 88%
+  of the window height) and the key editor is a tall monospace field
+  (320px minimum, resizable) that scrolls long key lines horizontally instead
+  of soft-wrapping them. Only the Edit-key dialog is resized; other dialogs
+  keep their previous size.
+
 ## [0.15.1] - 2026-11-09
 
 ### Changed
