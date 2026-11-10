@@ -4034,6 +4034,64 @@ check("v0.15.1: Edit label/placeholder reflect prefill (no 'paste to replace'/'o
   !/paste to replace/i.test(keTextMeta.label || "") &&
   !/overwrite/i.test(keTextMeta.placeholder || ""),
   JSON.stringify(keTextMeta));
+// MEKL 2026-11-10: the Edit dialog is enlarged so a prefilled private key is
+// readable/editable — wide box (>=700px), tall mono textarea (>=300px) that
+// keeps long key lines unwrapped, actions visible, and it still fits the
+// viewport (max-height 88vh + overflow).
+const keyEditGeometry = await page.evaluate(() => {
+  const box = document.querySelector("#key-edit-modal .modal-box");
+  const ta = document.getElementById("ke-text");
+  const cs = getComputedStyle(ta);
+  const br = box.getBoundingClientRect();
+  const ar = document.querySelector("#key-edit-modal .modal-actions").getBoundingClientRect();
+  return {
+    boxWidth: Math.round(br.width), boxHeight: Math.round(br.height),
+    vw: window.innerWidth, vh: window.innerHeight,
+    taHeight: Math.round(ta.getBoundingClientRect().height),
+    taFont: cs.fontFamily, taSize: cs.fontSize, taWhiteSpace: cs.whiteSpace, taResize: cs.resize,
+    actionsInsideBox: ar.top >= br.top - 1 && ar.bottom <= br.bottom + 1,
+  };
+});
+check("MEKL: #key-edit-modal box is >=700px wide and fits the viewport (max-height 88vh)",
+  keyEditGeometry.boxWidth >= 700 && keyEditGeometry.boxWidth <= keyEditGeometry.vw &&
+  keyEditGeometry.boxHeight <= keyEditGeometry.vh,
+  JSON.stringify(keyEditGeometry));
+check("MEKL: #ke-text is a >=300px tall, mono, pre-formatted, vertically resizable editor",
+  keyEditGeometry.taHeight >= 300 && /mono/i.test(keyEditGeometry.taFont) &&
+  keyEditGeometry.taSize === "12.5px" && keyEditGeometry.taWhiteSpace === "pre" &&
+  keyEditGeometry.taResize === "vertical",
+  JSON.stringify(keyEditGeometry));
+check("MEKL: Edit modal action buttons stay inside the box while it fits the viewport",
+  keyEditGeometry.actionsInsideBox, JSON.stringify(keyEditGeometry));
+// Small viewport: the box clamps to 94vw and 88vh, so it always fits (the box
+// scrolls internally) instead of overflowing the window. 560px stays above the
+// app's 520px auto-collapse breakpoint so the keys panel remains visible.
+await page.setViewportSize({ width: 560, height: 640 });
+await page.waitForTimeout(40);
+const keyEditNarrow = await page.evaluate(() => {
+  const br = document.querySelector("#key-edit-modal .modal-box").getBoundingClientRect();
+  return {
+    left: Math.round(br.left), right: Math.round(br.right),
+    top: Math.round(br.top), bottom: Math.round(br.bottom),
+    vw: window.innerWidth, vh: window.innerHeight,
+    overflow: document.documentElement.scrollWidth > window.innerWidth,
+  };
+});
+check("MEKL: #key-edit-modal clamps to 94vw/88vh and fits a 560x640 viewport",
+  keyEditNarrow.left >= 0 && keyEditNarrow.right <= keyEditNarrow.vw &&
+  keyEditNarrow.top >= 0 && keyEditNarrow.bottom <= keyEditNarrow.vh,
+  JSON.stringify(keyEditNarrow));
+await page.setViewportSize({ width: 1280, height: 720 });
+await page.waitForTimeout(40);
+// Long base64 lines must not soft-wrap: white-space:pre + overflow:auto keeps
+// each key line intact and readable via horizontal scroll.
+await page.locator("#ke-text").fill("-----BEGIN OPENSSH PRIVATE KEY-----\n" + "A".repeat(200) + "\n-----END OPENSSH PRIVATE KEY-----\n");
+const keWrap = await page.evaluate(() => {
+  const ta = document.getElementById("ke-text");
+  return { scrollWidth: ta.scrollWidth, clientWidth: ta.clientWidth };
+});
+check("MEKL: #ke-text keeps long key lines on one line (horizontal scroll, no soft wrap)",
+  keWrap.scrollWidth > keWrap.clientWidth, JSON.stringify(keWrap));
 await page.locator("#ke-name").fill("id_renamed");
 await page.locator("#ke-text").fill("-----BEGIN OPENSSH PRIVATE KEY-----\nnew\n");
 await page.locator("#ke-save").click();
@@ -4072,6 +4130,12 @@ check("v0.15.1: Edit prefill read failure shows an error and leaves #ke-text bla
 await page.evaluate(() => { document.getElementById("ke-cancel").click(); });
 readKeyFail = false;
 await page.waitForTimeout(40);
+const afterCancel = await page.evaluate(() => ({
+  hidden: document.getElementById("key-edit-modal").classList.contains("hidden"),
+  text: document.getElementById("ke-text").value,
+}));
+check("MEKL: Cancel closes the Edit dialog and wipes the key bytes",
+  afterCancel.hidden && afterCancel.text === "", JSON.stringify(afterCancel));
 // Restore the precondition the next NAV-RAIL check assumes: focus on the Keys
 // view's first action (the edit roundtrip moved focus into/out of the dialog).
 await page.locator("#sb-keys-add").focus();

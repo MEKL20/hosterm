@@ -1355,6 +1355,21 @@ body.sftp-dragging { user-select: none; cursor: grabbing; }
   display: flex; flex-direction: column; gap: 12px;
 }
 .modal-box.wide { width: 70vw; height: 70vh; }
+/* Edit-key modal (MEKL): the prefilled private key needs a wide, tall mono
+   editor to stay readable/editable. Scoped to #key-edit-modal — the global
+   .modal-box stays 380px. max-height 88vh + the box's own overflow-y:auto keep
+   it inside small viewports with the actions reachable. */
+#key-edit-modal .modal-box { width: min(780px, 94vw); max-height: 88vh; }
+#ke-text {
+  flex: 1 1 auto;
+  min-height: 320px;
+  resize: vertical;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre;
+  overflow: auto;
+}
 .dialog-box { width: min(340px, calc(100vw - 24px)); }
 .dialog-box p { margin: 0; }
 .modal-box h2 { margin: 0; font-size: 15px; font-weight: 600; }
