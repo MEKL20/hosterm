@@ -1395,15 +1395,23 @@ fn sftp_eol() -> &'static [u8] {
 ///     libedit/readline echo). sftp can only read the probe after login, so
 ///     its echo is a reliable login-complete marker on Windows too.
 ///
-/// The stored password is typed into the PTY at each password prompt.
+/// The stored password is supplied through `SSH_ASKPASS` (see below); the PTY
+/// typing is only the fallback path when no helper could be resolved.
 ///
-/// `SSH_ASKPASS` is deliberately NOT set. Win32-OpenSSH's `read_passphrase()`
-/// consults it *instead* of the console and never falls back, and the helper is
-/// launched with `CreateProcess("\"%s\" \"%s\"")` (readpass.c:175,184), which
-/// cannot execute a `.cmd` shim — so a shim yields an empty password and three
-/// denials. The console reader does see ConPTY input (proven on Windows CI by
-/// `conpty_input_reaches_child`); only its post-prompt input flush races the
-/// writer, which the sacrificial CR below absorbs.
+/// `SSH_ASKPASS` is set for password hosts. Win32-OpenSSH's `read_passphrase()`
+/// consults it *instead* of the console and never falls back, and `ssh_askpass()`
+/// launches it with `CreateProcess("\"%s\" \"%s\"")` (readpass.c:175,184) — one
+/// quoted argument, no shell, so the helper must be a real `.exe`, never a
+/// `.cmd` shim (a shim yields an empty password and three denials).
+///
+/// The console path is not usable under ConPTY: the UCRT's `_getch_nolock()`
+/// initialises its console handle from `GetStdHandle(STD_INPUT_HANDLE)`, which
+/// ConPTY hands the child as the input *pipe*, so `_getch()` returns EOF
+/// immediately and the password read yields garbage. `choice.exe`/`pause` do
+/// see ConPTY input (proven on Windows CI by `conpty_input_reaches_child` and
+/// `conpty_choice_receives_input`) because they open `CONIN$` directly — only
+/// the CRT's std-handle path is blind. The console fallback below is therefore
+/// kept only as a best-effort secondary path; `SSH_ASKPASS` is the primary one.
 
 fn sftp_spawn(host: &str) -> Result<SftpPtySession, String> {
     sftp_safe(host, "Host")?;
@@ -1412,6 +1420,19 @@ fn sftp_spawn(host: &str) -> Result<SftpPtySession, String> {
     let bin = std::env::var("HOSTERM_SFTP_BIN").unwrap_or_else(|_| "sftp".to_string());
     let mut cmd = CommandBuilder::new(bin);
     cmd.arg(host);
+    #[cfg(windows)]
+    if stored_pw.is_some() {
+        // The helper reads the sidecar directly, so the password never crosses
+        // the PTY (where it could be echoed back into the listing) or the IPC
+        // boundary. `HOSTERM_ASKPASS_BIN` lets the Windows live test point at
+        // a helper compiled on the fly, since `cargo test --lib` builds no bins.
+        let helper = askpass_exe();
+        if !helper.as_os_str().is_empty() {
+            cmd.env("SSH_ASKPASS", helper);
+            cmd.env("HOSTERM_ASKPASS_FILE", secrets_path());
+            cmd.env("HOSTERM_ASKPASS_HOST", host);
+        }
+    }
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
@@ -1454,12 +1475,14 @@ fn sftp_spawn(host: &str) -> Result<SftpPtySession, String> {
         rx,
         alive,
     };
-    // Windows console-password fallback. Win32-OpenSSH's read_passphrase()
-    // flushes the console input buffer right after printing the prompt
-    // (`while (_kbhit()) _getch();`) and `_getch()` blocks for a key event, so
-    // the flush swallows everything buffered at that moment AND the first key
-    // that arrives while it is still running. A sacrificial CR written when the
-    // prompt is *seen* satisfies that flush; the real password follows once the
+    // Windows console-password fallback (secondary: `SSH_ASKPASS` above is the
+    // primary path, because the CRT's `_getch()` is blind under ConPTY — it
+    // binds to `GetStdHandle(STD_INPUT_HANDLE)`, which ConPTY hands the child as
+    // the input pipe, so the read yields EOF instead of a key). This fallback
+    // only matters if no helper could be resolved. Win32-OpenSSH's
+    // read_passphrase() also flushes the console input buffer right after
+    // printing the prompt (`while (_kbhit()) _getch();`), so a sacrificial CR is
+    // written when the prompt is *seen*; the real password follows once the
     // flush has drained. It must be written at prompt time: ConPTY can drop
     // input written before the child console is up, which is why a pre-spawn CR
     // never protected the password. If the sacrificial itself is read as the
@@ -2082,6 +2105,73 @@ static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 /// Stays inside the Rust process — never crosses the IPC boundary.
 fn lookup_stored_password(host: &str) -> Option<String> {
     read_secrets().remove(host).filter(|p| !p.is_empty())
+}
+
+/// Resolve the stored password for `host` out of the sidecar file named by
+/// `HOSTERM_ASKPASS_FILE`. Shared by the in-process askpass entry point and the
+/// `hosterm-askpass` helper binary so both honour the same contract.
+fn askpass_password(host: &str) -> Option<String> {
+    let path = std::env::var_os("HOSTERM_ASKPASS_FILE")?;
+    let text = std::fs::read_to_string(path).ok()?;
+    text.lines()
+        .find_map(|line| line.split_once('=').filter(|(a, _)| *a == host))
+        .map(|(_, pw)| pw.to_string())
+        .filter(|p| !p.is_empty())
+}
+
+/// Windows `SSH_ASKPASS` entry point.
+///
+/// Win32-OpenSSH's `read_passphrase()` consults `SSH_ASKPASS` *instead* of the
+/// console and never falls back, and `ssh_askpass()` launches the helper with
+/// `CreateProcess("\"%s\" \"%s\"")` (readpass.c:175,184) — one quoted argument,
+/// no shell, so the helper must be a real `.exe`. The console path is unusable
+/// under ConPTY: the UCRT's `_getch_nolock()` initialises its console handle
+/// from `GetStdHandle(STD_INPUT_HANDLE)`, which ConPTY hands the child as the
+/// input *pipe*, so `_getch()` returns EOF immediately and the password read
+/// yields garbage (three instant `Permission denied`). `choice.exe`/`pause`
+/// work because they open `CONIN$` directly.
+///
+/// When this process is launched with exactly one argument that is a password
+/// prompt, print the stored password for `HOSTERM_ASKPASS_HOST` and exit.
+/// Returns normally when this is not an askpass invocation.
+pub fn maybe_run_askpass() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.len() != 1 || std::env::var_os("HOSTERM_ASKPASS_FILE").is_none() {
+        return;
+    }
+    if !args[0].trim_end().ends_with("password:") {
+        return;
+    }
+    let host = std::env::var("HOSTERM_ASKPASS_HOST").unwrap_or_default();
+    if let Some(pw) = askpass_password(&host) {
+        use std::io::Write as _;
+        let mut out = std::io::stdout();
+        let _ = out.write_all(pw.as_bytes());
+        let _ = out.write_all(b"\n");
+        let _ = out.flush();
+    }
+    std::process::exit(0);
+}
+
+/// Path of the `SSH_ASKPASS` helper (Windows only).
+///
+/// Prefer the `hosterm-askpass` sidecar next to this binary (a second cargo bin
+/// target); fall back to this binary, which answers the askpass invocation
+/// itself via [`maybe_run_askpass`]. Never a `.cmd`/`.bat` shim: it cannot be
+/// launched the way `ssh_askpass()` launches helpers.
+#[cfg(windows)]
+fn askpass_exe() -> std::path::PathBuf {
+    if let Some(p) = std::env::var_os("HOSTERM_ASKPASS_BIN") {
+        if !p.is_empty() {
+            return std::path::PathBuf::from(p);
+        }
+    }
+    let exe = std::env::current_exe().unwrap_or_default();
+    let sibling = exe.with_file_name("hosterm-askpass.exe");
+    if sibling.exists() {
+        return sibling;
+    }
+    exe
 }
 
 #[tauri::command]
@@ -4753,6 +4843,24 @@ mod sftp_tests {
         let secrets = dir.join("hosterm.secrets");
         std::fs::write(&secrets, format!("hostermlive={}\n", password)).unwrap();
 
+        // `cargo test --lib` builds no bin targets, so compile the askpass helper
+        // (std-only) with rustc. It must be a real .exe: ssh_askpass() launches
+        // SSH_ASKPASS through CreateProcess with a single quoted argument and no
+        // shell, so a .cmd shim can never run.
+        let helper = dir.join("hosterm-askpass.exe");
+        let helper_src =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bin/hosterm-askpass.rs");
+        let built = std::process::Command::new("rustc")
+            .arg("-O")
+            .arg(&helper_src)
+            .arg("-o")
+            .arg(&helper)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        eprintln!("[winlive] askpass helper built: {}", built);
+        std::env::set_var("HOSTERM_ASKPASS_BIN", &helper);
+
         let out = run_sftp_op("hostermlive", "ls -la\n");
 
         eprintln!(
@@ -4760,9 +4868,11 @@ mod sftp_tests {
             lookup_stored_password("hostermlive").is_some(),
             password.len()
         );
+        std::env::remove_var("HOSTERM_ASKPASS_BIN");
         std::env::remove_var("HOSTERM_CONFIG");
         let _ = std::fs::remove_dir_all(&dir);
 
+        assert!(built, "askpass helper failed to compile");
         assert!(out.ok, "Windows sftp listing failed: {}", out.stderr);
         assert!(!out.stdout.trim().is_empty(), "empty listing");
         assert!(!out.stdout.contains("sftp>"), "echo leaked: {:?}", out.stdout);
@@ -5610,4 +5720,80 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod askpass_tests {
+    use super::*;
+
+    /// The sidecar contract shared by the in-process askpass entry point and the
+    /// `hosterm-askpass` helper binary: `alias=password` lines, first match wins,
+    /// empty passwords and unknown hosts are not answers.
+    #[test]
+    fn askpass_password_reads_the_sidecar() {
+        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("hosterm-askpass-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let sidecar = dir.join("hosterm.secrets");
+        std::fs::write(&sidecar, "alpha=first\nbeta=second\ngamma=\n").unwrap();
+        std::env::set_var("HOSTERM_ASKPASS_FILE", &sidecar);
+        assert_eq!(askpass_password("alpha").as_deref(), Some("first"));
+        assert_eq!(askpass_password("beta").as_deref(), Some("second"));
+        // empty stored password is not a usable answer
+        assert_eq!(askpass_password("gamma"), None);
+        assert_eq!(askpass_password("delta"), None);
+        std::env::remove_var("HOSTERM_ASKPASS_FILE");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `maybe_run_askpass` must not treat an ordinary launch (no sidecar env, or
+    /// an argument that is not a password prompt) as an askpass invocation —
+    /// otherwise the GUI would exit before it ever opens.
+    #[test]
+    fn maybe_run_askpass_ignores_ordinary_launches() {
+        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("HOSTERM_ASKPASS_FILE");
+        // No sidecar env: must return normally (not exit, not print).
+        maybe_run_askpass();
+    }
+
+    /// The helper must print exactly the stored password and nothing else:
+    /// `ssh_askpass()` does one `ReadFile` up to the first newline and
+    /// `read_passphrase()` truncates at the first CR/LF, so any extra output on
+    /// stdout becomes part of the password. Compiled with `rustc` because the
+    /// helper is std-only; skipped where no `rustc` is on PATH (the Windows live
+    /// test compiles it for real).
+    #[test]
+    fn askpass_helper_prints_only_the_password() {
+        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("hosterm-askpass-bin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let sidecar = dir.join("hosterm.secrets");
+        std::fs::write(&sidecar, "box=hunter2\n").unwrap();
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bin/hosterm-askpass.rs");
+        let exe = dir.join(if cfg!(windows) { "hosterm-askpass.exe" } else { "hosterm-askpass" });
+        let compiled = std::process::Command::new("rustc")
+            .arg("-O")
+            .arg(&src)
+            .arg("-o")
+            .arg(&exe)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !compiled {
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        let out = std::process::Command::new(&exe)
+            .env("HOSTERM_ASKPASS_FILE", &sidecar)
+            .env("HOSTERM_ASKPASS_HOST", "box")
+            .arg("box@127.0.0.1's password: ")
+            .output()
+            .expect("run askpass helper");
+        assert!(out.status.success(), "helper exited {}", out.status);
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "hunter2\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
