@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Windows releases are currently **unsigned** (Authenticode signing postponed —
 see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
+## [0.15.4] - 2026-11-11
+
+### Added
+- Keys -> Add key: an "Upload file" control imports a private key from a file
+  into the textarea for review before saving. Nothing is written to disk until
+  you press Save.
+
+### Changed
+- Add/Edit host: the private-key dropdown now shows only the file name, not the
+  full path, so the list stays readable.
+
+### Security
+- CI no longer keeps the Windows live-test password or the Google OAuth client
+  id in the repository; both are read from repository secrets, and the workflow
+  fails loudly when they are empty.
+
 ## [0.15.3] - 2026-11-11
 
 ### Fixed
