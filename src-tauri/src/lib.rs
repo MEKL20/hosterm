@@ -1449,6 +1449,7 @@ fn write_windows_askpass_helper(pw: &str) -> Result<(PathBuf, PathBuf), String> 
     // the helper produces no output, and "" makes confirm() refuse the host.
     f.write_all(
         b"@echo off\r\n\
+echo PROMPT: %~1>> \"%HOSTERM_ASKPASS_FILE%.called\"\r\n\
 echo %~1 | findstr /i password >nul || goto :yes\r\n\
 type \"%HOSTERM_ASKPASS_FILE%\"\r\n\
 exit /b 0\r\n\
@@ -1526,13 +1527,6 @@ fn sftp_spawn(host: &str) -> Result<SftpPtySession, String> {
         alive2.store(false, Ordering::SeqCst);
     });
 
-    // True when the password prompt is answered by the SSH_ASKPASS helper, so
-    // no console reader is racing our input. Computed before the session takes
-    // ownership of the temp-file list.
-    #[cfg(windows)]
-    let askpass_active = !askpass_files.is_empty();
-    #[cfg(not(windows))]
-    let askpass_active = false;
     let sess = SftpPtySession {
         master: pair.master,
         writer,
@@ -1541,22 +1535,27 @@ fn sftp_spawn(host: &str) -> Result<SftpPtySession, String> {
         #[cfg(windows)]
         temp_files: askpass_files,
     };
-    // Fallback for a Windows sftp that *does* read its password from the
-    // console (a build where allocate_standard_descriptor is not commented
-    // out). Win32-OpenSSH's read_passphrase() flushes the console input buffer
-    // right after printing the prompt: `while (_kbhit()) _getch();`.
-    // `_getch()` discards non-key records and blocks for the next key event, so
-    // when ConPTY has posted a WINDOW_BUFFER_SIZE_EVENT (it does, at startup)
-    // the flush swallows the first character of whatever we type. A sacrificial
-    // CR written before the prompt is always eaten by that flush, so the real
-    // password is read intact. Windows-only: on Linux the same CR would be
-    // consumed by sftp as an empty command line.
+    // Windows console-password fallback. Win32-OpenSSH's read_passphrase()
+    // flushes the console input buffer right after printing the prompt
+    // (`while (_kbhit()) _getch();`) and `_getch()` blocks for a key event, so
+    // the flush swallows everything buffered at that moment AND the first key
+    // that arrives while it is still running. A sacrificial CR written when the
+    // prompt is *seen* satisfies that flush; the real password follows once the
+    // flush has drained. It must be written at prompt time: ConPTY can drop
+    // input written before the child console is up, which is why a pre-spawn CR
+    // never protected the password. If the sacrificial itself is read as the
+    // password (a fresh prompt arrives before the password is sent) the flush
+    // is not blocking, so we stop using it and send the password directly.
     #[cfg(windows)]
-    if stored_pw.is_some() {
-        let mut w = sess.writer.lock().unwrap();
-        let _ = w.write_all(b"\r");
-        let _ = w.flush();
-    }
+    let pw_grace = std::time::Duration::from_millis(120);
+    #[cfg(windows)]
+    let pw_quiet = std::time::Duration::from_millis(400);
+    #[cfg(windows)]
+    let mut sacrificial = stored_pw.is_some();
+    #[cfg(windows)]
+    let mut pending_pw: Option<std::time::Instant> = None;
+    #[cfg(windows)]
+    let mut last_pw_write: Option<std::time::Instant> = None;
     let timeout = if stored_pw.is_some() { 30 } else { 10 };
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout);
     let spawned_at = std::time::Instant::now();
@@ -1585,15 +1584,53 @@ fn sftp_spawn(host: &str) -> Result<SftpPtySession, String> {
         if prompts > prompts_seen {
             prompts_seen = prompts;
             if let Some(pw) = stored_pw.as_deref() {
-                let mut w = sess.writer.lock().unwrap();
-                let _ = w.write_all(pw.as_bytes());
-                let _ = w.write_all(b"\r");
-                let _ = w.flush();
+                #[cfg(windows)]
+                {
+                    if pending_pw.is_some() {
+                        // The previous sacrificial CR was consumed as the
+                        // password: the flush is not blocking. Send the real
+                        // password directly from now on.
+                        sacrificial = false;
+                        pending_pw = None;
+                    }
+                    if sacrificial {
+                        let mut w = sess.writer.lock().unwrap();
+                        let _ = w.write_all(b"\r");
+                        let _ = w.flush();
+                        pending_pw = Some(std::time::Instant::now() + pw_grace);
+                    } else {
+                        let mut w = sess.writer.lock().unwrap();
+                        let _ = w.write_all(pw.as_bytes());
+                        let _ = w.write_all(b"\r");
+                        let _ = w.flush();
+                        last_pw_write = Some(std::time::Instant::now());
+                    }
+                }
+                #[cfg(not(windows))]
+                {
+                    let mut w = sess.writer.lock().unwrap();
+                    let _ = w.write_all(pw.as_bytes());
+                    let _ = w.write_all(b"\r");
+                    let _ = w.flush();
+                }
             }
             // A probe sent before this prompt may have been swallowed by the
             // password reader (Windows flushes pending input first); arm a
             // fresh one so it goes out after the next quiet period.
             probe_sent = false;
+        }
+        #[cfg(windows)]
+        if let Some(t) = pending_pw {
+            if std::time::Instant::now() >= t {
+                if let Some(pw) = stored_pw.as_deref() {
+                    let mut w = sess.writer.lock().unwrap();
+                    let _ = w.write_all(pw.as_bytes());
+                    let _ = w.write_all(b"\r");
+                    let _ = w.flush();
+                    last_pw_write = Some(std::time::Instant::now());
+                }
+                pending_pw = None;
+            }
         }
         // Linux/interactive: the plain prompt means login finished. Guard on
         // `!probe_sent` so a probe echo (`sftp> pwd`) is never mistaken for it.
@@ -1608,12 +1645,17 @@ fn sftp_spawn(host: &str) -> Result<SftpPtySession, String> {
         // (or after 5s, as a fallback for a stored password that is never
         // asked for): on a password host an early probe would be read as the
         // password.
+        #[cfg(windows)]
+        let may_probe = stored_pw.is_none()
+            // Only probe once the password has been written AND the output has
+            // gone quiet: a probe that races the login is read as the password.
+            || last_pw_write
+                .map(|t| t.elapsed() >= pw_quiet)
+                .unwrap_or(false)
+            || spawned_at.elapsed() >= std::time::Duration::from_secs(5);
+        #[cfg(not(windows))]
         let may_probe = stored_pw.is_none()
             || prompts_seen > 0
-            // With SSH_ASKPASS answering out of process, a probe that races the
-            // login is recoverable: the next prompt is answered again and the
-            // probe is re-armed below.
-            || askpass_active
             || spawned_at.elapsed() >= std::time::Duration::from_secs(5);
         if !probe_sent && last_change.elapsed() >= quiet && may_probe {
             let mut w = sess.writer.lock().unwrap();
@@ -4782,6 +4824,28 @@ mod sftp_tests {
             lookup_stored_password("hostermlive").is_some(),
             password.len()
         );
+        #[cfg(windows)]
+        {
+            let markers: Vec<std::path::PathBuf> = std::fs::read_dir(std::env::temp_dir())
+                .map(|rd| {
+                    rd.filter_map(|e| e.ok())
+                        .filter(|e| {
+                            let n = e.file_name().to_string_lossy().to_string();
+                            n.starts_with("hosterm-askpass-") && n.ends_with(".called")
+                        })
+                        .map(|e| e.path())
+                        .collect()
+                })
+                .unwrap_or_default();
+            eprintln!("[winlive] askpass markers: {:?}", markers);
+            for m in &markers {
+                eprintln!(
+                    "[winlive] marker {:?} = {:?}",
+                    m,
+                    std::fs::read_to_string(m).unwrap_or_default()
+                );
+            }
+        }
         std::env::remove_var("HOSTERM_CONFIG");
         let _ = std::fs::remove_dir_all(&dir);
 
@@ -4793,6 +4857,231 @@ mod sftp_tests {
             "login leaked into the listing: {:?}",
             out.stdout
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn conpty_env_reaches_child() {
+        if std::env::var("HOSTERM_WINLIVE").as_deref() != Ok("1") {
+            return;
+        }
+        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize { rows: 24, cols: 200, pixel_width: 0, pixel_height: 0 })
+            .unwrap();
+        let mut cmd = CommandBuilder::new("cmd.exe");
+        cmd.arg("/c");
+        cmd.arg("echo ENVPROBE=%HOSTERM_ENVPROBE%");
+        cmd.env("HOSTERM_ENVPROBE", "PROBE_OK");
+        let _child = pair.slave.spawn_command(cmd).unwrap();
+        drop(pair.slave);
+        let mut reader = pair.master.try_clone_reader().unwrap();
+        drop(pair.master);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut s = String::new();
+            use std::io::Read as _;
+            let _ = reader.read_to_string(&mut s);
+            let _ = tx.send(s);
+        });
+        let out = rx
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .unwrap_or_else(|_| "<timeout>".to_string());
+        eprintln!("[winlive] envprobe output: {:?}", out);
+        assert!(
+            out.contains("ENVPROBE=PROBE_OK"),
+            "CommandBuilder::env did not reach the ConPTY child: {:?}",
+            out
+        );
+    }
+
+    /// Raw ConPTY input delivery: does a line written to the master reach the
+    /// child's stdin and come back as echo + command output?
+    #[cfg(windows)]
+    #[test]
+    fn conpty_input_reaches_child() {
+        if std::env::var("HOSTERM_WINLIVE").as_deref() != Ok("1") {
+            return;
+        }
+        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize { rows: 24, cols: 200, pixel_width: 0, pixel_height: 0 })
+            .unwrap();
+        let mut cmd = CommandBuilder::new("cmd.exe");
+        cmd.arg("/c");
+        cmd.arg("set /p V=TYPEHERE&echo GOT:%V%");
+        let _child = pair.slave.spawn_command(cmd).unwrap();
+        drop(pair.slave);
+        let reader = pair.master.try_clone_reader().unwrap();
+        let mut writer = pair.master.take_writer().unwrap();
+        drop(pair.master);
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 1024];
+            let mut acc = String::new();
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        acc.push_str(&String::from_utf8_lossy(&buf[..n]));
+                        if tx.send(acc.clone()).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        let mut acc = String::new();
+        let start = std::time::Instant::now();
+        while !acc.contains("TYPEHERE")
+            && start.elapsed() < std::time::Duration::from_secs(10)
+        {
+            if let Ok(s) = rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                acc = s;
+            }
+        }
+        eprintln!("[winlive] input probe pre: {:?}", acc);
+        assert!(acc.contains("TYPEHERE"), "cmd.exe prompt never appeared: {:?}", acc);
+        use std::io::Write as _;
+        let _ = writer.write_all(b"hello\r");
+        let _ = writer.flush();
+        let start = std::time::Instant::now();
+        while !acc.contains("GOT:hello")
+            && start.elapsed() < std::time::Duration::from_secs(10)
+        {
+            if let Ok(s) = rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                acc = s;
+            }
+        }
+        eprintln!("[winlive] input probe post: {:?}", acc);
+        assert!(acc.contains("GOT:hello"), "ConPTY input was not delivered: {:?}", acc);
+    }
+
+    /// Does input written IMMEDIATELY after spawn survive, or does ConPTY drop
+    /// it before the child console is up? (The old sftp_spawn wrote its
+    /// sacrificial CR here.) Diagnostic only: logs the outcome.
+    #[cfg(windows)]
+    #[test]
+    fn conpty_early_input_survives() {
+        if std::env::var("HOSTERM_WINLIVE").as_deref() != Ok("1") {
+            return;
+        }
+        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize { rows: 24, cols: 200, pixel_width: 0, pixel_height: 0 })
+            .unwrap();
+        let mut cmd = CommandBuilder::new("cmd.exe");
+        cmd.arg("/c");
+        cmd.arg("set /p V=TYPEHERE&echo GOT:%V%");
+        let _child = pair.slave.spawn_command(cmd).unwrap();
+        drop(pair.slave);
+        let reader = pair.master.try_clone_reader().unwrap();
+        let mut writer = pair.master.take_writer().unwrap();
+        drop(pair.master);
+        use std::io::Write as _;
+        let _ = writer.write_all(b"\r");
+        let _ = writer.flush();
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 1024];
+            let mut acc = String::new();
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        acc.push_str(&String::from_utf8_lossy(&buf[..n]));
+                        if tx.send(acc.clone()).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        let mut acc = String::new();
+        let start = std::time::Instant::now();
+        while !acc.contains("GOT:")
+            && start.elapsed() < std::time::Duration::from_secs(10)
+        {
+            if let Ok(s) = rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                acc = s;
+            }
+        }
+        eprintln!("[winlive] early-CR outcome: {:?}", acc);
+    }
+
+    /// The decisive question: does console password auto-inject work at all with
+    /// the REAL Win32-OpenSSH `ssh.exe` over a ConPTY? Uses the same one-shot
+    /// `pump_pty` injection as the terminal. If this fails, the console path is
+    /// broken for Win32-OpenSSH generally, not just for sftp.exe.
+    #[cfg(windows)]
+    #[test]
+    fn live_ssh_password_autoinject_real() {
+        if std::env::var("HOSTERM_WINLIVE").as_deref() != Ok("1") {
+            return;
+        }
+        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let user = std::env::var("HOSTERM_WINLIVE_USER").unwrap_or_else(|_| "hosterm".into());
+        let password = std::env::var("HOSTERM_WINLIVE_PASSWORD")
+            .unwrap_or_else(|_| "Sftp-Live-2026!xQ7#".into());
+        let dir = std::env::temp_dir().join(format!("hosterm-sshlive-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = dir.join("config");
+        std::fs::write(
+            &cfg,
+            format!(
+                "Host hostermlive\n    HostName 127.0.0.1\n    User {}\n    PreferredAuthentications password\n",
+                user
+            ),
+        )
+        .unwrap();
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        let secrets = dir.join("hosterm.secrets");
+        std::fs::write(&secrets, format!("hostermlive={}\n", password)).unwrap();
+
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize { rows: 24, cols: 200, pixel_width: 0, pixel_height: 0 })
+            .unwrap();
+        let mut cmd = CommandBuilder::new("ssh");
+        cmd.arg("hostermlive");
+        cmd.arg("echo SSH_LOGIN_OK");
+        let _child = pair.slave.spawn_command(cmd).unwrap();
+        drop(pair.slave);
+        let reader = pair.master.try_clone_reader().unwrap();
+        let writer = pair.master.take_writer().unwrap();
+        drop(pair.master);
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        let _pump = std::thread::spawn(move || {
+            pump_pty(
+                reader,
+                std::sync::Arc::new(std::sync::Mutex::new(writer)),
+                lookup_stored_password("hostermlive"),
+                move |s| {
+                    let _ = tx.send(s.to_string());
+                },
+            );
+        });
+        let mut acc = String::new();
+        let start = std::time::Instant::now();
+        while !acc.contains("SSH_LOGIN_OK")
+            && start.elapsed() < std::time::Duration::from_secs(20)
+        {
+            if let Ok(s) = rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                acc.push_str(&s);
+            }
+        }
+        eprintln!("[winlive] real ssh autoinject output: {:?}", acc);
+        assert!(
+            acc.contains("SSH_LOGIN_OK"),
+            "real ssh.exe password auto-inject failed: {:?}",
+            acc
+        );
+        std::env::remove_var("HOSTERM_CONFIG");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
