@@ -183,11 +183,16 @@ jobs:
           Set-Service -Name sshd -StartupType 'Automatic'
           Start-Service sshd
           $pw = ConvertTo-SecureString 'Hosterm!2026' -AsPlainText -Force
-          if (Get-LocalUser -Name 'hosterm' -ErrorAction SilentlyContinue) {
-            Write-Host 'user hosterm already exists -> resetting password'
-            Set-LocalUser -Name 'hosterm' -Password $pw
-          } else {
-            New-LocalUser -Name 'hosterm' -Password $pw -FullName 'Hosterm' -PasswordNeverExpires $true
+          try {
+            if (Get-LocalUser -Name 'hosterm' -ErrorAction SilentlyContinue) {
+              Write-Host 'user hosterm already exists -> resetting password'
+              Set-LocalUser -Name 'hosterm' -Password $pw -PasswordNeverExpires -ErrorAction Stop
+            } else {
+              New-LocalUser -Name 'hosterm' -Password $pw -FullName 'Hosterm' -PasswordNeverExpires -ErrorAction Stop
+            }
+          } catch {
+            Write-Host "ACCOUNT SETUP FAILED: $($_.Exception.Message)"
+            throw
           }
           $u = Get-LocalUser -Name 'hosterm'
           Write-Host "user hosterm: Enabled=$($u.Enabled) PasswordRequired=$($u.PasswordRequired) PasswordLastSet=$($u.PasswordLastSet)"
