@@ -4921,8 +4921,14 @@ mod sftp_tests {
         );
     }
 
-    /// Does the askpass route authenticate `ssh.exe` at all on this runner?
-    /// Isolates sftp.exe's involvement: same env, same helper, direct ssh.
+    /// Probe the Windows password path with `ssh.exe` (unlike sftp.exe it has a
+    /// working console read under ConPTY). Three phases isolate the delivery
+    /// from the account itself:
+    ///   A: SSH_ASKPASS + the real password,
+    ///   B: console typing + the real password,
+    ///   C: console typing + a blank password.
+    /// B failing means the fixture (account/sshd) is at fault, not the delivery;
+    /// B working means the askpass delivery is what is broken.
     #[cfg(windows)]
     #[test]
     fn windows_ssh_askpass_authenticates() {
@@ -4962,63 +4968,142 @@ mod sftp_tests {
             .status();
         let log = dir.join("askpass.log");
         std::env::set_var("HOSTERM_ASKPASS_LOG", &log);
-        let pty_system = native_pty_system();
-        let pair = pty_system
-            .openpty(PtySize { rows: 24, cols: 200, pixel_width: 0, pixel_height: 0 })
-            .unwrap();
-        let mut cmd = CommandBuilder::new("ssh");
-        cmd.arg("-o");
-        cmd.arg("StrictHostKeyChecking=no");
-        cmd.arg("hostermlive");
-        cmd.arg("exit");
-        cmd.arg("0");
-        cmd.env("SSH_ASKPASS", &helper);
-        cmd.env("SSH_ASKPASS_REQUIRE", "force");
-        cmd.env("DISPLAY", "1");
-        cmd.env("HOSTERM_ASKPASS_FILE", &secrets);
-        cmd.env("HOSTERM_ASKPASS_HOST", "hostermlive");
-        cmd.env("HOSTERM_ASKPASS_LOG", &log);
-        let _child = pair.slave.spawn_command(cmd).unwrap();
-        drop(pair.slave);
-        let mut reader = pair.master.try_clone_reader().unwrap();
-        let (tx, rx) = std::sync::mpsc::channel::<String>();
-        std::thread::spawn(move || {
-            let mut buf = [0u8; 1024];
-            let mut acc = String::new();
-            loop {
-                match reader.read(&mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        acc.push_str(&String::from_utf8_lossy(&buf[..n]));
-                        if tx.send(acc.clone()).is_err() {
-                            break;
-                        }
-                    }
-                }
-            }
-        });
-        let mut acc = String::new();
-        let start = std::time::Instant::now();
-        while start.elapsed() < std::time::Duration::from_secs(25) {
-            if let Ok(s) = rx.recv_timeout(std::time::Duration::from_millis(50)) {
-                acc = s;
-            }
-            if acc.contains("Permission denied") || acc.contains("Connection closed") {
+
+        // sshd's effective config, for the record: a disabled PasswordAuthentication
+        // or a forced keyboard-interactive would explain a correct password being
+        // rejected.
+        for sshd in ["sshd", r"C:\Windows\System32\OpenSSH\sshd.exe"] {
+            if let Ok(out) = std::process::Command::new(sshd).arg("-T").output() {
+                let s = String::from_utf8_lossy(&out.stdout);
+                let keep: Vec<&str> = s
+                    .lines()
+                    .filter(|l| {
+                        l.contains("passwordauthentication")
+                            || l.contains("kbdinteractive")
+                            || l.contains("usepam")
+                            || l.contains("logon")
+                    })
+                    .collect();
+                eprintln!("[winlive] sshd -T: {:?}", keep);
                 break;
             }
         }
-        eprintln!("[winlive] ssh askpass probe: {:?}", acc);
+        // Is the account really password-gated? The workflow reported
+        // `PasswordRequired=False`; a broken account state would make every
+        // password look acceptable.
+        let ps = format!(
+            "Add-Type -AssemblyName System.DirectoryServices.AccountManagement; $pc = New-Object System.DirectoryServices.AccountManagement.PrincipalContext([System.DirectoryServices.AccountManagement.ContextType]::Machine); $u = Get-LocalUser -Name '{user}'; 'enabled={{0}} lockedout={{1}} pwrequired={{2}} right={{3}} wrong={{4}}' -f $u.Enabled, $u.LockedOut, $u.PasswordRequired, $pc.ValidateCredentials('{user}','{password}'), $pc.ValidateCredentials('{user}','definitely-not-it')"
+        );
+        if let Ok(out) = std::process::Command::new("powershell")
+            .arg("-NoProfile")
+            .arg("-Command")
+            .arg(ps)
+            .output()
+        {
+            eprintln!(
+                "[winlive] account check: {:?} err={:?}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+
+        // One `ssh.exe hostermlive echo ACCESS_GRANTED` run under a ConPTY.
+        // `askpass` toggles the SSH_ASKPASS env; `typed` is what to send at each
+        // password prompt (None = send nothing).
+        fn phase(
+            cfg: &std::path::Path,
+            helper: &std::path::Path,
+            secrets: &std::path::Path,
+            log: &std::path::Path,
+            askpass: bool,
+            typed: Option<&str>,
+        ) -> String {
+            let pty_system = native_pty_system();
+            let pair = pty_system
+                .openpty(PtySize { rows: 24, cols: 200, pixel_width: 0, pixel_height: 0 })
+                .unwrap();
+            let mut cmd = CommandBuilder::new("ssh");
+            cmd.arg("-F");
+            cmd.arg(cfg);
+            cmd.arg("-o");
+            cmd.arg("StrictHostKeyChecking=no");
+            cmd.arg("-o");
+            cmd.arg("UserKnownHostsFile=NUL");
+            cmd.arg("hostermlive");
+            cmd.arg("echo");
+            cmd.arg("ACCESS_GRANTED");
+            if askpass {
+                cmd.env("SSH_ASKPASS", helper);
+                cmd.env("SSH_ASKPASS_REQUIRE", "force");
+                cmd.env("DISPLAY", "1");
+                cmd.env("HOSTERM_ASKPASS_FILE", secrets);
+                cmd.env("HOSTERM_ASKPASS_HOST", "hostermlive");
+                cmd.env("HOSTERM_ASKPASS_LOG", log);
+            }
+            let _child = pair.slave.spawn_command(cmd).unwrap();
+            drop(pair.slave);
+            let mut reader = pair.master.try_clone_reader().unwrap();
+            let mut writer = pair.master.take_writer().unwrap();
+            let (tx, rx) = std::sync::mpsc::channel::<String>();
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 1024];
+                let mut acc = String::new();
+                loop {
+                    match reader.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            acc.push_str(&String::from_utf8_lossy(&buf[..n]));
+                            if tx.send(acc.clone()).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
+            let mut acc = String::new();
+            let mut answered = 0usize;
+            let start = std::time::Instant::now();
+            while start.elapsed() < std::time::Duration::from_secs(20) {
+                if let Ok(s) = rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                    acc = s;
+                }
+                if let Some(pw) = typed {
+                    let seen = acc.matches("'s password:").count();
+                    if seen > answered {
+                        answered = seen;
+                        use std::io::Write as _;
+                        let _ = writer.write_all(pw.as_bytes());
+                        let _ = writer.write_all(b"\r");
+                        let _ = writer.flush();
+                    }
+                }
+                if acc.contains("Permission denied")
+                    || acc.contains("Connection closed")
+                    || acc.contains("ACCESS_GRANTED")
+                {
+                    break;
+                }
+            }
+            acc
+        }
+
+        let a = phase(&cfg, &helper, &secrets, &log, true, None);
+        eprintln!("[winlive] phase A (askpass): {:?}", a);
+        let b = phase(&cfg, &helper, &secrets, &log, false, Some(&password));
+        eprintln!("[winlive] phase B (console, real pw): {:?}", b);
+        let c = phase(&cfg, &helper, &secrets, &log, false, Some(""));
+        eprintln!("[winlive] phase C (console, blank pw): {:?}", c);
         eprintln!(
-            "[winlive] ssh askpass log: {:?}",
+            "[winlive] askpass log: {:?}",
             std::fs::read_to_string(&log).unwrap_or_default()
         );
         std::env::remove_var("HOSTERM_ASKPASS_LOG");
         std::env::remove_var("HOSTERM_CONFIG");
         let _ = std::fs::remove_dir_all(&dir);
         assert!(
-            !acc.contains("Permission denied"),
+            !a.contains("Permission denied"),
             "ssh.exe askpass auth failed: {:?}",
-            acc
+            a
         );
     }
 
