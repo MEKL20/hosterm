@@ -4817,6 +4817,83 @@ mod sftp_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Probe (and, if needed, repair) the CI fixture's `hosterm` account.
+    ///
+    /// sshd's Windows password check is `LogonUserW(user, L".", pw,
+    /// LOGON32_LOGON_INTERACTIVE)` and then `LOGON32_LOGON_NETWORK`
+    /// (Win32-OpenSSH `auth-passwd.c:343-361`). The fixture's
+    /// `ValidateCredentials` accepts the password, but that path does not
+    /// exercise the logon rights, so it cannot tell us whether sshd will.
+    /// Probe both logon types directly, then clear the `UF_PASSWD_NOTREQD`
+    /// flag (`PasswordRequired=False` was observed on the runner image) and
+    /// give the account the Administrators group, which holds both logon
+    /// rights by default. Both repairs are idempotent.
+    #[cfg(windows)]
+    fn ensure_windows_live_account() {
+        if std::env::var("HOSTERM_WINLIVE").as_deref() != Ok("1") {
+            return;
+        }
+        let Ok(password) = std::env::var("HOSTERM_WINLIVE_PASSWORD") else {
+            return;
+        };
+        let user = std::env::var("HOSTERM_WINLIVE_USER").unwrap_or_else(|_| "hosterm".into());
+        let dir = std::env::temp_dir().join(format!("hosterm-acct-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let ps = dir.join("logon-probe.ps1");
+        // Written to a file rather than `-Command` so the C# here-string and the
+        // quoting survive intact.
+        std::fs::write(
+            &ps,
+            r#"param([string]$User, [string]$Password)
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class LogonProbe {
+    [DllImport("advapi32.dll", SetLastError = true)]
+    public static extern bool LogonUser(string user, string domain, string password, int logonType, int logonProvider, out IntPtr token);
+}
+'@
+$t = [IntPtr]::Zero
+$okI = [LogonProbe]::LogonUser($User, '.', $Password, 2, 0, [ref]$t)
+$eI = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+$okN = [LogonProbe]::LogonUser($User, '.', $Password, 3, 0, [ref]$t)
+$eN = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+"interactive=$okI err=$eI network=$okN err=$eN"
+"#,
+        )
+        .ok();
+        let probe = || -> String {
+            std::process::Command::new("powershell")
+                .arg("-NoProfile")
+                .arg("-ExecutionPolicy")
+                .arg("Bypass")
+                .arg("-File")
+                .arg(&ps)
+                .arg("-User")
+                .arg(&user)
+                .arg("-Password")
+                .arg(&password)
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .unwrap_or_default()
+        };
+        eprintln!("[winlive] logon probe (before): {:?}", probe());
+        // Clear UF_PASSWD_NOTREQD, then make sure both logon rights are held.
+        let _ = std::process::Command::new("net")
+            .arg("user")
+            .arg(&user)
+            .arg("/passwordreq:yes")
+            .output();
+        let _ = std::process::Command::new("net")
+            .arg("localgroup")
+            .arg("Administrators")
+            .arg(&user)
+            .arg("/add")
+            .output();
+        eprintln!("[winlive] logon probe (after): {:?}", probe());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Windows-only proof of the fix: the REAL `sftp.exe` (Win32-OpenSSH) over
     /// a ConPTY, password host, listing loads. `sftp.exe` never prints the
     /// `sftp> ` prompt on Windows (sftp.c compiles the three
@@ -4836,6 +4913,7 @@ mod sftp_tests {
             return;
         }
         let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        ensure_windows_live_account();
         let user = std::env::var("HOSTERM_WINLIVE_USER").unwrap_or_else(|_| "hosterm".into());
         // Never hardcode a password in the tree: the workflow supplies it.
         let Ok(password) = std::env::var("HOSTERM_WINLIVE_PASSWORD") else {
@@ -4936,6 +5014,7 @@ mod sftp_tests {
             return;
         }
         let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        ensure_windows_live_account();
         let user = std::env::var("HOSTERM_WINLIVE_USER").unwrap_or_else(|_| "hosterm".into());
         let Ok(password) = std::env::var("HOSTERM_WINLIVE_PASSWORD") else {
             return;
