@@ -1252,17 +1252,9 @@ struct SftpBuf {
 
 impl SftpBuf {
     /// Wait until `needle` appears; return everything up to and including it.
-    /// When `auto_pw` is set, types the password once at OpenSSH's password
-    /// prompt. Returns None on timeout or EOF-without-match.
-    fn wait_for(
-        &self,
-        needle: &str,
-        writer: Option<&Arc<Mutex<Box<dyn Write + Send>>>>,
-        auto_pw: Option<&str>,
-        timeout: std::time::Duration,
-    ) -> Option<String> {
+    /// Returns None on timeout or EOF-without-match.
+    fn wait_for(&self, needle: &str, timeout: std::time::Duration) -> Option<String> {
         let deadline = std::time::Instant::now() + timeout;
-        let mut injected = false;
         loop {
             let matched = {
                 let mut d = self.data.lock().unwrap();
@@ -1285,18 +1277,6 @@ impl SftpBuf {
             if matched.is_some() {
                 return matched;
             }
-            if let (Some(pw), Some(w)) = (auto_pw, writer) {
-                if !injected {
-                    let d = self.data.lock().unwrap();
-                    if String::from_utf8_lossy(&d).contains("'s password:") {
-                        injected = true;
-                        let mut w = w.lock().unwrap();
-                        let _ = w.write_all(pw.as_bytes());
-                        let _ = w.write_all(b"\r");
-                        let _ = w.flush();
-                    }
-                }
-            }
             if self.eof.load(Ordering::SeqCst) {
                 return None;
             }
@@ -1306,6 +1286,65 @@ impl SftpBuf {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
     }
+
+    /// Current buffered text without consuming it.
+    fn snapshot(&self) -> String {
+        String::from_utf8_lossy(&self.data.lock().unwrap()).to_string()
+    }
+
+    /// Consume and return everything currently buffered.
+    fn drain(&self) -> String {
+        let mut d = self.data.lock().unwrap();
+        let s = String::from_utf8_lossy(&d).to_string();
+        d.clear();
+        s
+    }
+
+    /// Last `n` chars of the buffered text without consuming it.
+    fn tail(&self, n: usize) -> String {
+        let s = self.snapshot();
+        let chars: Vec<char> = s.chars().collect();
+        let start = chars.len().saturating_sub(n);
+        chars[start..].iter().collect()
+    }
+
+    /// Drain once the buffer has been silent for `quiet`, bounded by `max_wait`.
+    fn drain_idle(&self, quiet: std::time::Duration, max_wait: std::time::Duration) -> String {
+        let deadline = std::time::Instant::now() + max_wait;
+        let mut last_len = self.snapshot().len();
+        let mut last_change = std::time::Instant::now();
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            let cur = self.snapshot();
+            if cur.len() != last_len {
+                last_len = cur.len();
+                last_change = std::time::Instant::now();
+            }
+            if last_change.elapsed() >= quiet || std::time::Instant::now() >= deadline {
+                return self.drain();
+            }
+        }
+    }
+}
+
+/// Format a raw PTY/output snippet for an error message: control characters
+/// (CR from the tty, ANSI-ish noise) become spaces so the note stays on one
+/// logical line. Empty input yields an empty note.
+fn raw_note(tail: &str) -> String {
+    let cleaned: String = tail
+        .chars()
+        .map(|c| if c.is_control() && c != '\n' && c != '\t' { ' ' } else { c })
+        .collect();
+    let cleaned = cleaned.trim();
+    if cleaned.is_empty() {
+        String::new()
+    } else {
+        format!(" — sftp output: {}", cleaned)
+    }
+}
+
+fn pty_tail_note(rx: &SftpBuf) -> String {
+    raw_note(&rx.tail(400))
 }
 
 struct SftpPtySession {
@@ -1330,8 +1369,31 @@ fn sftp_sessions() -> &'static std::sync::Mutex<HashMap<String, Arc<Mutex<SftpPt
     SESSIONS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
 
-/// Spawn one interactive `sftp` in a PTY and wait for its prompt, typing the
-/// stored password once if the host asks for it.
+/// Line ending written to the sftp PTY. ConPTY's input parser expects CR for
+/// Enter (the terminal encodes VK_RETURN as `\r`); a Unix PTY expects LF, and
+/// its ICRNL would fold a CR to LF anyway. Writing LF on Windows would never
+/// submit the line.
+fn sftp_eol() -> &'static [u8] {
+    if cfg!(windows) {
+        b"\r"
+    } else {
+        b"\n"
+    }
+}
+
+/// Spawn one interactive `sftp` in a PTY and wait for login to finish, typing
+/// the stored password at each OpenSSH password prompt.
+///
+/// Login completion never relies on the interactive `sftp> ` prompt: Win32-
+/// OpenSSH's sftp.exe does not print it. sftp.c compiles with the three
+/// `allocate_standard_descriptor()` calls commented out, so `isatty(stdin)` is
+/// false, `interactive` is false, and the `printf("sftp> ")` branch is dead.
+/// Instead the login wait accepts either signal:
+///   * the plain prompt (Linux/interactive — unchanged behavior), or
+///   * the echo of a `pwd` probe, `sftp> pwd`, which BOTH modes print
+///     (non-interactive: `printf("sftp> %s", cmd)`; interactive: prompt +
+///     libedit/readline echo). sftp can only read the probe after login, so
+///     its echo is a reliable login-complete marker on Windows too.
 fn sftp_spawn(host: &str) -> Result<SftpPtySession, String> {
     sftp_safe(host, "Host")?;
     // HOSTERM_SFTP_BIN: testability hook, same as the batch path
@@ -1374,36 +1436,100 @@ fn sftp_spawn(host: &str) -> Result<SftpPtySession, String> {
         alive2.store(false, Ordering::SeqCst);
     });
 
-    let mut sess = SftpPtySession { master: pair.master, writer, rx, alive };
-    match lookup_stored_password(host).as_deref() {
-        Some(pw) => {
-            let ready = sess.rx.wait_for(
-                "sftp>",
-                Some(&sess.writer),
-                Some(pw),
-                std::time::Duration::from_secs(30),
-            );
-            if ready.is_none() {
-                sess.alive.store(false, Ordering::SeqCst);
-                return Err("sftp: no prompt after login (wrong password or host unreachable)".into());
+    let sess = SftpPtySession { master: pair.master, writer, rx, alive };
+    let stored_pw = lookup_stored_password(host);
+    let timeout = if stored_pw.is_some() { 30 } else { 10 };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout);
+    let spawned_at = std::time::Instant::now();
+    let quiet = std::time::Duration::from_millis(250);
+    let mut prompts_seen = 0usize;
+    let mut probe_sent = false;
+    let mut last_len = 0usize;
+    let mut last_change = std::time::Instant::now();
+
+    loop {
+        if sess.rx.eof.load(Ordering::SeqCst) {
+            sess.alive.store(false, Ordering::SeqCst);
+            return Err(format!(
+                "sftp: session ended before login (wrong password or host unreachable){}",
+                pty_tail_note(&sess.rx)
+            ));
+        }
+        let snap = sess.rx.snapshot();
+        if snap.len() != last_len {
+            last_len = snap.len();
+            last_change = std::time::Instant::now();
+        }
+        // Answer every password prompt OpenSSH prints (it retries up to three
+        // times). The prompt has no trailing newline, so count occurrences.
+        let prompts = snap.matches("'s password:").count();
+        if prompts > prompts_seen {
+            prompts_seen = prompts;
+            if let Some(pw) = stored_pw.as_deref() {
+                let mut w = sess.writer.lock().unwrap();
+                let _ = w.write_all(pw.as_bytes());
+                let _ = w.write_all(b"\r");
+                let _ = w.flush();
+            }
+            // A probe sent before this prompt may have been swallowed by the
+            // password reader (Windows flushes pending input first); arm a
+            // fresh one so it goes out after the next quiet period.
+            probe_sent = false;
+        }
+        // Linux/interactive: the plain prompt means login finished. Guard on
+        // `!probe_sent` so a probe echo (`sftp> pwd`) is never mistaken for it.
+        if !probe_sent && snap.contains("sftp> ") {
+            let _ = sess.rx.wait_for("sftp> ", std::time::Duration::from_millis(50));
+            let _ = sess.rx.drain();
+            return Ok(sess);
+        }
+        // Windows/non-interactive: nothing is printed after a successful login,
+        // so once the output has gone quiet, probe with `pwd` and wait for its
+        // echo. Before any password prompt, only probe on a no-password host
+        // (or after 5s, as a fallback for a stored password that is never
+        // asked for): on a password host an early probe would be read as the
+        // password.
+        let may_probe = stored_pw.is_none()
+            || prompts_seen > 0
+            || spawned_at.elapsed() >= std::time::Duration::from_secs(5);
+        if !probe_sent && last_change.elapsed() >= quiet && may_probe {
+            let mut w = sess.writer.lock().unwrap();
+            let _ = w.write_all(b"pwd");
+            let _ = w.write_all(sftp_eol());
+            let _ = w.flush();
+            probe_sent = true;
+            last_change = std::time::Instant::now();
+            continue;
+        }
+        if probe_sent {
+            if sess.rx.wait_for("sftp> pwd", std::time::Duration::from_millis(20)).is_some() {
+                // Drain the probe output (and the next prompt, if any) so
+                // every command starts from a clean buffer.
+                let _ = sess.rx.drain_idle(
+                    std::time::Duration::from_millis(250),
+                    std::time::Duration::from_secs(2),
+                );
+                return Ok(sess);
             }
         }
-        None => {
-            let _ = sess.rx.wait_for(
-                "sftp>",
-                Some(&sess.writer),
-                None,
-                std::time::Duration::from_secs(10),
-            );
+        if std::time::Instant::now() >= deadline {
+            sess.alive.store(false, Ordering::SeqCst);
+            return Err(format!(
+                "sftp: no prompt after login (wrong password or host unreachable){}",
+                pty_tail_note(&sess.rx)
+            ));
         }
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
-    Ok(sess)
 }
 
-/// Run one command in the persistent session for `host`. Done = the next
-/// prompt. A dead or timed-out session is discarded and the command is
-/// retried once on a fresh login. (The prompt typed by the TTY driver is
-/// already consumed at login; the next one only appears after the command.)
+/// Run one command in the persistent session for `host`. Completion is the
+/// echo of a `pwd` sentinel that follows the command — never the interactive
+/// `sftp> ` prompt, which Win32-OpenSSH's sftp.exe does not print (see
+/// `sftp_spawn`). Both modes echo the line sftp read, so the buffer always
+/// contains `<cmd echo>` … output … `sftp> pwd`; the command output is the
+/// text between the command echo and the sentinel echo. A dead or timed-out
+/// session is discarded and the command is retried once on a fresh login.
 fn sftp_exec(host: &str, cmdline: &str) -> SftpBatchOutput {
     for _attempt in 0..2 {
         let sess = {
@@ -1422,35 +1548,95 @@ fn sftp_exec(host: &str, cmdline: &str) -> SftpBatchOutput {
             }
             Arc::clone(map.get(host).unwrap())
         };
-        let mut g = sess.lock().unwrap();
+        let g = sess.lock().unwrap();
         {
             let mut w = g.writer.lock().unwrap();
             if w.write_all(cmdline.as_bytes()).is_err()
-                || w.write_all(b"\n").is_err()
+                || w.write_all(sftp_eol()).is_err()
+                || w.write_all(b"pwd").is_err()
+                || w.write_all(sftp_eol()).is_err()
                 || w.flush().is_err()
             {
                 g.alive.store(false, Ordering::SeqCst);
                 continue; // session died: respawn and retry
             }
         }
-        match g.rx.wait_for("\nsftp> ", None, None, std::time::Duration::from_secs(120)) {
-            None => {
-                g.alive.store(false, Ordering::SeqCst);
-                continue; // EOF or timeout: respawn and retry
-            }
-            Some(raw) => {
-                // strip the trailing prompt; parse_sftp_ls ignores the
-                // echoed command line and "sftp> " noise by itself
-                let out = raw
-                    .strip_suffix("\nsftp> ")
-                    .unwrap_or(&raw)
-                    .trim()
-                    .to_string();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        loop {
+            if let Some(head) = g.rx.wait_for("sftp> pwd", std::time::Duration::from_millis(20)) {
+                // Linux prints the next prompt right after the sentinel output;
+                // Windows prints nothing more. Wait briefly for the prompt so
+                // Linux keeps its zero-idle latency, then drain whatever
+                // arrived so the next command starts from a clean buffer.
+                let _ = g.rx.wait_for("sftp> ", std::time::Duration::from_millis(150));
+                let raw = format!("{}{}", head, g.rx.drain());
+                let out = strip_probe_echo(&raw, cmdline);
                 return SftpBatchOutput { stdout: out, stderr: String::new(), ok: true };
             }
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
         }
+        g.alive.store(false, Ordering::SeqCst);
+        // EOF or timeout: respawn and retry
     }
     SftpBatchOutput { stdout: String::new(), stderr: "sftp session unreachable".into(), ok: false }
+}
+
+/// Slice the command output out of the PTY buffer: strip the echo of the
+/// command and the trailing sentinel echo (`sftp> pwd`).
+///
+/// Two echo layers can appear, in either order:
+///   * the console's own input echo (`ENABLE_ECHO_INPUT` is on in ConPTY's
+///     default input mode, and a Unix PTY echoes too), which prints the bare
+///     line with no `sftp> ` prefix;
+///   * sftp's own echo — Windows non-interactive `printf("sftp> %s", cmd)`,
+///     Linux interactive prompt + libedit echo — which carries the prefix.
+///
+/// Anchoring on the prefixed form keeps the bare console echo from being
+/// mistaken for the command echo. A trailing bare echo of the sentinel (it
+/// lands just before the sentinel's prefixed echo when the console echoes on
+/// read) is stripped too.
+fn strip_probe_echo(raw: &str, cmdline: &str) -> String {
+    // Skip the line ending that follows an anchor (`\n` or CRLF) so the
+    // extraction works on both Windows and Unix PTY output.
+    fn skip_eol(s: &str, pos: usize) -> usize {
+        let b = s.as_bytes();
+        let mut p = pos;
+        if p < b.len() && b[p] == b'\r' {
+            p += 1;
+        }
+        if p < b.len() && b[p] == b'\n' {
+            p += 1;
+        }
+        p
+    }
+    let cmd_echo = format!("sftp> {}", cmdline);
+    let sent_echo = "sftp> pwd";
+    let start = match raw.find(&cmd_echo) {
+        Some(p) => skip_eol(raw, p + cmd_echo.len()),
+        None => {
+            // Fallback for a console that echoes without the prefix: anchor
+            // on the bare command line.
+            raw.find(cmdline)
+                .map(|p| skip_eol(raw, p + cmdline.len()))
+                .unwrap_or(0)
+        }
+    };
+    let end = raw[start..]
+        .find(sent_echo)
+        .map(|p| start + p)
+        .unwrap_or(raw.len());
+    let mut out = raw[start..end].to_string();
+    // The console may echo the sentinel line just before its prefixed echo.
+    for suf in ["pwd\r\n", "pwd\n"] {
+        if out.ends_with(suf) {
+            out.truncate(out.len() - suf.len());
+            break;
+        }
+    }
+    out.trim_end().to_string()
 }
 
 /// Verify that `name` exists in the listing `raw` (post-`put` guard so a
@@ -1502,7 +1688,15 @@ fn run_sftp_op(host: &str, script: &str) -> SftpBatchOutput {
             let (_, name) = verify_put.as_ref().unwrap();
             if !sftp_listing_has(&r.stdout, name) {
                 ok_all = false;
-                err = format!("upload verification failed: {} not found in {}", name, target_of(&lines[i]));
+                // `put` has no exit code, so the listing is the only signal.
+                // Surface the raw put output too — a permission/format failure
+                // ("dest open …: Permission denied") is otherwise invisible.
+                err = format!(
+                    "upload verification failed: {} not found in {}{}",
+                    name,
+                    target_of(&lines[i]),
+                    raw_note(outs.last().map(|s| s.as_str()).unwrap_or(""))
+                );
             }
         } else {
             outs.push(r.stdout);
@@ -3214,7 +3408,8 @@ mod auth_key_tests {
         std::fs::write(&secrets, "fakebox=s3cret-sftp-pw\n").unwrap();
 
         // fake sftp: prompts for the password, verifies it, then emulates the
-        // interactive prompt/echo loop hosterm drives
+        // interactive prompt/echo loop hosterm drives (prompt without a
+        // newline, command echoed by libedit, CRLF line endings)
         let dir = std::env::temp_dir().join(format!("hosterm-sftpbin-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let bin = dir.join("sftp");
@@ -3224,12 +3419,15 @@ mod auth_key_tests {
              read -r -s -p \"fakebox@127.0.0.1's password: \" pw\n\
              echo\n\
              if [ \"$pw\" != 's3cret-sftp-pw' ]; then echo Permission denied; exit 5; fi\n\
-             echo \"sftp> \"\n\
+             stty -echo 2>/dev/null || true\n\
+             printf 'sftp> '\n\
              while IFS= read -r line; do\n\
+               printf '%s\\r\\n' \"$line\"\n\
                case \"$line\" in\n\
                  'ls -la'*) echo '-rw-r--r--    1 u u    42 Jan  1 00:00 live.txt';;\n\
+                 'pwd') echo '/home/fakebox';;\n\
                esac\n\
-               echo \"sftp> \"\n\
+               printf 'sftp> '\n\
              done\n"
         )
         .unwrap();
@@ -3257,6 +3455,189 @@ mod auth_key_tests {
         std::env::remove_var("HOSTERM_CONFIG");
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(cfg.parent().unwrap());
+    }
+
+    /// Live check of the promptless (Windows) path: a fake sftp that never
+    /// prints `sftp> ` — only the `sftp> <cmd>` echo Win32-OpenSSH prints in
+    /// non-interactive mode. Login must complete on the `pwd` probe echo and
+    /// the listing must come back clean. Gated behind HOSTERM_LIVE_PTY=1.
+    #[test]
+    fn live_sftp_promptless_windows_mode_login_and_exec() {
+        if std::env::var("HOSTERM_LIVE_PTY").as_deref() != Ok("1") {
+            return;
+        }
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = tmp("sftpwin");
+        std::fs::write(
+            &cfg,
+            "Host fakeboxwin\n    HostName 127.0.0.1\n    PreferredAuthentications password\n",
+        )
+        .unwrap();
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        let secrets = cfg.parent().unwrap().join("hosterm.secrets");
+        std::fs::write(&secrets, "fakeboxwin=s3cret-sftp-pw\n").unwrap();
+
+        let dir = std::env::temp_dir().join(format!("hosterm-sftpwin-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("sftp");
+        std::fs::write(
+            &bin,
+            "#!/bin/bash\n\
+             read -r -s -p \"fakeboxwin@127.0.0.1's password: \" pw\n\
+             echo\n\
+             if [ \"$pw\" != 's3cret-sftp-pw' ]; then echo \"Permission denied, please try again.\"; exit 5; fi\n\
+             stty -echo 2>/dev/null || true\n\
+             while IFS= read -r line; do\n\
+               printf 'sftp> %s\\n' \"$line\"\n\
+               case \"$line\" in\n\
+                 'ls -la'*) echo '-rw-r--r--    1 u u    42 Jan  1 00:00 live.txt';;\n\
+                 'pwd') echo '/home/fakeboxwin';;\n\
+               esac\n\
+             done\n"
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::env::set_var("HOSTERM_SFTP_BIN", &bin);
+
+        let out1 = run_sftp_op("fakeboxwin", "ls -la\n");
+        assert!(out1.ok, "op1 failed: {}", out1.stderr);
+        assert!(out1.stdout.contains("live.txt"), "listing lost: {:?}", out1.stdout);
+        assert!(!out1.stdout.contains("sftp>"), "echo leaked: {:?}", out1.stdout);
+        assert!(!out1.stdout.contains("password:"), "login leaked: {:?}", out1.stdout);
+
+        // op 2: reuses the SAME process — a second login would re-print the
+        // password prompt into this round's output
+        let out2 = run_sftp_op("fakeboxwin", "ls -la\n");
+        assert!(out2.ok, "op2 failed: {}", out2.stderr);
+        assert!(out2.stdout.contains("live.txt"));
+        assert!(!out2.stdout.contains("password:"), "op2 logged in again: {:?}", out2.stdout);
+
+        std::env::remove_var("HOSTERM_SFTP_BIN");
+        std::env::remove_var("HOSTERM_CONFIG");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(cfg.parent().unwrap());
+    }
+
+    /// Live check of the ConPTY console-echo case: ConPTY's default input mode
+    /// has ENABLE_ECHO_INPUT on, so the PTY echoes typed commands too. The
+    /// buffer then carries BOTH the bare console echo and sftp's `sftp> <cmd>`
+    /// echo. The extraction must anchor on the prefixed form and leak neither.
+    /// Gated behind HOSTERM_LIVE_PTY=1.
+    #[test]
+    fn live_sftp_console_echo_login_and_exec() {
+        if std::env::var("HOSTERM_LIVE_PTY").as_deref() != Ok("1") {
+            return;
+        }
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let cfg = tmp("sftpecho");
+        std::fs::write(
+            &cfg,
+            "Host fakeboxecho\n    HostName 127.0.0.1\n    PreferredAuthentications password\n",
+        )
+        .unwrap();
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        let secrets = cfg.parent().unwrap().join("hosterm.secrets");
+        std::fs::write(&secrets, "fakeboxecho=s3cret-sftp-pw\n").unwrap();
+
+        let dir = std::env::temp_dir().join(format!("hosterm-sftpecho-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("sftp");
+        // No `stty -echo`: the PTY echoes typed commands, like ConPTY.
+        std::fs::write(
+            &bin,
+            "#!/bin/bash\n\
+             read -r -s -p \"fakeboxecho@127.0.0.1's password: \" pw\n\
+             echo\n\
+             if [ \"$pw\" != 's3cret-sftp-pw' ]; then echo \"Permission denied\"; exit 5; fi\n\
+             while IFS= read -r line; do\n\
+               printf 'sftp> %s\\r\\n' \"$line\"\n\
+               case \"$line\" in\n\
+                 'ls -la'*) echo '-rw-r--r--    1 u u    42 Jan  1 00:00 live.txt';;\n\
+                 'pwd') echo '/home/fakeboxecho';;\n\
+               esac\n\
+             done\n"
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::env::set_var("HOSTERM_SFTP_BIN", &bin);
+
+        let out1 = run_sftp_op("fakeboxecho", "ls -la\n");
+        assert!(out1.ok, "op1 failed: {}", out1.stderr);
+        assert!(out1.stdout.contains("live.txt"), "listing lost: {:?}", out1.stdout);
+        assert!(!out1.stdout.contains("sftp>"), "echo leaked: {:?}", out1.stdout);
+        assert!(!out1.stdout.contains("password:"), "login leaked: {:?}", out1.stdout);
+
+        let out2 = run_sftp_op("fakeboxecho", "ls -la\n");
+        assert!(out2.ok, "op2 failed: {}", out2.stderr);
+        assert!(out2.stdout.contains("live.txt"));
+        assert!(!out2.stdout.contains("password:"), "op2 logged in again: {:?}", out2.stdout);
+
+        std::env::remove_var("HOSTERM_SFTP_BIN");
+        std::env::remove_var("HOSTERM_CONFIG");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(cfg.parent().unwrap());
+    }
+
+    #[test]
+    fn probe_echo_extraction_handles_windows_and_linux_forms() {
+        // Windows non-interactive: every command echoed as `sftp> <cmd>\n`
+        let win = "sftp> ls -la\ntotal 0\n-rw-r--r-- 1 u u 42 Jan 1 00:00 live.txt\nsftp> pwd\n/home/w";
+        assert_eq!(
+            strip_probe_echo(win, "ls -la"),
+            "total 0\n-rw-r--r-- 1 u u 42 Jan 1 00:00 live.txt"
+        );
+        // Linux interactive: prompt + libedit echo, CRLF endings; the command
+        // echo carries no `sftp> ` prefix because the prompt was consumed at login
+        let lin = "ls -la\r\ntotal 0\r\n-rw-r--r-- 1 u u 42 Jan 1 00:00 live.txt\r\nsftp> pwd\r\n/home/l";
+        assert_eq!(
+            strip_probe_echo(lin, "ls -la"),
+            "total 0\r\n-rw-r--r-- 1 u u 42 Jan 1 00:00 live.txt"
+        );
+        // empty output
+        assert_eq!(strip_probe_echo("sftp> ls -la\nsftp> pwd", "ls -la"), "");
+        // quoted argument survives the echo strip
+        let q = "sftp> ls -la \"/tmp/a b\"\n-rw-r--r-- 1 u u 1 Jan 1 00:00 x\nsftp> pwd";
+        assert_eq!(strip_probe_echo(q, "ls -la \"/tmp/a b\""), "-rw-r--r-- 1 u u 1 Jan 1 00:00 x");
+        // the sentinel itself as the command
+        assert_eq!(strip_probe_echo("sftp> pwd\r\n/home/x\r\nsftp> pwd", "pwd"), "/home/x");
+        // Windows + ConPTY console echo (ENABLE_ECHO_INPUT): the bare line is
+        // echoed too. Ordering A — console echoes as the child reads, so the
+        // sentinel's bare echo lands just before its prefixed echo.
+        let win_echo_a = "ls -la\r\nsftp> ls -la\r\ntotal 0\r\n-rw-r--r-- 1 u u 42 Jan 1 00:00 live.txt\r\npwd\r\nsftp> pwd\r\n/home/w";
+        assert_eq!(
+            strip_probe_echo(win_echo_a, "ls -la"),
+            "total 0\r\n-rw-r--r-- 1 u u 42 Jan 1 00:00 live.txt"
+        );
+        // Ordering B — the console echoes both lines up front.
+        let win_echo_b = "ls -la\r\npwd\r\nsftp> ls -la\r\ntotal 0\r\n-rw-r--r-- 1 u u 42 Jan 1 00:00 live.txt\r\nsftp> pwd\r\n/home/w";
+        assert_eq!(
+            strip_probe_echo(win_echo_b, "ls -la"),
+            "total 0\r\n-rw-r--r-- 1 u u 42 Jan 1 00:00 live.txt"
+        );
+        // Same, with the sentinel as the command.
+        let win_echo_cmd = "pwd\r\nsftp> pwd\r\n/home/w\r\npwd\r\nsftp> pwd\r\n/home/w";
+        assert_eq!(strip_probe_echo(win_echo_cmd, "pwd"), "/home/w");
+    }
+
+    #[test]
+    fn raw_note_flattens_control_chars_and_marks_output() {
+        // CR from the tty becomes a space; newlines/tabs survive
+        assert_eq!(raw_note("a\rb\nc\td"), " — sftp output: a b\nc\td");
+        // empty / whitespace-only -> no note at all
+        assert_eq!(raw_note(""), "");
+        assert_eq!(raw_note("   "), "");
+        // hostile escape sequences are flattened, never interpreted
+        assert_eq!(raw_note("bad\x1b[31mred"), " — sftp output: bad [31mred");
+        // the note is prefixed so the cause reads as sftp output
+        assert!(raw_note("denied").starts_with(" — sftp output: "));
     }
 
     /// Live check of the PTY password auto-inject: a fake "ssh" (bash reading
@@ -4231,6 +4612,59 @@ mod sftp_tests {
         assert!(block_on(sftp_download("testbox".into(), alias_remote.clone(), alias_remote)).is_err());
         assert_eq!(std::fs::read_to_string(&alias_local).unwrap(), "precious\n");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Windows-only proof of the fix: the REAL `sftp.exe` (Win32-OpenSSH) over
+    /// a ConPTY, password host, listing loads. `sftp.exe` never prints the
+    /// `sftp> ` prompt on Windows (sftp.c compiles the three
+    /// allocate_standard_descriptor calls out, so isatty(stdin) is false and
+    /// the prompt branch is dead), and ConPTY's default input mode has
+    /// ENABLE_ECHO_INPUT on, so the console echoes typed commands too. The
+    /// login/exec path must key off the command echo and write CR, not LF.
+    /// Gated behind HOSTERM_WINLIVE=1: the CI job starts a local sshd, creates
+    /// the `hosterm` user, and writes the `hostermlive` alias to
+    /// %USERPROFILE%\.ssh\config (which the sftp.exe child reads; hosterm's own
+    /// parser is pointed at a throwaway config via HOSTERM_CONFIG so the
+    /// secrets sidecar stays out of the real ~/.ssh).
+    #[cfg(windows)]
+    #[test]
+    fn windows_sftp_password_host_listing_loads() {
+        if std::env::var("HOSTERM_WINLIVE").as_deref() != Ok("1") {
+            return;
+        }
+        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let user = std::env::var("HOSTERM_WINLIVE_USER").unwrap_or_else(|_| "hosterm".into());
+        let password =
+            std::env::var("HOSTERM_WINLIVE_PASSWORD").unwrap_or_else(|_| "Hosterm!2026".into());
+        let dir = std::env::temp_dir().join(format!("hosterm-winlive-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = dir.join("config");
+        std::fs::write(
+            &cfg,
+            format!(
+                "Host hostermlive\n    HostName 127.0.0.1\n    User {}\n    PreferredAuthentications password\n",
+                user
+            ),
+        )
+        .unwrap();
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        let secrets = dir.join("hosterm.secrets");
+        std::fs::write(&secrets, format!("hostermlive={}\n", password)).unwrap();
+
+        let out = run_sftp_op("hostermlive", "ls -la\n");
+
+        std::env::remove_var("HOSTERM_CONFIG");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(out.ok, "Windows sftp listing failed: {}", out.stderr);
+        assert!(!out.stdout.trim().is_empty(), "empty listing");
+        assert!(!out.stdout.contains("sftp>"), "echo leaked: {:?}", out.stdout);
+        assert!(
+            !out.stdout.contains("password:"),
+            "login leaked into the listing: {:?}",
+            out.stdout
+        );
     }
 
     #[test]
