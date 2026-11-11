@@ -4874,20 +4874,39 @@ mod sftp_tests {
         cmd.arg("/c");
         cmd.arg("echo ENVPROBE=%HOSTERM_ENVPROBE%");
         cmd.env("HOSTERM_ENVPROBE", "PROBE_OK");
-        let _child = pair.slave.spawn_command(cmd).unwrap();
+        let mut child = pair.slave.spawn_command(cmd).unwrap();
         drop(pair.slave);
         let mut reader = pair.master.try_clone_reader().unwrap();
-        drop(pair.master);
-        let (tx, rx) = std::sync::mpsc::channel();
+        let writer = pair.master.take_writer().unwrap();
+        // The ConPTY lives in `pair.master`; dropping it tears down the child's
+        // console before the process can run, so it must outlive the read.
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
         std::thread::spawn(move || {
-            let mut s = String::new();
-            use std::io::Read as _;
-            let _ = reader.read_to_string(&mut s);
-            let _ = tx.send(s);
+            let mut buf = [0u8; 1024];
+            let mut acc = String::new();
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        acc.push_str(&String::from_utf8_lossy(&buf[..n]));
+                        if tx.send(acc.clone()).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
         });
-        let out = rx
-            .recv_timeout(std::time::Duration::from_secs(30))
-            .unwrap_or_else(|_| "<timeout>".to_string());
+        let mut out = String::new();
+        let start = std::time::Instant::now();
+        while !out.contains("ENVPROBE=PROBE_OK")
+            && start.elapsed() < std::time::Duration::from_secs(15)
+        {
+            if let Ok(s) = rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                out = s;
+            }
+        }
+        let _ = child.kill();
+        drop(writer);
         eprintln!("[winlive] envprobe output: {:?}", out);
         assert!(
             out.contains("ENVPROBE=PROBE_OK"),
@@ -4916,7 +4935,6 @@ mod sftp_tests {
         drop(pair.slave);
         let mut reader = pair.master.try_clone_reader().unwrap();
         let mut writer = pair.master.take_writer().unwrap();
-        drop(pair.master);
         let (tx, rx) = std::sync::mpsc::channel::<String>();
         std::thread::spawn(move || {
             let mut buf = [0u8; 1024];
@@ -4980,7 +4998,6 @@ mod sftp_tests {
         drop(pair.slave);
         let mut reader = pair.master.try_clone_reader().unwrap();
         let mut writer = pair.master.take_writer().unwrap();
-        drop(pair.master);
         use std::io::Write as _;
         let _ = writer.write_all(b"\r");
         let _ = writer.flush();
@@ -5053,7 +5070,6 @@ mod sftp_tests {
         drop(pair.slave);
         let reader = pair.master.try_clone_reader().unwrap();
         let writer = pair.master.take_writer().unwrap();
-        drop(pair.master);
         let (tx, rx) = std::sync::mpsc::channel::<String>();
         let _pump = std::thread::spawn(move || {
             pump_pty(
