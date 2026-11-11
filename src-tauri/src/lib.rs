@@ -1439,6 +1439,7 @@ fn write_windows_askpass_helper(pw: &str) -> Result<(PathBuf, PathBuf), String> 
     let dir = std::env::temp_dir();
     let helper = dir.join(format!("{}.cmd", unique));
     let secret = dir.join(format!("{}.pw", unique));
+    eprintln!("[winlive] askpass temp dir {:?}", dir);
     let mut f = std::fs::File::create(&helper).map_err(|e| e.to_string())?;
     // `@echo off` keeps the helper's own commands out of the pipe; `type` dumps
     // the secret file verbatim, so passwords with cmd metacharacters survive.
@@ -1474,13 +1475,20 @@ fn sftp_spawn(host: &str) -> Result<SftpPtySession, String> {
     let askpass_files: Vec<PathBuf> = match stored_pw.as_deref() {
         Some(pw) => match write_windows_askpass_helper(pw) {
             Ok((helper, secret)) => {
+                eprintln!("[winlive] askpass helper {:?} secret {:?}", helper, secret);
                 cmd.env("SSH_ASKPASS", &helper);
                 cmd.env("HOSTERM_ASKPASS_FILE", &secret);
                 vec![helper, secret]
             }
-            Err(_) => Vec::new(),
+            Err(e) => {
+                eprintln!("[winlive] askpass helper FAILED: {}", e);
+                Vec::new()
+            }
         },
-        None => Vec::new(),
+        None => {
+            eprintln!("[winlive] sftp_spawn: no stored password for {:?}", host);
+            Vec::new()
+        }
     };
     let pty_system = native_pty_system();
     let pair = pty_system
