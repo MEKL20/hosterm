@@ -2156,8 +2156,10 @@ pub fn maybe_run_askpass() {
     if let Some(pw) = askpass_password(&host) {
         use std::io::Write as _;
         let mut out = std::io::stdout();
+        // No trailing newline: read_passphrase() takes everything up to the
+        // first CR/LF as the password, and a reader that does not strip it
+        // would otherwise authenticate with the newline included.
         let _ = out.write_all(pw.as_bytes());
-        let _ = out.write_all(b"\n");
         let _ = out.flush();
     }
     std::process::exit(0);
@@ -4864,6 +4866,8 @@ mod sftp_tests {
         let helper_src =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bin/hosterm-askpass.rs");
         let built = std::process::Command::new("rustc")
+            .arg("--edition")
+            .arg("2021")
             .arg("-O")
             .arg(&helper_src)
             .arg("-o")
@@ -4914,6 +4918,107 @@ mod sftp_tests {
             !out.stdout.contains("password:"),
             "login leaked into the listing: {:?}",
             out.stdout
+        );
+    }
+
+    /// Does the askpass route authenticate `ssh.exe` at all on this runner?
+    /// Isolates sftp.exe's involvement: same env, same helper, direct ssh.
+    #[cfg(windows)]
+    #[test]
+    fn windows_ssh_askpass_authenticates() {
+        if std::env::var("HOSTERM_WINLIVE").as_deref() != Ok("1") {
+            return;
+        }
+        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let user = std::env::var("HOSTERM_WINLIVE_USER").unwrap_or_else(|_| "hosterm".into());
+        let Ok(password) = std::env::var("HOSTERM_WINLIVE_PASSWORD") else {
+            return;
+        };
+        let dir = std::env::temp_dir().join(format!("hosterm-sshask-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = dir.join("config");
+        std::fs::write(
+            &cfg,
+            format!(
+                "Host hostermlive\n    HostName 127.0.0.1\n    User {}\n    PreferredAuthentications password\n",
+                user
+            ),
+        )
+        .unwrap();
+        std::env::set_var("HOSTERM_CONFIG", &cfg);
+        let secrets = dir.join("hosterm.secrets");
+        std::fs::write(&secrets, format!("hostermlive={password}\n")).unwrap();
+        let helper = dir.join("hosterm-askpass.exe");
+        let helper_src =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bin/hosterm-askpass.rs");
+        let _ = std::process::Command::new("rustc")
+            .arg("--edition")
+            .arg("2021")
+            .arg("-O")
+            .arg(&helper_src)
+            .arg("-o")
+            .arg(&helper)
+            .status();
+        let log = dir.join("askpass.log");
+        std::env::set_var("HOSTERM_ASKPASS_LOG", &log);
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize { rows: 24, cols: 200, pixel_width: 0, pixel_height: 0 })
+            .unwrap();
+        let mut cmd = CommandBuilder::new("ssh");
+        cmd.arg("-o");
+        cmd.arg("StrictHostKeyChecking=no");
+        cmd.arg("hostermlive");
+        cmd.arg("exit");
+        cmd.arg("0");
+        cmd.env("SSH_ASKPASS", &helper);
+        cmd.env("SSH_ASKPASS_REQUIRE", "force");
+        cmd.env("DISPLAY", "1");
+        cmd.env("HOSTERM_ASKPASS_FILE", &secrets);
+        cmd.env("HOSTERM_ASKPASS_HOST", "hostermlive");
+        cmd.env("HOSTERM_ASKPASS_LOG", &log);
+        let _child = pair.slave.spawn_command(cmd).unwrap();
+        drop(pair.slave);
+        let mut reader = pair.master.try_clone_reader().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 1024];
+            let mut acc = String::new();
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        acc.push_str(&String::from_utf8_lossy(&buf[..n]));
+                        if tx.send(acc.clone()).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        let mut acc = String::new();
+        let start = std::time::Instant::now();
+        while start.elapsed() < std::time::Duration::from_secs(25) {
+            if let Ok(s) = rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                acc = s;
+            }
+            if acc.contains("Permission denied") || acc.contains("Connection closed") {
+                break;
+            }
+        }
+        eprintln!("[winlive] ssh askpass probe: {:?}", acc);
+        eprintln!(
+            "[winlive] ssh askpass log: {:?}",
+            std::fs::read_to_string(&log).unwrap_or_default()
+        );
+        std::env::remove_var("HOSTERM_ASKPASS_LOG");
+        std::env::remove_var("HOSTERM_CONFIG");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            !acc.contains("Permission denied"),
+            "ssh.exe askpass auth failed: {:?}",
+            acc
         );
     }
 
@@ -5896,6 +6001,8 @@ mod askpass_tests {
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bin/hosterm-askpass.rs");
         let exe = dir.join(if cfg!(windows) { "hosterm-askpass.exe" } else { "hosterm-askpass" });
         let compiled = std::process::Command::new("rustc")
+            .arg("--edition")
+            .arg("2021")
             .arg("-O")
             .arg(&src)
             .arg("-o")
@@ -5914,7 +6021,7 @@ mod askpass_tests {
             .output()
             .expect("run askpass helper");
         assert!(out.status.success(), "helper exited {}", out.status);
-        assert_eq!(String::from_utf8_lossy(&out.stdout), "hunter2\n");
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "hunter2");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
