@@ -186,7 +186,7 @@ re-derive approvals/PTY commands from it — it only restores files.
   Workspace dir `/home/mekl/src/hosterm`, created-by default.
 - Build everything NOW behind the public CLIENT_ID. AC1 live end-to-end sign-in
   is GATED on MEKL confirming Google Console prereqs (Drive API enabled on
-  project 737778700861, consent screen with `drive.file`, MEKL's email as Test
+  the OAuth client's Google Cloud project, consent screen with `drive.file`, MEKL's email as Test
   user). Until confirmed: cover auth with unit/integration tests + a documented
   manual-auth procedure (BE-OAUTH writes `docs/manual-auth-gdrive.md`). QA e2e
   of AC1 is itself blocked on the console; QA proves everything else now and

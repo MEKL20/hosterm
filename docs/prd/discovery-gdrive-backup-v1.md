@@ -57,7 +57,7 @@ RESTORE all their hosterm data to/from their own Google Drive.
   exchange and refresh. PKCE S256 remains mandatory and is the authorization-code
   proof.
   **CONSOLE PREREQUISITES still owned by MEKL (verify before AC1 e2e):** Drive API
-  enabled on project 737778700861; OAuth consent screen configured with scope
+  enabled on the OAuth client's Google Cloud project; OAuth consent screen configured with scope
   `.../auth/drive.file`; MEKL's Google email added as a Test user (while app is in
   "Testing"). Without these, sign-in fails at Google even with a valid Client ID.
 

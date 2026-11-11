@@ -150,6 +150,9 @@ jobs:
     env:
       HOSTERM_GOOGLE_CLIENT_ID: ${{ secrets.HOSTERM_GOOGLE_CLIENT_ID }}
       HOSTERM_GOOGLE_CLIENT_SECRET: ${{ secrets.HOSTERM_GOOGLE_CLIENT_SECRET }}
+      # Throwaway local CI account password for the Windows SFTP live test.
+      # Stored as a repo secret, never in the tree (this is a public repo).
+      HOSTERM_WINLIVE_PASSWORD: ${{ secrets.HOSTERM_WINLIVE_PASSWORD }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -182,7 +185,11 @@ jobs:
           }
           Set-Service -Name sshd -StartupType 'Automatic'
           Start-Service sshd
-          $pw = ConvertTo-SecureString 'Sftp-Live-2026!xQ7#' -AsPlainText -Force
+          if ([string]::IsNullOrWhiteSpace($env:HOSTERM_WINLIVE_PASSWORD)) {
+            Write-Host "::error::HOSTERM_WINLIVE_PASSWORD secret is empty. Add it under Settings > Secrets and variables > Actions (value: the throwaway CI account password)."
+            throw "HOSTERM_WINLIVE_PASSWORD is empty"
+          }
+          $pw = ConvertTo-SecureString -String $env:HOSTERM_WINLIVE_PASSWORD -AsPlainText -Force
           try {
             if (Get-LocalUser -Name 'hosterm' -ErrorAction SilentlyContinue) {
               Write-Host 'user hosterm already exists -> resetting password'
@@ -198,7 +205,7 @@ jobs:
           Write-Host "user hosterm: Enabled=$($u.Enabled) PasswordRequired=$($u.PasswordRequired) PasswordLastSet=$($u.PasswordLastSet)"
           Add-Type -AssemblyName System.DirectoryServices.AccountManagement
           $pc = New-Object System.DirectoryServices.AccountManagement.PrincipalContext([System.DirectoryServices.AccountManagement.ContextType]::Machine)
-          Write-Host "ValidateCredentials(hosterm)=$($pc.ValidateCredentials('hosterm', 'Sftp-Live-2026!xQ7#'))"
+          Write-Host "ValidateCredentials(hosterm)=$($pc.ValidateCredentials('hosterm', $env:HOSTERM_WINLIVE_PASSWORD))"
           New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.ssh" | Out-Null
           @"
           Host hostermlive
@@ -226,7 +233,7 @@ jobs:
         env:
           HOSTERM_WINLIVE: 1
           HOSTERM_WINLIVE_USER: hosterm
-          HOSTERM_WINLIVE_PASSWORD: Sftp-Live-2026!xQ7#
+          # HOSTERM_WINLIVE_PASSWORD is inherited from the job env (repo secret).
 
       # Headless DOM smoke: build the frontend first (the harness serves
       # ../dist and mocks the Tauri IPC), install Playwright + its Chromium,

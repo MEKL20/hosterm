@@ -20,12 +20,13 @@ Grounding: `docs/tsd/gdrive-backup-v1.md` §1,§3,§7,§8;
 
 ## Console prerequisites (MEKL confirms — AC1 gate)
 
-The flow runs against the **public** build-time client id
-`737778700861-dhtn1sc9miiqtsmtms3tmc8tk7jj3a80.apps.googleusercontent.com`
-(project `737778700861`). Before a live sign-in can succeed, confirm in the
-Google Cloud Console for that project:
+The flow runs against the build-time client id injected from the
+`HOSTERM_GOOGLE_CLIENT_ID` repo secret (official builds only — a community build falls
+back to an unconfigured placeholder and interactive sign-in refuses to run). Before a
+live sign-in can succeed, confirm in the Google Cloud Console for the project that
+owns that OAuth client:
 
-1. **Drive API enabled** on project `737778700861`.
+1. **Drive API enabled** on that project.
 2. **OAuth consent screen** configured with the scope
    `https://www.googleapis.com/auth/drive.file` (plus `openid email profile` for
    the account chip). Publishing status may stay **Testing**.
