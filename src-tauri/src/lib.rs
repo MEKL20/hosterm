@@ -1435,6 +1435,10 @@ fn sftp_spawn(host: &str) -> Result<SftpPtySession, String> {
             // headless Windows console). Win32-OpenSSH ignores the variable and
             // keys off SSH_ASKPASS alone, so this is safe for both builds.
             cmd.env("SSH_ASKPASS_REQUIRE", "force");
+            // Some Win32-OpenSSH builds gate the askpass branch behind
+            // DISPLAY; a dummy value satisfies the gate (there is no X server,
+            // but the helper is a plain console .exe).
+            cmd.env("DISPLAY", "1");
             cmd.env("HOSTERM_ASKPASS_FILE", secrets_path());
             cmd.env("HOSTERM_ASKPASS_HOST", host);
         }
@@ -4831,8 +4835,11 @@ mod sftp_tests {
         }
         let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let user = std::env::var("HOSTERM_WINLIVE_USER").unwrap_or_else(|_| "hosterm".into());
-        let password =
-            std::env::var("HOSTERM_WINLIVE_PASSWORD").unwrap_or_else(|_| "Sftp-Live-2026!xQ7#".into());
+        // Never hardcode a password in the tree: the workflow supplies it.
+        let Ok(password) = std::env::var("HOSTERM_WINLIVE_PASSWORD") else {
+            eprintln!("[winlive] HOSTERM_WINLIVE_PASSWORD not set; skipping");
+            return;
+        };
         let dir = std::env::temp_dir().join(format!("hosterm-winlive-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -4879,7 +4886,7 @@ mod sftp_tests {
         // The single most decisive fact: did sftp.exe/ssh.exe actually launch
         // the askpass helper? If this stays empty while the console prompt
         // appears, the helper was never consulted.
-        let askpass_log = dir.path().join("askpass.log");
+        let askpass_log = dir.join("askpass.log");
         std::env::set_var("HOSTERM_ASKPASS_LOG", &askpass_log);
 
         let out = run_sftp_op("hostermlive", "ls -la\n");
