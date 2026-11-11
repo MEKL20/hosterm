@@ -2071,6 +2071,58 @@ fn cleanup_ephemeral(ephemeral: &Mutex<HashMap<u32, Vec<PathBuf>>>, id: u32) {
     }
 }
 
+/// Incremental UTF-8 decoder for a raw byte stream.
+///
+/// A PTY `read()` returns up to 4096 bytes at ARBITRARY boundaries, so a
+/// multi-byte UTF-8 character (box-drawing, CJK, emoji) can be split across
+/// two reads. Decoding each chunk independently with `String::from_utf8_lossy`
+/// replaces the split halves with U+FFFD on both sides — the character is
+/// destroyed permanently, and a full-screen TUI that repaints a burst of
+/// Unicode (k9s/vim/htop/tmux switching views) is left garbled for good.
+///
+/// This helper instead carries the incomplete trailing bytes in `pending`
+/// until the rest of the character arrives:
+///
+/// - `Ok`  -> the whole buffer is valid: emit it and clear `pending`.
+/// - `Err` with `error_len() == None` -> an INCOMPLETE sequence at the end:
+///   emit the valid prefix, keep the tail for the next call.
+/// - `Err` with `Some(len)` -> genuinely invalid bytes: emit the valid prefix
+///   plus ONE U+FFFD for those `len` bytes, then keep consuming.
+///
+/// `pending` is caller-owned and must be flushed with
+/// `String::from_utf8_lossy` once the stream hits EOF.
+fn decode_utf8_stream(pending: &mut Vec<u8>, incoming: &[u8]) -> String {
+    pending.extend_from_slice(incoming);
+    let mut out = String::new();
+    loop {
+        match std::str::from_utf8(pending) {
+            Ok(s) => {
+                out.push_str(s);
+                pending.clear();
+                return out;
+            }
+            Err(e) => {
+                let valid = e.valid_up_to();
+                // `valid_up_to()` is a char boundary by contract, so this is
+                // lossless — `from_utf8_lossy` here can never substitute.
+                out.push_str(&String::from_utf8_lossy(&pending[..valid]));
+                match e.error_len() {
+                    // Incomplete trailing sequence: hold it for the next chunk.
+                    None => {
+                        pending.drain(..valid);
+                        return out;
+                    }
+                    // Genuinely invalid bytes: one replacement char, resume after.
+                    Some(len) => {
+                        out.push('\u{FFFD}');
+                        pending.drain(..valid + len);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Pump a PTY: forward output chunks through `on_chunk`, watching for
 /// OpenSSH's password prompt when `auto_pw` is set, injecting the secret
 /// once into `writer`. Shared by pty_spawn and the live test module.
@@ -2082,12 +2134,24 @@ fn pump_pty(
 ) {
     let mut buf = [0u8; 4096];
     let mut tail: Vec<u8> = Vec::new();
+    // Undecoded trailing bytes carried across reads (see decode_utf8_stream).
+    let mut pending: Vec<u8> = Vec::new();
     let mut injected = false;
     loop {
         match reader.read(&mut buf) {
-            Ok(0) | Err(_) => break,
+            Ok(0) => {
+                // EOF: flush whatever is left undecoded, best effort. A
+                // character truncated by the stream ending still becomes
+                // U+FFFD here — that is the documented fallback.
+                if !pending.is_empty() {
+                    on_chunk(&String::from_utf8_lossy(&pending));
+                    pending.clear();
+                }
+                break;
+            }
+            Err(_) => break,
             Ok(n) => {
-                let s = String::from_utf8_lossy(&buf[..n]).to_string();
+                let s = decode_utf8_stream(&mut pending, &buf[..n]);
                 if let Some(pw) = auto_pw.as_deref() {
                     if !injected {
                         tail.extend_from_slice(&buf[..n]);
@@ -2965,6 +3029,148 @@ mod tests {
         // nothing lost
         assert!(out.contains("Host prod"));
         assert!(out.contains("Host staging"));
+    }
+}
+
+#[cfg(test)]
+mod utf8_stream_tests {
+    use super::*;
+
+    /// Reader that hands back at most `chunk` bytes per `read()`.
+    ///
+    /// This is the only way to force a multi-byte UTF-8 character to straddle
+    /// a read boundary DETERMINISTICALLY, instead of hoping the kernel PTY
+    /// timing splits one on its own. A real PTY returns up to 4096 bytes at
+    /// arbitrary boundaries; chunk=1 reproduces the worst case.
+    struct ChunkReader {
+        data: Vec<u8>,
+        pos: usize,
+        chunk: usize,
+    }
+
+    impl std::io::Read for ChunkReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.pos >= self.data.len() {
+                return Ok(0);
+            }
+            let n = self.chunk.min(buf.len()).min(self.data.len() - self.pos);
+            buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+            self.pos += n;
+            Ok(n)
+        }
+    }
+
+    /// Writer that records everything written to it, so the password-injection
+    /// path can be asserted without a real PTY.
+    #[derive(Clone, Default)]
+    struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for SharedBuf {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn pump_bytes(data: &[u8], chunk: usize) -> String {
+        let reader = ChunkReader { data: data.to_vec(), pos: 0, chunk };
+        let writer: Arc<Mutex<Box<dyn Write + Send>>> =
+            Arc::new(Mutex::new(Box::new(std::io::sink())));
+        let mut out = String::new();
+        pump_pty(Box::new(reader), writer, None, |s| out.push_str(s));
+        out
+    }
+
+    /// Every character class the corruption report names: 3-byte box-drawing,
+    /// a 4-byte emoji, a 3-byte CJK char, plus ASCII around them.
+    const MIXED: &str = "┌─┐│└┘ plain 🚀 漢字 k9s\r\n";
+
+    /// THE regression test: 1-byte reads split EVERY multi-byte character.
+    /// Per-chunk `from_utf8_lossy` would emit U+FFFD for both halves of each
+    /// one; the fixed path must round-trip byte-for-byte.
+    #[test]
+    fn pump_pty_reassembles_utf8_split_one_byte_at_a_time() {
+        let out = pump_bytes(MIXED.as_bytes(), 1);
+        assert_eq!(out, MIXED, "1-byte reads must round-trip byte-for-byte");
+        assert!(!out.contains('\u{FFFD}'), "no U+FFFD may survive");
+    }
+
+    /// Every chunk size from 1 to 24 must round-trip identically — a fix that
+    /// only happens to work for some boundary alignment is not a fix.
+    #[test]
+    fn pump_pty_round_trips_at_every_chunk_size() {
+        for chunk in 1..=24 {
+            let out = pump_bytes(MIXED.as_bytes(), chunk);
+            assert_eq!(out, MIXED, "chunk size {chunk} corrupted the stream");
+            assert!(!out.contains('\u{FFFD}'), "chunk size {chunk} produced U+FFFD");
+        }
+    }
+
+    /// Large burst (bigger than the 4096 read buffer) with multi-byte chars at
+    /// the buffer edge — the real-world k9s repaint shape.
+    #[test]
+    fn pump_pty_reassembles_large_unicode_burst() {
+        let mut s = String::new();
+        for _ in 0..400 {
+            s.push_str(MIXED);
+        }
+        let out = pump_bytes(s.as_bytes(), 4096);
+        assert_eq!(out, s, "large burst must round-trip byte-for-byte");
+        assert!(!out.contains('\u{FFFD}'));
+    }
+
+    /// The helper holds an incomplete trailing sequence across calls instead of
+    /// emitting a replacement char for it.
+    #[test]
+    fn decode_utf8_stream_holds_incomplete_tail() {
+        let rocket = "🚀".as_bytes(); // 4 bytes: F0 9F 9A 80
+        let mut pending = Vec::new();
+        assert_eq!(decode_utf8_stream(&mut pending, &rocket[..1]), "");
+        assert_eq!(pending, rocket[..1], "1-byte head must be carried");
+        assert_eq!(decode_utf8_stream(&mut pending, &rocket[1..2]), "");
+        assert_eq!(decode_utf8_stream(&mut pending, &rocket[2..3]), "");
+        assert_eq!(decode_utf8_stream(&mut pending, &rocket[3..]), "🚀");
+        assert!(pending.is_empty(), "pending must be drained after completion");
+    }
+
+    /// Genuinely invalid bytes still become U+FFFD (one per invalid byte), and
+    /// valid text after them is preserved.
+    #[test]
+    fn decode_utf8_stream_invalid_bytes_are_replaced_not_wedged() {
+        let mut pending = Vec::new();
+        let out = decode_utf8_stream(&mut pending, b"a\xFF\xFEb");
+        assert_eq!(out, "a\u{FFFD}\u{FFFD}b");
+        assert!(pending.is_empty());
+    }
+
+    /// A character truncated by EOF is flushed lossily on the EOF path — the
+    /// documented best-effort fallback, not a silent drop.
+    #[test]
+    fn pump_pty_eof_flushes_truncated_tail_lossily() {
+        let rocket = "🚀".as_bytes();
+        let mut data = b"ok".to_vec();
+        data.extend_from_slice(&rocket[..3]); // 3 of 4 bytes, then EOF
+        let out = pump_bytes(&data, 1);
+        assert_eq!(out, "ok\u{FFFD}", "truncated tail must be flushed best-effort");
+    }
+
+    /// The fix must not disturb the OpenSSH password-injection contract: the
+    /// prompt is detected once and the secret written exactly once.
+    #[test]
+    fn pump_pty_still_injects_password_once() {
+        let data: &[u8] = b"user@host's password: ";
+        let reader = ChunkReader { data: data.to_vec(), pos: 0, chunk: 1 };
+        let sink = SharedBuf::default();
+        let writer: Arc<Mutex<Box<dyn Write + Send>>> =
+            Arc::new(Mutex::new(Box::new(sink.clone())));
+        let mut out = String::new();
+        pump_pty(Box::new(reader), writer, Some("hunter2".into()), |s| out.push_str(s));
+        assert_eq!(out, "user@host's password: ");
+        let injected = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
+        assert_eq!(injected, "hunter2\r", "password must be injected exactly once");
     }
 }
 
