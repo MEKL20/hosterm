@@ -4650,7 +4650,7 @@ mod sftp_tests {
         let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let user = std::env::var("HOSTERM_WINLIVE_USER").unwrap_or_else(|_| "hosterm".into());
         let password =
-            std::env::var("HOSTERM_WINLIVE_PASSWORD").unwrap_or_else(|_| "Hosterm!2026".into());
+            std::env::var("HOSTERM_WINLIVE_PASSWORD").unwrap_or_else(|_| "Sftp-Live-2026!xQ7#".into());
         let dir = std::env::temp_dir().join(format!("hosterm-winlive-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();

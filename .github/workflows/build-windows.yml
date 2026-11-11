@@ -182,13 +182,13 @@ jobs:
           }
           Set-Service -Name sshd -StartupType 'Automatic'
           Start-Service sshd
-          $pw = ConvertTo-SecureString 'Hosterm!2026' -AsPlainText -Force
+          $pw = ConvertTo-SecureString 'Sftp-Live-2026!xQ7#' -AsPlainText -Force
           try {
             if (Get-LocalUser -Name 'hosterm' -ErrorAction SilentlyContinue) {
               Write-Host 'user hosterm already exists -> resetting password'
               Set-LocalUser -Name 'hosterm' -Password $pw -PasswordNeverExpires -ErrorAction Stop
             } else {
-              New-LocalUser -Name 'hosterm' -Password $pw -FullName 'Hosterm' -PasswordNeverExpires -ErrorAction Stop
+              New-LocalUser -Name 'hosterm' -Password $pw -FullName 'Hosterm Test Account' -PasswordNeverExpires -ErrorAction Stop
             }
           } catch {
             Write-Host "ACCOUNT SETUP FAILED: $($_.Exception.Message)"
@@ -198,7 +198,7 @@ jobs:
           Write-Host "user hosterm: Enabled=$($u.Enabled) PasswordRequired=$($u.PasswordRequired) PasswordLastSet=$($u.PasswordLastSet)"
           Add-Type -AssemblyName System.DirectoryServices.AccountManagement
           $pc = New-Object System.DirectoryServices.AccountManagement.PrincipalContext([System.DirectoryServices.AccountManagement.ContextType]::Machine)
-          Write-Host "ValidateCredentials(hosterm)=$($pc.ValidateCredentials('hosterm', 'Hosterm!2026'))"
+          Write-Host "ValidateCredentials(hosterm)=$($pc.ValidateCredentials('hosterm', 'Sftp-Live-2026!xQ7#'))"
           New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.ssh" | Out-Null
           @"
           Host hostermlive
@@ -221,7 +221,7 @@ jobs:
         env:
           HOSTERM_WINLIVE: 1
           HOSTERM_WINLIVE_USER: hosterm
-          HOSTERM_WINLIVE_PASSWORD: Hosterm!2026
+          HOSTERM_WINLIVE_PASSWORD: Sftp-Live-2026!xQ7#
 
       # Headless DOM smoke: build the frontend first (the harness serves
       # ../dist and mocks the Tauri IPC), install Playwright + its Chromium,
