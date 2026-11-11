@@ -16,6 +16,15 @@ fn main() {
     let Ok(host) = std::env::var("HOSTERM_ASKPASS_HOST") else {
         std::process::exit(1);
     };
+    // Optional support probe: when `HOSTERM_ASKPASS_LOG` is set, record that the
+    // helper was actually launched (and for which host). Nothing is written
+    // otherwise, so ordinary use leaves no trace on disk.
+    if let Ok(log) = std::env::var("HOSTERM_ASKPASS_LOG") {
+        use std::io::Write as _;
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log) {
+            let _ = writeln!(f, "invoked host={host}");
+        }
+    }
     let Ok(text) = std::fs::read_to_string(&path) else {
         std::process::exit(1);
     };

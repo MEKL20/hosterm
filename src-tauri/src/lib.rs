@@ -1429,6 +1429,12 @@ fn sftp_spawn(host: &str) -> Result<SftpPtySession, String> {
         let helper = askpass_exe();
         if !helper.as_os_str().is_empty() {
             cmd.env("SSH_ASKPASS", helper);
+            // `SSH_ASKPASS_REQUIRE=force` makes openssh-portable's
+            // read_passphrase() take the askpass path even without a DISPLAY
+            // (its `use_askpass && allow_askpass` gate is otherwise false on a
+            // headless Windows console). Win32-OpenSSH ignores the variable and
+            // keys off SSH_ASKPASS alone, so this is safe for both builds.
+            cmd.env("SSH_ASKPASS_REQUIRE", "force");
             cmd.env("HOSTERM_ASKPASS_FILE", secrets_path());
             cmd.env("HOSTERM_ASKPASS_HOST", host);
         }
@@ -4860,6 +4866,21 @@ mod sftp_tests {
             .unwrap_or(false);
         eprintln!("[winlive] askpass helper built: {}", built);
         std::env::set_var("HOSTERM_ASKPASS_BIN", &helper);
+        eprintln!("[winlive] askpass helper resolved: {}", askpass_exe().display());
+        // Which OpenSSH build is on PATH? Win32-OpenSSH's read_passphrase keys
+        // off SSH_ASKPASS alone; openssh-portable gates askpass behind
+        // DISPLAY/WAYLAND_DISPLAY unless SSH_ASKPASS_REQUIRE=force.
+        if let Ok(v) = std::process::Command::new("ssh").arg("-V").output() {
+            eprintln!(
+                "[winlive] ssh -V: {}",
+                String::from_utf8_lossy(&v.stderr).trim()
+            );
+        }
+        // The single most decisive fact: did sftp.exe/ssh.exe actually launch
+        // the askpass helper? If this stays empty while the console prompt
+        // appears, the helper was never consulted.
+        let askpass_log = dir.path().join("askpass.log");
+        std::env::set_var("HOSTERM_ASKPASS_LOG", &askpass_log);
 
         let out = run_sftp_op("hostermlive", "ls -la\n");
 
@@ -4870,6 +4891,12 @@ mod sftp_tests {
         );
         std::env::remove_var("HOSTERM_ASKPASS_BIN");
         std::env::remove_var("HOSTERM_CONFIG");
+        let invoked = std::fs::read_to_string(&askpass_log).unwrap_or_default();
+        eprintln!(
+            "[winlive] askpass invoked: {} ({:?})",
+            !invoked.trim().is_empty(),
+            invoked.trim()
+        );
         let _ = std::fs::remove_dir_all(&dir);
 
         assert!(built, "askpass helper failed to compile");
@@ -5005,6 +5032,93 @@ mod sftp_tests {
             "ConPTY input was not delivered: {:?}",
             acc
         );
+    }
+
+    /// What kind of handle does a ConPTY child actually get on STDIN? The CRT's
+    /// `_getch()` (used by Win32-OpenSSH `read_passphrase()`) keys off
+    /// `GetStdHandle(STD_INPUT_HANDLE)`; if that is the ConPTY input *pipe*
+    /// rather than a character device, `ReadConsoleInput` cannot be used there
+    /// and the CRT's own fallback decides whether the password can ever be read.
+    #[cfg(windows)]
+    #[test]
+    fn conpty_stdin_handle_kind() {
+        if std::env::var("HOSTERM_WINLIVE").as_deref() != Ok("1") {
+            return;
+        }
+        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("hm-conkind-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("kind.rs");
+        std::fs::write(&src, r#"
+use std::os::raw::{c_ulong, c_void};
+extern "system" {
+    fn GetStdHandle(n: u32) -> *mut c_void;
+    fn GetFileType(h: *mut c_void) -> u32;
+    fn GetConsoleMode(h: *mut c_void, mode: *mut c_ulong) -> i32;
+    fn ReadFile(h: *mut c_void, buf: *mut u8, n: u32, read: *mut u32, ov: *mut c_void) -> i32;
+}
+fn main() {
+    unsafe {
+        let h = GetStdHandle((-10i32) as u32); // STD_INPUT_HANDLE
+        let ft = GetFileType(h);
+        let mut mode: c_ulong = 0;
+        let cm = GetConsoleMode(h, &mut mode);
+        let mut buf = [0u8; 64];
+        let mut read: u32 = 0;
+        let r = ReadFile(h, buf.as_mut_ptr(), 64, &mut read, std::ptr::null_mut());
+        println!("filetype={} consolemode={} mode={} readfile={} read={} bytes={:?}",
+            ft, cm, mode, r, read, &buf[..read as usize]);
+    }
+}
+"#).unwrap();
+        let exe = dir.join("kind.exe");
+        let st = std::process::Command::new("rustc")
+            .args(["-O", "-o"])
+            .arg(&exe)
+            .arg(&src)
+            .output()
+            .unwrap();
+        eprintln!("[winlive] handle probe build: {}", st.status.success());
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize { rows: 24, cols: 200, pixel_width: 0, pixel_height: 0 })
+            .unwrap();
+        let cmd = CommandBuilder::new(&exe);
+        let _child = pair.slave.spawn_command(cmd).unwrap();
+        drop(pair.slave);
+        let mut reader = pair.master.try_clone_reader().unwrap();
+        let mut writer = pair.master.take_writer().unwrap();
+        // Let the child initialise its std handles before typing.
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        use std::io::Write as _;
+        let _ = writer.write_all(b"SEKRET\r");
+        let _ = writer.flush();
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 1024];
+            let mut acc = String::new();
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        acc.push_str(&String::from_utf8_lossy(&buf[..n]));
+                        if tx.send(acc.clone()).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        let mut acc = String::new();
+        let start = std::time::Instant::now();
+        while !acc.contains("filetype=") && start.elapsed() < std::time::Duration::from_secs(15) {
+            if let Ok(s) = rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                acc = s;
+            }
+        }
+        eprintln!("[winlive] stdin handle probe: {:?}", acc);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(acc.contains("filetype="), "handle probe produced no output: {:?}", acc);
     }
 
     /// `set /p` reads the COOKED console line buffer (ReadConsole). The SFTP
