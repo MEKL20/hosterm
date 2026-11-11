@@ -1355,6 +1355,18 @@ struct SftpPtySession {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     rx: Arc<SftpBuf>,
     alive: Arc<AtomicBool>,
+    /// Windows SSH_ASKPASS helper + secret files, removed when the session dies
+    #[cfg(windows)]
+    temp_files: Vec<PathBuf>,
+}
+
+#[cfg(windows)]
+impl Drop for SftpPtySession {
+    fn drop(&mut self) {
+        for p in self.temp_files.drain(..) {
+            let _ = std::fs::remove_file(p);
+        }
+    }
 }
 
 struct SftpBatchOutput {
@@ -1394,12 +1406,82 @@ fn sftp_eol() -> &'static [u8] {
 ///     (non-interactive: `printf("sftp> %s", cmd)`; interactive: prompt +
 ///     libedit/readline echo). sftp can only read the probe after login, so
 ///     its echo is a reliable login-complete marker on Windows too.
+///
+/// On Windows the stored password is additionally handed to the process through
+/// `SSH_ASKPASS` (see `write_windows_askpass_helper`): sftp.exe never remaps its
+/// standard descriptors to the console, so anything written to the PTY master
+/// cannot reach the console reader at all.
+
+/// Write the Windows `SSH_ASKPASS` helper and the file holding the password.
+///
+/// Win32-OpenSSH's `read_passphrase()` consults `SSH_ASKPASS` *before* touching
+/// the console, so this is the only deterministic way to answer the password
+/// prompt: the console reader races ConPTY's startup `WINDOW_BUFFER_SIZE_EVENT`
+/// (see the sacrificial-CR note in `sftp_spawn`) and no amount of timing fixes
+/// that. The helper gets the prompt text as its first argument, so it answers
+/// password prompts with the stored password and everything else (the
+/// known-hosts confirmation, itself a `read_passphrase` caller) with "yes".
+/// Answering is mandatory: Windows `read_passphrase` returns "" when the helper
+/// produces no output, and "" makes `confirm()` refuse the host key.
+///
+/// Because the prompts are answered out of process they are never written to
+/// the PTY, so the prompt-driven injection below stays a fallback only.
+#[cfg(windows)]
+fn write_windows_askpass_helper(pw: &str) -> Result<(PathBuf, PathBuf), String> {
+    let unique = format!(
+        "hosterm-askpass-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    let dir = std::env::temp_dir();
+    let helper = dir.join(format!("{}.cmd", unique));
+    let secret = dir.join(format!("{}.pw", unique));
+    let mut f = std::fs::File::create(&helper).map_err(|e| e.to_string())?;
+    // `@echo off` keeps the helper's own commands out of the pipe; `type` dumps
+    // the secret file verbatim, so passwords with cmd metacharacters survive.
+    // Anything that is not a password prompt (the known-hosts confirmation,
+    // which is also a read_passphrase caller) is answered "yes" — the Windows
+    // read_passphrase returns "" rather than falling back to the console when
+    // the helper produces no output, and "" makes confirm() refuse the host.
+    f.write_all(
+        b"@echo off\r\n\
+echo %~1 | findstr /i password >nul || goto :yes\r\n\
+type \"%HOSTERM_ASKPASS_FILE%\"\r\n\
+exit /b 0\r\n\
+:yes\r\n\
+echo yes\r\n",
+    )
+    .map_err(|e| e.to_string())?;
+    drop(f);
+    let mut f = std::fs::File::create(&secret).map_err(|e| e.to_string())?;
+    f.write_all(pw.as_bytes()).map_err(|e| e.to_string())?;
+    Ok((helper, secret))
+}
+
 fn sftp_spawn(host: &str) -> Result<SftpPtySession, String> {
     sftp_safe(host, "Host")?;
+    let stored_pw = lookup_stored_password(host);
     // HOSTERM_SFTP_BIN: testability hook, same as the batch path
     let bin = std::env::var("HOSTERM_SFTP_BIN").unwrap_or_else(|_| "sftp".to_string());
     let mut cmd = CommandBuilder::new(bin);
     cmd.arg(host);
+    // On Windows, answer the password prompt out of process. The PTY injection
+    // below stays as a fallback for the case where the helper cannot run.
+    #[cfg(windows)]
+    let askpass_files: Vec<PathBuf> = match stored_pw.as_deref() {
+        Some(pw) => match write_windows_askpass_helper(pw) {
+            Ok((helper, secret)) => {
+                cmd.env("SSH_ASKPASS", &helper);
+                cmd.env("HOSTERM_ASKPASS_FILE", &secret);
+                vec![helper, secret]
+            }
+            Err(_) => Vec::new(),
+        },
+        None => Vec::new(),
+    };
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
@@ -1436,14 +1518,28 @@ fn sftp_spawn(host: &str) -> Result<SftpPtySession, String> {
         alive2.store(false, Ordering::SeqCst);
     });
 
-    let sess = SftpPtySession { master: pair.master, writer, rx, alive };
-    let stored_pw = lookup_stored_password(host);
-    // Win32-OpenSSH's read_passphrase() flushes the console input buffer right
-    // after printing the password prompt: `while (_kbhit()) _getch();`.
+    // True when the password prompt is answered by the SSH_ASKPASS helper, so
+    // no console reader is racing our input. Computed before the session takes
+    // ownership of the temp-file list.
+    #[cfg(windows)]
+    let askpass_active = !askpass_files.is_empty();
+    #[cfg(not(windows))]
+    let askpass_active = false;
+    let sess = SftpPtySession {
+        master: pair.master,
+        writer,
+        rx,
+        alive,
+        #[cfg(windows)]
+        temp_files: askpass_files,
+    };
+    // Fallback for a Windows sftp that *does* read its password from the
+    // console (a build where allocate_standard_descriptor is not commented
+    // out). Win32-OpenSSH's read_passphrase() flushes the console input buffer
+    // right after printing the prompt: `while (_kbhit()) _getch();`.
     // `_getch()` discards non-key records and blocks for the next key event, so
     // when ConPTY has posted a WINDOW_BUFFER_SIZE_EVENT (it does, at startup)
-    // the flush swallows the first character of whatever we type — the stored
-    // password arrived one character short and sshd rejected it. A sacrificial
+    // the flush swallows the first character of whatever we type. A sacrificial
     // CR written before the prompt is always eaten by that flush, so the real
     // password is read intact. Windows-only: on Linux the same CR would be
     // consumed by sftp as an empty command line.
@@ -1506,6 +1602,10 @@ fn sftp_spawn(host: &str) -> Result<SftpPtySession, String> {
         // password.
         let may_probe = stored_pw.is_none()
             || prompts_seen > 0
+            // With SSH_ASKPASS answering out of process, a probe that races the
+            // login is recoverable: the next prompt is answered again and the
+            // probe is re-armed below.
+            || askpass_active
             || spawned_at.elapsed() >= std::time::Duration::from_secs(5);
         if !probe_sent && last_change.elapsed() >= quiet && may_probe {
             let mut w = sess.writer.lock().unwrap();
