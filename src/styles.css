@@ -1407,6 +1407,12 @@ body.sftp-dragging { user-select: none; cursor: grabbing; }
   font-size: 11px;
 }
 #k-text { min-height: 180px; resize: vertical; font-family: var(--font-mono); font-size: 12px; line-height: 1.4; }
+/* Add-key modal: import a private key from a file. The button + hint row sits
+   between the name field and the textarea; the <input type=file> itself stays
+   hidden because the webview reads the picked File directly (file.text()). */
+.key-import { display: flex; align-items: center; gap: 8px; }
+.key-import .note { line-height: 1.3; }
+#k-file { display: none; }
 
 /* U8 D2: stored-password badge chip + hapus button (mockup dialog-password-host.html) */
 .pw-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 8px; }

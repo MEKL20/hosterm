@@ -2556,6 +2556,14 @@ function showHostMenu(at: { clientX: number; clientY: number }, name: string) {
 }
 
 // ---------- host editor modal ----------
+// The private-key dropdown stores the FULL path as the option value (that is what
+// gets saved as identity_file), but shows only the file name: strip everything
+// through the last "/". A custom path not in the listed set is reduced the same way.
+function identityLabel(p: string): string {
+  const i = p.lastIndexOf("/");
+  return i === -1 ? p : p.slice(i + 1);
+}
+
 async function refreshIdentityDropdown(selected: string) {
   try {
     identityFiles = await invoke<string[]>("list_identity_files");
@@ -2567,7 +2575,7 @@ async function refreshIdentityDropdown(selected: string) {
   const known = new Set(identityFiles);
   if (selected && !known.has(selected)) known.add(selected); // keep an existing custom path
   for (const p of known) {
-    opts.push(`<option value="${escAttr(p)}"${p === selected ? " selected" : ""}>${esc(p)}</option>`);
+    opts.push(`<option value="${escAttr(p)}"${p === selected ? " selected" : ""}>${esc(identityLabel(p))}</option>`);
   }
   sel.innerHTML = opts.join("");
   sel.value = selected || "";
@@ -2678,6 +2686,7 @@ let keyModalReturnsToKeys = false;
 function openKeyModal() {
   ($("#k-name") as HTMLInputElement).value = "";
   ($("#k-text") as HTMLTextAreaElement).value = "";
+  ($("#k-file") as HTMLInputElement).value = "";
   $("#key-err").textContent = "";
   openOverlay("#key-modal", $("#k-name"));
 }
@@ -2685,6 +2694,29 @@ function openKeyModal() {
 function closeKey() {
   closeOverlay("#key-modal");
   keyModalReturnsToKeys = false;
+}
+
+// Import a private key from a user-picked file into #k-text for review/edit.
+// The webview can read a File the user chose directly (File.text()), so this
+// needs no dialog/fs plugin and no filesystem permission: the backend still
+// writes ~/.ssh/keys/<name> at 0600 from the textarea contents, and nothing is
+// saved until "Save key" is pressed. The textarea is written only after the
+// read fully resolves, so a failed read never leaves partial content behind.
+async function importKeyFile(file: File) {
+  const err = $("#key-err");
+  err.textContent = "";
+  try {
+    const text = await file.text();
+    if (!text) {
+      err.textContent = `"${file.name}" is empty — pick a private key file, or paste the key below.`;
+      return;
+    }
+    const textEl = $("#k-text") as HTMLTextAreaElement;
+    textEl.value = text;
+    textEl.focus();
+  } catch (e) {
+    err.textContent = `Could not read "${file.name}": ${msg(e)}. Paste the key below instead.`;
+  }
 }
 
 async function saveKey() {
@@ -4433,6 +4465,16 @@ window.addEventListener("DOMContentLoaded", () => {
   $("#f-newkey").addEventListener("click", openKeyModal);
   $("#k-cancel").addEventListener("click", closeKey);
   $("#k-save").addEventListener("click", saveKey);
+  // Upload: the button opens the hidden file input; a picked file is read into
+  // #k-text for review/edit (no auto-save). Reset the input so picking the same
+  // file again still fires change.
+  $("#k-upload").addEventListener("click", () => ($("#k-file") as HTMLInputElement).click());
+  $("#k-file").addEventListener("change", () => {
+    const input = $("#k-file") as HTMLInputElement;
+    const file = input.files?.[0];
+    if (file) void importKeyFile(file);
+    input.value = "";
+  });
   $("#ke-cancel").addEventListener("click", closeEditKey);
   $("#ke-save").addEventListener("click", () => { void saveEditKey(); });
   document.querySelectorAll<HTMLButtonElement>(".rail-item[data-view]").forEach((btn) => {

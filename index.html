@@ -389,7 +389,7 @@
     <div id="keys-modal" class="hidden">
       <div class="modal-box">
         <h2>SSH keys</h2>
-        <p class="note">Keys hosterm manages live in <code>~/.ssh/keys/</code> at <code>0600</code>. Add a key by pasting it, or remove one you no longer need.</p>
+        <p class="note">Keys hosterm manages live in <code>~/.ssh/keys/</code> at <code>0600</code>. Add a key by uploading a file or pasting it, or remove one you no longer need.</p>
         <div id="keys-list" class="keys-list"></div>
         <div id="keys-err" class="pass-error" role="alert" hidden></div>
         <div class="modal-actions">
@@ -404,13 +404,22 @@
     <div id="key-modal" class="hidden">
       <div class="modal-box">
         <h2>New identity key</h2>
-        <label>Key file name<input id="k-name" placeholder="id_myserver" /></label>
-        <label>Private key (paste)
+        <label>Key file name<input id="k-name" placeholder="id_myserver" autocomplete="off" /></label>
+        <!-- Import a private key from a file. The webview reads a user-picked
+             File directly (file.text()) — no dialog/fs plugin, no filesystem
+             permission. The bytes land in #k-text for review/edit; nothing is
+             saved until the user presses Save key. -->
+        <div class="key-import">
+          <button id="k-upload" type="button">Upload file</button>
+          <span class="note">or paste the key below</span>
+          <input id="k-file" type="file" hidden />
+        </div>
+        <label>Private key
           <textarea id="k-text" spellcheck="false"
             placeholder="[REDACTED PRIVATE KEY]"></textarea>
         </label>
         <p class="note">
-          Saved to <code>~/.ssh/&lt;name&gt;</code> with <code>0600</code>
+          Saved to <code>~/.ssh/keys/&lt;name&gt;</code> with <code>0600</code>
           permissions, then selectable above.
         </p>
         <div class="modal-actions">

@@ -42,7 +42,7 @@ const sampleSftp = [
 ];
 const sampleHosts = [
   { name: "prod-web", host_name: "203.0.113.10", user: "deploy", port: "", identity_file: "", auth_method: "key", options: [] },
-  { name: "db-core", host_name: "203.0.113.20", user: "admin", port: "", identity_file: "", auth_method: "key", options: [] },
+  { name: "db-core", host_name: "203.0.113.20", user: "admin", port: "", identity_file: "~/.ssh/custom/id_custom", auth_method: "key", options: [] },
   { name: "pw-host", host_name: "203.0.113.30", user: "ops", port: "", identity_file: "", auth_method: "password", has_password: true, options: [] },
 ];
 const sampleConfig = `# demo
@@ -663,6 +663,30 @@ await page.waitForTimeout(200);
 await page.locator("#host-menu button", { hasText: "Edit" }).click();
 await page.waitForTimeout(250);
 check("host menu Edit opens modal", await page.locator("#modal").evaluate((el) => !el.classList.contains("hidden")));
+// 9d1. private-key dropdown: label = file name only, value = full path (MEKL)
+const idOpts = await page.evaluate(() =>
+  [...document.querySelectorAll("#f-identity option")].map((o) => ({
+    value: o.value, label: (o.textContent || "").trim(), selected: o.selected,
+  }))
+);
+const idListed = idOpts.filter((o) => o.value !== "");
+check("identity dropdown: (none) option kept first",
+  idOpts.length > 0 && idOpts[0].value === "" && idOpts[0].label === "(none)",
+  idOpts.map((o) => o.label).join("|"));
+check("identity dropdown: every label is a bare file name (no path)",
+  idListed.length > 0 && idListed.every((o) => o.label !== "" && !o.label.includes("/") && !o.label.includes("\\")),
+  idListed.map((o) => o.label).join("|"));
+check("identity dropdown: full path kept as the option value",
+  idListed.length > 0 && idListed.every((o) => o.value.includes("/")),
+  idListed.map((o) => o.value).join("|"));
+check("identity dropdown: mock keys listed by file name",
+  idListed.map((o) => o.label).includes("id_managed") && idListed.map((o) => o.label).includes("id_test"),
+  idListed.map((o) => o.label).join(","));
+// custom path not in the listed set: still present, selected, label reduced to the file name
+const customId = idListed.find((o) => o.value === "~/.ssh/custom/id_custom");
+check("identity dropdown: existing custom path kept + selected, label = file name",
+  !!customId && customId.selected && customId.label === "id_custom",
+  JSON.stringify(customId ?? null));
 await page.keyboard.press("Escape");
 await page.waitForTimeout(200);
 
@@ -4136,6 +4160,90 @@ const afterCancel = await page.evaluate(() => ({
 }));
 check("MEKL: Cancel closes the Edit dialog and wipes the key bytes",
   afterCancel.hidden && afterCancel.text === "", JSON.stringify(afterCancel));
+
+// -- FE: Add-key modal imports a private key from a FILE (not only paste) --
+// The upload control is a hidden <input type=file> read with file.text(): no
+// dialog/fs plugin, no filesystem permission. Picking a file only fills
+// #k-text (review/edit); it must NOT auto-save — Save key still goes through
+// create_identity_file, where the backend validates the bytes.
+await page.locator("#sb-keys-add").click();
+await page.waitForTimeout(40);
+const uploadControl = await page.evaluate(() => {
+  const modal = document.getElementById("key-modal");
+  const input = document.getElementById("k-file");
+  const btn = document.getElementById("k-upload");
+  return {
+    open: !modal.classList.contains("hidden"),
+    inputInsideModal: !!input && modal.contains(input),
+    isFile: input?.type === "file",
+    inputHidden: input ? getComputedStyle(input).display === "none" : false,
+    buttonInsideModal: !!btn && modal.contains(btn),
+    buttonLabel: btn?.textContent?.trim(),
+    text: document.getElementById("k-text").value,
+    err: document.getElementById("key-err").textContent,
+    focused: document.activeElement?.id,
+  };
+});
+check("FE: Add-key modal has a hidden file input + Upload control inside #key-modal",
+  uploadControl.open && uploadControl.inputInsideModal && uploadControl.isFile &&
+  uploadControl.inputHidden && uploadControl.buttonInsideModal &&
+  /upload/i.test(uploadControl.buttonLabel || "") &&
+  uploadControl.text === "" && uploadControl.err === "" &&
+  uploadControl.focused === "k-name",
+  JSON.stringify(uploadControl));
+// Clicking Upload opens the native file picker (Playwright's filechooser event
+// is the handle on it); the picked file is read by the webview into #k-text.
+const createCallsBeforeUpload = calls.filter((c) => c.cmd === "create_identity_file").length;
+const UPLOAD_KEY = "-----BEGIN OPENSSH PRIVATE KEY-----\nuploaded-from-file\n-----END OPENSSH PRIVATE KEY-----\n";
+const [uploadChooser] = await Promise.all([
+  page.waitForEvent("filechooser"),
+  page.locator("#k-upload").click(),
+]);
+await uploadChooser.setFiles({ name: "id_uploaded", mimeType: "text/plain", buffer: Buffer.from(UPLOAD_KEY) });
+await page.waitForTimeout(80);
+const afterUpload = await page.evaluate(() => ({
+  text: document.getElementById("k-text").value,
+  err: document.getElementById("key-err").textContent,
+  focused: document.activeElement?.id,
+}));
+check("FE: picking a file loads its text into #k-text, focuses it, and does NOT auto-save",
+  afterUpload.text === UPLOAD_KEY && afterUpload.err === "" &&
+  afterUpload.focused === "k-text" &&
+  calls.filter((c) => c.cmd === "create_identity_file").length === createCallsBeforeUpload,
+  JSON.stringify({ len: afterUpload.text.length, err: afterUpload.err, focused: afterUpload.focused }));
+// Save after upload: the uploaded bytes still go through create_identity_file.
+await page.locator("#k-name").fill("id_uploaded");
+await page.locator("#k-save").click();
+await page.waitForTimeout(80);
+const uploadSaveCalls = calls.filter((c) => c.cmd === "create_identity_file");
+const lastUploadSave = uploadSaveCalls[uploadSaveCalls.length - 1];
+check("FE: Save after upload sends the uploaded bytes via create_identity_file",
+  uploadSaveCalls.length === createCallsBeforeUpload + 1 &&
+  lastUploadSave.args.name === "id_uploaded" &&
+  lastUploadSave.args.privateKey === UPLOAD_KEY &&
+  (await page.evaluate(() => document.getElementById("key-modal").classList.contains("hidden"))),
+  JSON.stringify({ name: lastUploadSave?.args?.name, keyLen: lastUploadSave?.args?.privateKey?.length }));
+// An empty picked file is a visible error in #key-err; the textarea keeps
+// whatever the user already had (no partial/blank overwrite).
+await page.locator("#sb-keys-add").click();
+await page.waitForTimeout(40);
+await page.locator("#k-text").fill("pasted-before-upload");
+const [emptyChooser] = await Promise.all([
+  page.waitForEvent("filechooser"),
+  page.locator("#k-upload").click(),
+]);
+await emptyChooser.setFiles({ name: "id_empty", mimeType: "text/plain", buffer: Buffer.from("") });
+await page.waitForTimeout(80);
+const emptyUpload = await page.evaluate(() => ({
+  text: document.getElementById("k-text").value,
+  err: document.getElementById("key-err").textContent,
+}));
+check("FE: empty picked file shows a visible error and leaves #k-text untouched",
+  emptyUpload.text === "pasted-before-upload" && /empty/i.test(emptyUpload.err || ""),
+  JSON.stringify(emptyUpload));
+await page.evaluate(() => { document.getElementById("k-cancel").click(); });
+await page.waitForTimeout(40);
+
 // Restore the precondition the next NAV-RAIL check assumes: focus on the Keys
 // view's first action (the edit roundtrip moved focus into/out of the dialog).
 await page.locator("#sb-keys-add").focus();
