@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Windows releases are currently **unsigned** (Authenticode signing postponed —
 see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
+## [0.15.3] - 2026-11-11
+
+### Fixed
+- Windows SFTP to a password-protected host no longer hangs on "Connecting...".
+  Win32-OpenSSH's `sftp.exe` never prints the interactive `sftp> ` prompt, so
+  hosterm waited for it until timeout with no error. Login completion is now
+  detected from the echo of a `pwd` probe, which both interactive and
+  non-interactive sftp print; Linux and key-based logins are unchanged.
+- The stored password is now handed to `sftp.exe` through `SSH_ASKPASS` by a
+  real `hosterm-askpass` helper binary that reads the secrets sidecar directly,
+  so the password never crosses the PTY (where it could be echoed into the file
+  listing) or the IPC boundary. A `.cmd` shim cannot be used: Win32-OpenSSH
+  consults `SSH_ASKPASS` instead of the console and launches it without a
+  shell. Typing the password into the console remains a best-effort fallback
+  when no helper can be resolved.
+- SFTP failures now carry the last 400 characters of PTY output instead of a
+  bare timeout, so a failed Windows login is diagnosable.
+
+### Added
+- CI now proves the Windows password path on a real Windows runner against the
+  real `sftp.exe` over a ConPTY with a password host
+  (`windows_sftp_password_host_listing_loads`), plus a logon-rights probe that
+  keeps the CI test account able to log on.
+
 ## [0.15.2] - 2026-11-11
 
 ### Changed
