@@ -4914,7 +4914,7 @@ mod sftp_tests {
         cmd.arg("set /p V=TYPEHERE&echo GOT:%V%");
         let _child = pair.slave.spawn_command(cmd).unwrap();
         drop(pair.slave);
-        let reader = pair.master.try_clone_reader().unwrap();
+        let mut reader = pair.master.try_clone_reader().unwrap();
         let mut writer = pair.master.take_writer().unwrap();
         drop(pair.master);
         let (tx, rx) = std::sync::mpsc::channel::<String>();
@@ -4978,7 +4978,7 @@ mod sftp_tests {
         cmd.arg("set /p V=TYPEHERE&echo GOT:%V%");
         let _child = pair.slave.spawn_command(cmd).unwrap();
         drop(pair.slave);
-        let reader = pair.master.try_clone_reader().unwrap();
+        let mut reader = pair.master.try_clone_reader().unwrap();
         let mut writer = pair.master.take_writer().unwrap();
         drop(pair.master);
         use std::io::Write as _;
