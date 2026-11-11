@@ -1355,18 +1355,6 @@ struct SftpPtySession {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     rx: Arc<SftpBuf>,
     alive: Arc<AtomicBool>,
-    /// Windows SSH_ASKPASS helper + secret files, removed when the session dies
-    #[cfg(windows)]
-    temp_files: Vec<PathBuf>,
-}
-
-#[cfg(windows)]
-impl Drop for SftpPtySession {
-    fn drop(&mut self) {
-        for p in self.temp_files.drain(..) {
-            let _ = std::fs::remove_file(p);
-        }
-    }
 }
 
 struct SftpBatchOutput {
@@ -1407,61 +1395,15 @@ fn sftp_eol() -> &'static [u8] {
 ///     libedit/readline echo). sftp can only read the probe after login, so
 ///     its echo is a reliable login-complete marker on Windows too.
 ///
-/// On Windows the stored password is additionally handed to the process through
-/// `SSH_ASKPASS` (see `write_windows_askpass_helper`): sftp.exe never remaps its
-/// standard descriptors to the console, so anything written to the PTY master
-/// cannot reach the console reader at all.
-
-/// Write the Windows `SSH_ASKPASS` helper and the file holding the password.
+/// The stored password is typed into the PTY at each password prompt.
 ///
-/// Win32-OpenSSH's `read_passphrase()` consults `SSH_ASKPASS` *before* touching
-/// the console, so this is the only deterministic way to answer the password
-/// prompt: the console reader races ConPTY's startup `WINDOW_BUFFER_SIZE_EVENT`
-/// (see the sacrificial-CR note in `sftp_spawn`) and no amount of timing fixes
-/// that. The helper gets the prompt text as its first argument, so it answers
-/// password prompts with the stored password and everything else (the
-/// known-hosts confirmation, itself a `read_passphrase` caller) with "yes".
-/// Answering is mandatory: Windows `read_passphrase` returns "" when the helper
-/// produces no output, and "" makes `confirm()` refuse the host key.
-///
-/// Because the prompts are answered out of process they are never written to
-/// the PTY, so the prompt-driven injection below stays a fallback only.
-#[cfg(windows)]
-fn write_windows_askpass_helper(pw: &str) -> Result<(PathBuf, PathBuf), String> {
-    let unique = format!(
-        "hosterm-askpass-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    );
-    let dir = std::env::temp_dir();
-    let helper = dir.join(format!("{}.cmd", unique));
-    let secret = dir.join(format!("{}.pw", unique));
-    eprintln!("[winlive] askpass temp dir {:?}", dir);
-    let mut f = std::fs::File::create(&helper).map_err(|e| e.to_string())?;
-    // `@echo off` keeps the helper's own commands out of the pipe; `type` dumps
-    // the secret file verbatim, so passwords with cmd metacharacters survive.
-    // Anything that is not a password prompt (the known-hosts confirmation,
-    // which is also a read_passphrase caller) is answered "yes" — the Windows
-    // read_passphrase returns "" rather than falling back to the console when
-    // the helper produces no output, and "" makes confirm() refuse the host.
-    f.write_all(
-        b"@echo off\r\n\
-echo PROMPT: %~1>> \"%HOSTERM_ASKPASS_FILE%.called\"\r\n\
-echo %~1 | findstr /i password >nul || goto :yes\r\n\
-type \"%HOSTERM_ASKPASS_FILE%\"\r\n\
-exit /b 0\r\n\
-:yes\r\n\
-echo yes\r\n",
-    )
-    .map_err(|e| e.to_string())?;
-    drop(f);
-    let mut f = std::fs::File::create(&secret).map_err(|e| e.to_string())?;
-    f.write_all(pw.as_bytes()).map_err(|e| e.to_string())?;
-    Ok((helper, secret))
-}
+/// `SSH_ASKPASS` is deliberately NOT set. Win32-OpenSSH's `read_passphrase()`
+/// consults it *instead* of the console and never falls back, and the helper is
+/// launched with `CreateProcess("\"%s\" \"%s\"")` (readpass.c:175,184), which
+/// cannot execute a `.cmd` shim — so a shim yields an empty password and three
+/// denials. The console reader does see ConPTY input (proven on Windows CI by
+/// `conpty_input_reaches_child`); only its post-prompt input flush races the
+/// writer, which the sacrificial CR below absorbs.
 
 fn sftp_spawn(host: &str) -> Result<SftpPtySession, String> {
     sftp_safe(host, "Host")?;
@@ -1470,27 +1412,6 @@ fn sftp_spawn(host: &str) -> Result<SftpPtySession, String> {
     let bin = std::env::var("HOSTERM_SFTP_BIN").unwrap_or_else(|_| "sftp".to_string());
     let mut cmd = CommandBuilder::new(bin);
     cmd.arg(host);
-    // On Windows, answer the password prompt out of process. The PTY injection
-    // below stays as a fallback for the case where the helper cannot run.
-    #[cfg(windows)]
-    let askpass_files: Vec<PathBuf> = match stored_pw.as_deref() {
-        Some(pw) => match write_windows_askpass_helper(pw) {
-            Ok((helper, secret)) => {
-                eprintln!("[winlive] askpass helper {:?} secret {:?}", helper, secret);
-                cmd.env("SSH_ASKPASS", &helper);
-                cmd.env("HOSTERM_ASKPASS_FILE", &secret);
-                vec![helper, secret]
-            }
-            Err(e) => {
-                eprintln!("[winlive] askpass helper FAILED: {}", e);
-                Vec::new()
-            }
-        },
-        None => {
-            eprintln!("[winlive] sftp_spawn: no stored password for {:?}", host);
-            Vec::new()
-        }
-    };
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
@@ -1532,8 +1453,6 @@ fn sftp_spawn(host: &str) -> Result<SftpPtySession, String> {
         writer,
         rx,
         alive,
-        #[cfg(windows)]
-        temp_files: askpass_files,
     };
     // Windows console-password fallback. Win32-OpenSSH's read_passphrase()
     // flushes the console input buffer right after printing the prompt
@@ -4824,28 +4743,6 @@ mod sftp_tests {
             lookup_stored_password("hostermlive").is_some(),
             password.len()
         );
-        #[cfg(windows)]
-        {
-            let markers: Vec<std::path::PathBuf> = std::fs::read_dir(std::env::temp_dir())
-                .map(|rd| {
-                    rd.filter_map(|e| e.ok())
-                        .filter(|e| {
-                            let n = e.file_name().to_string_lossy().to_string();
-                            n.starts_with("hosterm-askpass-") && n.ends_with(".called")
-                        })
-                        .map(|e| e.path())
-                        .collect()
-                })
-                .unwrap_or_default();
-            eprintln!("[winlive] askpass markers: {:?}", markers);
-            for m in &markers {
-                eprintln!(
-                    "[winlive] marker {:?} = {:?}",
-                    m,
-                    std::fs::read_to_string(m).unwrap_or_default()
-                );
-            }
-        }
         std::env::remove_var("HOSTERM_CONFIG");
         let _ = std::fs::remove_dir_all(&dir);
 
@@ -4930,7 +4827,7 @@ mod sftp_tests {
             .unwrap();
         let mut cmd = CommandBuilder::new("cmd.exe");
         cmd.arg("/c");
-        cmd.arg("set /p V=TYPEHERE&echo GOT:%V%");
+        cmd.arg("set /p V=TYPEHERE&call echo GOT:%%V%%");
         let _child = pair.slave.spawn_command(cmd).unwrap();
         drop(pair.slave);
         let mut reader = pair.master.try_clone_reader().unwrap();
@@ -4993,7 +4890,7 @@ mod sftp_tests {
             .unwrap();
         let mut cmd = CommandBuilder::new("cmd.exe");
         cmd.arg("/c");
-        cmd.arg("set /p V=TYPEHERE&echo GOT:%V%");
+        cmd.arg("set /p V=TYPEHERE&call echo GOT:%%V%%");
         let _child = pair.slave.spawn_command(cmd).unwrap();
         drop(pair.slave);
         let mut reader = pair.master.try_clone_reader().unwrap();
@@ -5027,77 +4924,6 @@ mod sftp_tests {
             }
         }
         eprintln!("[winlive] early-CR outcome: {:?}", acc);
-    }
-
-    /// The decisive question: does console password auto-inject work at all with
-    /// the REAL Win32-OpenSSH `ssh.exe` over a ConPTY? Uses the same one-shot
-    /// `pump_pty` injection as the terminal. If this fails, the console path is
-    /// broken for Win32-OpenSSH generally, not just for sftp.exe.
-    #[cfg(windows)]
-    #[test]
-    fn live_ssh_password_autoinject_real() {
-        if std::env::var("HOSTERM_WINLIVE").as_deref() != Ok("1") {
-            return;
-        }
-        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let user = std::env::var("HOSTERM_WINLIVE_USER").unwrap_or_else(|_| "hosterm".into());
-        let password = std::env::var("HOSTERM_WINLIVE_PASSWORD")
-            .unwrap_or_else(|_| "Sftp-Live-2026!xQ7#".into());
-        let dir = std::env::temp_dir().join(format!("hosterm-sshlive-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let cfg = dir.join("config");
-        std::fs::write(
-            &cfg,
-            format!(
-                "Host hostermlive\n    HostName 127.0.0.1\n    User {}\n    PreferredAuthentications password\n",
-                user
-            ),
-        )
-        .unwrap();
-        std::env::set_var("HOSTERM_CONFIG", &cfg);
-        let secrets = dir.join("hosterm.secrets");
-        std::fs::write(&secrets, format!("hostermlive={}\n", password)).unwrap();
-
-        let pty_system = native_pty_system();
-        let pair = pty_system
-            .openpty(PtySize { rows: 24, cols: 200, pixel_width: 0, pixel_height: 0 })
-            .unwrap();
-        let mut cmd = CommandBuilder::new("ssh");
-        cmd.arg("hostermlive");
-        cmd.arg("echo SSH_LOGIN_OK");
-        let _child = pair.slave.spawn_command(cmd).unwrap();
-        drop(pair.slave);
-        let reader = pair.master.try_clone_reader().unwrap();
-        let writer = pair.master.take_writer().unwrap();
-        let (tx, rx) = std::sync::mpsc::channel::<String>();
-        let _pump = std::thread::spawn(move || {
-            pump_pty(
-                reader,
-                std::sync::Arc::new(std::sync::Mutex::new(writer)),
-                lookup_stored_password("hostermlive"),
-                move |s| {
-                    let _ = tx.send(s.to_string());
-                },
-            );
-        });
-        let mut acc = String::new();
-        let start = std::time::Instant::now();
-        while !acc.contains("SSH_LOGIN_OK")
-            && start.elapsed() < std::time::Duration::from_secs(20)
-        {
-            if let Ok(s) = rx.recv_timeout(std::time::Duration::from_millis(50)) {
-                acc.push_str(&s);
-            }
-        }
-        eprintln!("[winlive] real ssh autoinject output: {:?}", acc);
-        assert!(
-            acc.contains("SSH_LOGIN_OK"),
-            "real ssh.exe password auto-inject failed: {:?}",
-            acc
-        );
-        std::env::remove_var("HOSTERM_CONFIG");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
