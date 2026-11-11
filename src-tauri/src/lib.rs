@@ -1438,6 +1438,21 @@ fn sftp_spawn(host: &str) -> Result<SftpPtySession, String> {
 
     let sess = SftpPtySession { master: pair.master, writer, rx, alive };
     let stored_pw = lookup_stored_password(host);
+    // Win32-OpenSSH's read_passphrase() flushes the console input buffer right
+    // after printing the password prompt: `while (_kbhit()) _getch();`.
+    // `_getch()` discards non-key records and blocks for the next key event, so
+    // when ConPTY has posted a WINDOW_BUFFER_SIZE_EVENT (it does, at startup)
+    // the flush swallows the first character of whatever we type — the stored
+    // password arrived one character short and sshd rejected it. A sacrificial
+    // CR written before the prompt is always eaten by that flush, so the real
+    // password is read intact. Windows-only: on Linux the same CR would be
+    // consumed by sftp as an empty command line.
+    #[cfg(windows)]
+    if stored_pw.is_some() {
+        let mut w = sess.writer.lock().unwrap();
+        let _ = w.write_all(b"\r");
+        let _ = w.flush();
+    }
     let timeout = if stored_pw.is_some() { 30 } else { 10 };
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout);
     let spawned_at = std::time::Instant::now();
@@ -4654,6 +4669,11 @@ mod sftp_tests {
 
         let out = run_sftp_op("hostermlive", "ls -la\n");
 
+        eprintln!(
+            "[winlive] stored password present: {} (len {})",
+            lookup_stored_password("hostermlive").is_some(),
+            password.len()
+        );
         std::env::remove_var("HOSTERM_CONFIG");
         let _ = std::fs::remove_dir_all(&dir);
 

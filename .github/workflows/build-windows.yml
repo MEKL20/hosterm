@@ -183,7 +183,17 @@ jobs:
           Set-Service -Name sshd -StartupType 'Automatic'
           Start-Service sshd
           $pw = ConvertTo-SecureString 'Hosterm!2026' -AsPlainText -Force
-          New-LocalUser -Name 'hosterm' -Password $pw -FullName 'Hosterm' -ErrorAction SilentlyContinue
+          if (Get-LocalUser -Name 'hosterm' -ErrorAction SilentlyContinue) {
+            Write-Host 'user hosterm already exists -> resetting password'
+            Set-LocalUser -Name 'hosterm' -Password $pw
+          } else {
+            New-LocalUser -Name 'hosterm' -Password $pw -FullName 'Hosterm' -PasswordNeverExpires $true
+          }
+          $u = Get-LocalUser -Name 'hosterm'
+          Write-Host "user hosterm: Enabled=$($u.Enabled) PasswordRequired=$($u.PasswordRequired) PasswordLastSet=$($u.PasswordLastSet)"
+          Add-Type -AssemblyName System.DirectoryServices.AccountManagement
+          $pc = New-Object System.DirectoryServices.AccountManagement.PrincipalContext([System.DirectoryServices.AccountManagement.ContextType]::Machine)
+          Write-Host "ValidateCredentials(hosterm)=$($pc.ValidateCredentials('hosterm', 'Hosterm!2026'))"
           New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.ssh" | Out-Null
           @"
           Host hostermlive
