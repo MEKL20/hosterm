@@ -216,7 +216,12 @@ jobs:
       # the suite lives in hosterm_lib). A red test fails the build before
       # any installer is produced.
       - name: Rust lib tests (cargo test --lib)
-        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --lib
+          # The Windows live test writes its account/logon probe here; cargo
+          # captures a passing test's stderr, so surface it explicitly.
+          echo "--- hosterm logon probe ---"
+          cat "$TEMP/hosterm-logon-probe.txt" 2>/dev/null || echo "(no probe file)"
         shell: bash
         env:
           HOSTERM_WINLIVE: 1

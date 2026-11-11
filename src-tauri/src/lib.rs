@@ -4863,7 +4863,7 @@ $eN = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
         )
         .ok();
         let probe = || -> String {
-            std::process::Command::new("powershell")
+            match std::process::Command::new("powershell")
                 .arg("-NoProfile")
                 .arg("-ExecutionPolicy")
                 .arg("Bypass")
@@ -4874,10 +4874,17 @@ $eN = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
                 .arg("-Password")
                 .arg(&password)
                 .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-                .unwrap_or_default()
+            {
+                Ok(o) => format!(
+                    "out={:?} err={:?}",
+                    String::from_utf8_lossy(&o.stdout).trim(),
+                    String::from_utf8_lossy(&o.stderr).trim()
+                ),
+                Err(e) => format!("probe failed to run: {e}"),
+            }
         };
-        eprintln!("[winlive] logon probe (before): {:?}", probe());
+        let before = probe();
+        eprintln!("[winlive] logon probe (before): {}", before);
         // Clear UF_PASSWD_NOTREQD, then make sure both logon rights are held.
         let _ = std::process::Command::new("net")
             .arg("user")
@@ -4890,7 +4897,19 @@ $eN = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
             .arg(&user)
             .arg("/add")
             .output();
-        eprintln!("[winlive] logon probe (after): {:?}", probe());
+        let after = probe();
+        eprintln!("[winlive] logon probe (after): {}", after);
+        // Leave the evidence where the CI log can reach it even when the test
+        // passes (cargo captures a passing test's stderr).
+        let _ = std::fs::write(
+            std::env::temp_dir().join("hosterm-logon-probe.txt"),
+            format!("before: {before}\nafter: {after}\n"),
+        );
+        assert!(
+            after.contains("interactive=True") || after.contains("network=True"),
+            "CI fixture account still cannot log on: {}",
+            after
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

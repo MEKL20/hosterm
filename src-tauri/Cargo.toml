@@ -4,6 +4,10 @@ version = "0.15.2"
 description = "SSH client desktop, source of truth = ~/.ssh/config"
 authors = ["MEKL20"]
 edition = "2021"
+# `src/bin/hosterm-askpass.rs` adds a second bin target; without this Tauri's
+# bundler cannot tell which one is the app and the build fails with
+# "failed to find main binary, make sure you have a `package > default-run`".
+default-run = "hosterm"
 
 [lib]
 name = "hosterm_lib"
