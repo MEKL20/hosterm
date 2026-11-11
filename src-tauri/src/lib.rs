@@ -1505,10 +1505,13 @@ fn sftp_spawn(host: &str) -> Result<SftpPtySession, String> {
             if let Some(pw) = stored_pw.as_deref() {
                 #[cfg(windows)]
                 {
-                    if pending_pw.is_some() {
-                        // The previous sacrificial CR was consumed as the
-                        // password: the flush is not blocking. Send the real
-                        // password directly from now on.
+                    // The flush that follows the prompt drains every key event
+                    // already queued, so the first answer must be a throwaway
+                    // CR; the real password goes out after it. From the second
+                    // prompt on we already know the flush is not blocking, so
+                    // the real password is sent directly (a sacrificial here
+                    // would itself be taken as the password).
+                    if prompts_seen >= 2 || pending_pw.is_some() {
                         sacrificial = false;
                         pending_pw = None;
                     }
@@ -1524,6 +1527,14 @@ fn sftp_spawn(host: &str) -> Result<SftpPtySession, String> {
                         let _ = w.flush();
                         last_pw_write = Some(std::time::Instant::now());
                     }
+                    #[cfg(windows)]
+                    eprintln!(
+                        "[winlive] pw prompt #{} at t={:?} sacrificial={} pending={}",
+                        prompts,
+                        spawned_at.elapsed(),
+                        sacrificial,
+                        pending_pw.is_some()
+                    );
                 }
                 #[cfg(not(windows))]
                 {
@@ -1598,6 +1609,12 @@ fn sftp_spawn(host: &str) -> Result<SftpPtySession, String> {
         }
         if std::time::Instant::now() >= deadline {
             sess.alive.store(false, Ordering::SeqCst);
+            #[cfg(windows)]
+            eprintln!(
+                "[winlive] sftp_spawn gave up at t={:?}; full output: {:?}",
+                spawned_at.elapsed(),
+                sess.rx.snapshot()
+            );
             return Err(format!(
                 "sftp: no prompt after login (wrong password or host unreachable){}",
                 pty_tail_note(&sess.rx)
@@ -4871,7 +4888,147 @@ mod sftp_tests {
             }
         }
         eprintln!("[winlive] input probe post: {:?}", acc);
-        assert!(acc.contains("GOT:hello"), "ConPTY input was not delivered: {:?}", acc);
+        // %V% is only expanded at run time by `call echo`, so the text we
+        // typed must show up after `GOT:`.
+        assert!(
+            acc.contains("GOT:") && acc.contains("hello"),
+            "ConPTY input was not delivered: {:?}",
+            acc
+        );
+    }
+
+    /// `set /p` reads the COOKED console line buffer (ReadConsole). The SFTP
+    /// password path instead uses `_getch()` (ReadConsoleInput) via Win32-OpenSSH
+    /// `read_passphrase()`, so prove that ConPTY feeds THAT API too. `pause`
+    /// waits on a key event from the raw console input queue; if our write
+    /// reaches it, `RESUMED` is printed.
+    #[cfg(windows)]
+    #[test]
+    fn conpty_readconsoleinput_reaches_child() {
+        if std::env::var("HOSTERM_WINLIVE").as_deref() != Ok("1") {
+            return;
+        }
+        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize { rows: 24, cols: 200, pixel_width: 0, pixel_height: 0 })
+            .unwrap();
+        let mut cmd = CommandBuilder::new("cmd.exe");
+        cmd.arg("/c");
+        cmd.arg("pause&echo RESUMED");
+        let _child = pair.slave.spawn_command(cmd).unwrap();
+        drop(pair.slave);
+        let mut reader = pair.master.try_clone_reader().unwrap();
+        let mut writer = pair.master.take_writer().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 1024];
+            let mut acc = String::new();
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        acc.push_str(&String::from_utf8_lossy(&buf[..n]));
+                        if tx.send(acc.clone()).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        let mut acc = String::new();
+        let start = std::time::Instant::now();
+        while !acc.contains("Press any key") && start.elapsed() < std::time::Duration::from_secs(10) {
+            if let Ok(s) = rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                acc = s;
+            }
+        }
+        eprintln!("[winlive] readconsoleinput probe pre: {:?}", acc);
+        assert!(
+            acc.contains("Press any key"),
+            "cmd.exe pause prompt never appeared: {:?}",
+            acc
+        );
+        use std::io::Write as _;
+        let _ = writer.write_all(b"x\r");
+        let _ = writer.flush();
+        let start = std::time::Instant::now();
+        while !acc.contains("RESUMED") && start.elapsed() < std::time::Duration::from_secs(10) {
+            if let Ok(s) = rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                acc = s;
+            }
+        }
+        eprintln!("[winlive] readconsoleinput probe post: {:?}", acc);
+        assert!(
+            acc.contains("RESUMED"),
+            "ConPTY input never reached the raw console input queue: {:?}",
+            acc
+        );
+    }
+
+    /// `choice.exe` consumes individual KEY_EVENTs from the raw console input
+    /// queue (ReadConsoleInput), the same API Win32-OpenSSH's `_getch()` uses.
+    /// `/t 5 /d y` makes it fall back to `y` (errorlevel 2) when no key arrives,
+    /// so RC1 after we write `x` proves ConPTY feeds ReadConsoleInput too.
+    #[cfg(windows)]
+    #[test]
+    fn conpty_choice_receives_input() {
+        if std::env::var("HOSTERM_WINLIVE").as_deref() != Ok("1") {
+            return;
+        }
+        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize { rows: 24, cols: 200, pixel_width: 0, pixel_height: 0 })
+            .unwrap();
+        let mut cmd = CommandBuilder::new("cmd.exe");
+        cmd.arg("/c");
+        cmd.arg("choice /c xy /n /t 5 /d y /m PICK&if errorlevel 2 (echo RC2) else if errorlevel 1 (echo RC1) else (echo RC0)");
+        let _child = pair.slave.spawn_command(cmd).unwrap();
+        drop(pair.slave);
+        let mut reader = pair.master.try_clone_reader().unwrap();
+        let mut writer = pair.master.take_writer().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 1024];
+            let mut acc = String::new();
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        acc.push_str(&String::from_utf8_lossy(&buf[..n]));
+                        if tx.send(acc.clone()).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        let mut acc = String::new();
+        let start = std::time::Instant::now();
+        while !acc.contains("PICK") && start.elapsed() < std::time::Duration::from_secs(10) {
+            if let Ok(s) = rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                acc = s;
+            }
+        }
+        eprintln!("[winlive] choice probe pre: {:?}", acc);
+        assert!(acc.contains("PICK"), "choice.exe prompt never appeared: {:?}", acc);
+        use std::io::Write as _;
+        let _ = writer.write_all(b"x");
+        let _ = writer.flush();
+        let start = std::time::Instant::now();
+        while !acc.contains("RC1") && !acc.contains("RC2") && start.elapsed() < std::time::Duration::from_secs(10)
+        {
+            if let Ok(s) = rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                acc = s;
+            }
+        }
+        eprintln!("[winlive] choice probe post: {:?}", acc);
+        assert!(
+            acc.contains("RC1"),
+            "choice.exe never saw the key event (ReadConsoleInput dead under ConPTY?): {:?}",
+            acc
+        );
     }
 
     /// Does input written IMMEDIATELY after spawn survive, or does ConPTY drop
