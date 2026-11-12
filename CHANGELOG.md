@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Windows releases are currently **unsigned** (Authenticode signing postponed —
 see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
+## [0.15.6] - 2026-11-12
+
+### Changed
+- CI: bump GitHub Actions — checkout v7.0.1, setup-node v7.1.0, upload-artifact v7.0.2,
+  download-artifact v8.0.2, softprops/action-gh-release v3.0.3. No application changes.
+
 ## [0.15.5] - 2026-11-12
 
 ### Fixed
