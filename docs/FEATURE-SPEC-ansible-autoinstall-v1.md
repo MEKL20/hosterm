@@ -10,7 +10,7 @@
 | Field | Value |
 |---|---|
 | Author | crew-coding-pm |
-| Status | Speced — awaiting nano re-verify → architect SDD. No code, no commits (PM = doc only). |
+| Status | Speced — nano re-verified (pushed `4b87a97`); **MEKL approved OQ-AI2 12 Nov 2026** → architect SDD. No code, no commits (PM = doc only). |
 | Baseline | main `7621b72` (post-v0.15.4); verify loop STATE.md: re-measure at dispatch (cargo/build/smoke) |
 | Source | `docs/FEATURE-SPEC-ansible-v1.md` §10 item 1 (wave-2 parking lot) · `docs/PRD.md` §7 parking-lot row |
 | Non-negotiables | spawn OS **real installer** (pipx/brew/apt-in-WSL) via PTY lokal, pola IDENTIK `ansible_run`/UC11 · argv langsung, TIDAK `sh -c`/shell string (INV-14) · secrets tak pernah lewat argv/env/logs/UI (INV-28/29/31, ADR-A2) · `host_key_checking = True` tetap (ADR-A1) · install HANYA atas klik eksplisit user · nol dependency baru tanpa justifikasi |
@@ -323,9 +323,9 @@ block run  ⟺  ansible_missing(PATH+probe dirs)  &&  !(wsl_installed && wsl_dis
 - **OQ-AI1 (DrvFs key permission):** terima kegagalan terdokumentasi (ADR-AI4), atau tambah
   `StrictModes no` untuk run WSL, atau copy key on-demand (0600 + cleanup) di dalam WSL?
   Rekomendasi: **v1 = kegagalan terdokumentasi**; putuskan v2 bersama MEKL.
-- **OQ-AI2 (`wsl --user root`):** konfirmasi MEKL nyaman dengan root-in-WSL untuk install
-  (password-free di image default). Alternatif jika tidak: `sudo -n` (hanya jalan di distro
-  ber-passwordless-sudo) atau manual-only.
+- **OQ-AI2 (`wsl --user root`) — RESOLVED 12 Nov 2026, MEKL terima:** root-in-WSL dipakai untuk
+  install (password-free di image default). Alternatif `sudo -n` / manual-only tertutup.
+  Dasar: root WSL tidak bisa melampaui permission user Windows (ADR-AI3).
 - **OQ-AI3 (pipx hilang di Linux):** terima fallback manual-only, atau bootstrap pipx venv
   terisolasi di app-data? Rekomendasi: **manual-only v1** — bootstrap rapuh di distro PEP 668
   yang tak punya `python3-venv`.
