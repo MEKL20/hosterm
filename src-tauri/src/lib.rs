@@ -2179,6 +2179,8 @@ fn pump_pty(
     let mut sacrificial = true;
     #[cfg(windows)]
     let mut grace_cancel: Option<Arc<AtomicBool>> = None;
+    #[cfg(windows)]
+    let mut grace_handle: Option<std::thread::JoinHandle<()>> = None;
     loop {
         match reader.read(&mut buf) {
             Ok(0) => {
@@ -2237,7 +2239,7 @@ fn pump_pty(
                                     let w2 = Arc::clone(&writer);
                                     let pw2 = pw.to_string();
                                     let c2 = Arc::clone(&cancel);
-                                    thread::spawn(move || {
+                                    grace_handle = Some(thread::spawn(move || {
                                         thread::sleep(pw_grace);
                                         let mut w = w2.lock().unwrap();
                                         if !c2.load(Ordering::SeqCst) {
@@ -2245,7 +2247,7 @@ fn pump_pty(
                                             let _ = w.write_all(b"\r");
                                             let _ = w.flush();
                                         }
-                                    });
+                                    }));
                                     grace_cancel = Some(cancel);
                                 } else {
                                     let mut w = writer.lock().unwrap();
@@ -2269,6 +2271,13 @@ fn pump_pty(
                 on_chunk(&s);
             }
         }
+    }
+    // The grace thread writes the real password after the post-prompt flush
+    // window; join it so a caller that observes the writer after pump_pty
+    // returns sees the completed injection rather than a race with the sleep.
+    #[cfg(windows)]
+    if let Some(h) = grace_handle.take() {
+        let _ = h.join();
     }
 }
 
@@ -3258,6 +3267,10 @@ mod utf8_stream_tests {
 
     /// The fix must not disturb the OpenSSH password-injection contract: the
     /// prompt is detected once and the secret written exactly once.
+    ///
+    /// Windows: the post-prompt flush mitigation answers the first prompt with
+    /// a sacrificial CR and sends the real password after the grace, so the
+    /// sink is `\r` + the secret. The secret itself is still written once.
     #[test]
     fn pump_pty_still_injects_password_once() {
         let data: &[u8] = b"user@host's password: ";
@@ -3269,6 +3282,12 @@ mod utf8_stream_tests {
         pump_pty(Box::new(reader), writer, Some("hunter2".into()), |s| out.push_str(s));
         assert_eq!(out, "user@host's password: ");
         let injected = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
+        #[cfg(windows)]
+        assert_eq!(
+            injected, "\rhunter2\r",
+            "Windows: sacrificial CR then the password exactly once"
+        );
+        #[cfg(not(windows))]
         assert_eq!(injected, "hunter2\r", "password must be injected exactly once");
     }
 }
