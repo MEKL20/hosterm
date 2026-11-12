@@ -2148,7 +2148,7 @@ const PW_PROMPT: &[u8] = b"'s password:";
 
 /// Pump a PTY: forward output chunks through `on_chunk`, watching for
 /// OpenSSH's password prompt when `auto_pw` is set, injecting the secret
-/// once into `writer`. Shared by pty_spawn and the live test module.
+/// into `writer`. Shared by pty_spawn and the live test module.
 ///
 /// Windows: Win32-OpenSSH's console password reader flushes the console
 /// input buffer right after printing its prompt (`while (_kbhit())
