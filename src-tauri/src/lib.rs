@@ -1245,6 +1245,22 @@ fn run_sftp_batch(host: &str, script: &str) -> Result<(String, String, bool), St
 // The PTY master reader BLOCKS, so a pump thread drains it into a shared
 // buffer; waiters poll that buffer with a real deadline.
 
+/// Byte offset of the first occurrence of `needle` in `haystack`.
+///
+/// The search runs on RAW bytes, never on a lossy-decoded `String`: every
+/// invalid byte becomes a 3-byte U+FFFD in the lossy string while the buffer
+/// keeps the original 1 byte, so a lossy-string index cannot address the raw
+/// buffer (it inflates and can exceed `haystack.len()` -> panic, or drain the
+/// wrong span). An ASCII needle can never match inside a multi-byte UTF-8
+/// sequence (continuation bytes are >= 0x80), so byte-search is equivalent for
+/// the prompt needles used here.
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
 struct SftpBuf {
     data: Mutex<Vec<u8>>,
     eof: AtomicBool,
@@ -1254,15 +1270,16 @@ impl SftpBuf {
     /// Wait until `needle` appears; return everything up to and including it.
     /// Returns None on timeout or EOF-without-match.
     fn wait_for(&self, needle: &str, timeout: std::time::Duration) -> Option<String> {
+        let needle = needle.as_bytes();
         let deadline = std::time::Instant::now() + timeout;
         loop {
             let matched = {
                 let mut d = self.data.lock().unwrap();
-                let s = String::from_utf8_lossy(&d).to_string();
-                match s.find(needle) {
+                match find_subslice(&d, needle) {
                     Some(pos) => {
-                        let consumed = s[..pos + needle.len()].to_string();
-                        d.drain(..pos + needle.len());
+                        let end = pos + needle.len();
+                        let consumed = String::from_utf8_lossy(&d[..end]).to_string();
+                        d.drain(..end);
                         Some(consumed)
                     }
                     None => {
@@ -3174,6 +3191,78 @@ mod utf8_stream_tests {
         assert_eq!(out, "user@host's password: ");
         let injected = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
         assert_eq!(injected, "hunter2\r", "password must be injected exactly once");
+    }
+}
+
+#[cfg(test)]
+mod sftp_buf_tests {
+    use super::*;
+
+    fn buf(bytes: &[u8]) -> SftpBuf {
+        SftpBuf {
+            data: Mutex::new(bytes.to_vec()),
+            eof: AtomicBool::new(false),
+        }
+    }
+
+    const PROMPT: &str = "sftp> ";
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_millis(200);
+
+    /// Plain valid input still matches and drains through the needle.
+    #[test]
+    fn wait_for_valid_input_drains_through_needle() {
+        let b = buf(b"remote pwd\r\n/home/ubuntu\r\nsftp> ");
+        let got = b.wait_for(PROMPT, TIMEOUT).expect("needle must be found");
+        assert_eq!(got, "remote pwd\r\n/home/ubuntu\r\nsftp> ");
+        assert!(b.snapshot().is_empty(), "the whole buffer is the consumed span");
+    }
+
+    /// Invalid bytes BEFORE the needle (a non-UTF-8 remote filename). The old
+    /// lossy-string index was inflated by 2 bytes per invalid byte, so the drain
+    /// ran past the needle and swallowed trailing output.
+    #[test]
+    fn wait_for_invalid_bytes_before_needle_drains_exact_span() {
+        let b = buf(b"caf\xFF\xe9sftp> pwd");
+        let got = b.wait_for(PROMPT, TIMEOUT).expect("needle must be found");
+        assert_eq!(got, "caf\u{FFFD}\u{FFFD}sftp> ");
+        assert_eq!(b.snapshot(), "pwd", "drain must stop exactly at the needle");
+    }
+
+    /// Invalid byte INSIDE the consumed window (immediately before the needle):
+    /// the inflated index ran past the match end and ate the following byte.
+    #[test]
+    fn wait_for_invalid_byte_inside_consumed_window() {
+        let b = buf(b"\xFFsftp> pwd");
+        let got = b.wait_for(PROMPT, TIMEOUT).expect("needle must be found");
+        assert_eq!(got, "\u{FFFD}sftp> ");
+        assert_eq!(b.snapshot(), "pwd");
+    }
+
+    /// Buffer ends at the needle: the old lossy index (3 + 6 = 9) exceeded the
+    /// raw length (7) and `drain(..9)` panicked. Must not panic.
+    #[test]
+    fn wait_for_invalid_byte_before_needle_at_buffer_end_does_not_panic() {
+        let b = buf(b"\xFFsftp> ");
+        let got = b.wait_for(PROMPT, TIMEOUT).expect("needle must be found");
+        assert_eq!(got, "\u{FFFD}sftp> ");
+        assert!(b.snapshot().is_empty());
+    }
+
+    /// The needle arriving in a later chunk is still matched, and the invalid
+    /// bytes already buffered do not shift the drain.
+    #[test]
+    fn wait_for_invalid_bytes_then_needle_completed_by_later_chunk() {
+        let b = Arc::new(buf(b"caf\xFF"));
+        let writer = Arc::clone(&b);
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            writer.data.lock().unwrap().extend_from_slice(b"\xe9sftp> pwd");
+        });
+        let got = b
+            .wait_for(PROMPT, std::time::Duration::from_millis(1000))
+            .expect("needle must be found");
+        assert_eq!(got, "caf\u{FFFD}\u{FFFD}sftp> ");
+        assert_eq!(b.snapshot(), "pwd");
     }
 }
 
