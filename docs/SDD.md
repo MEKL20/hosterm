@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Author | crew-coding-architect |
-| Inputs | `docs/PRD.md` (requirements authoritative), `docs/archive/SDD-hosterm-v1.md` (basis), `docs/SDD-signing-updater.md` (folded into §2.2/§7 ADR-9..12), `docs/EPIC-TSD-redesign-arus-v1.md`, `docs/archive/FEATURE-SPEC-wave-2-draft.md` §4/§5, `docs/FEATURE-SPEC-fleet-run-v1.md` (drives the §12 Fleet Run v1 addendum + ADR-13..16 + INV-14..19), `docs/STATE.md`, `docs/SPIKE-csp-findings.md`, `src-tauri/src/lib.rs`, `src/main.ts`, `src-tauri/tauri.conf.json` |
+| Inputs | `docs/PRD.md` (requirements authoritative), `docs/archive/SDD-hosterm-v1.md` (basis), `docs/SDD-signing-updater.md` (folded into §2.2/§7 ADR-9..12), `docs/EPIC-TSD-redesign-arus-v1.md`, `docs/archive/FEATURE-SPEC-wave-2-draft.md` §4/§5, `docs/FEATURE-SPEC-fleet-run-v1.md` (drives the §12 Fleet Run v1 addendum + ADR-13..16 + INV-14..19), `docs/STATE.md`, `docs/SPIKE-csp-findings.md`, `src-tauri/src/lib.rs`, `src/main.ts`, `src-tauri/tauri.conf.json`, `docs/FEATURE-SPEC-ansible-autoinstall-v1.md` (drives the §15 Ansible auto-install addendum + ADR-AI1..AI7 + INV-32..35) |
 | Status | Draft — for MEKL review; downstream input to lead's TSD. Supersedes SDD v1 (kept as history, never edited). |
 | Scope | Whole product as shipped today (v0.10.0 + W2-A + U1) plus committed in-flight work: wave-2 signing/updater (M2/M3, designed, not implemented) and UI redesign "Arus" (U1 landed, U2–U9 pending). ADRs are harvested, not invented. |
 | Version constraint | No commits by architect; this document only |
@@ -938,7 +938,7 @@ Every `[ASSUME-*]` below is a reversible default nano locked 31 Okt; none is a c
 
 ---
 
-*Sources: docs/PRD.md, docs/archive/SDD-hosterm-v1.md, docs/SDD-signing-updater.md, docs/EPIC-TSD-redesign-arus-v1.md, docs/archive/FEATURE-SPEC-wave-2-draft.md, docs/FEATURE-SPEC-fleet-run-v1.md, docs/STATE.md, docs/SPIKE-csp-findings.md, src-tauri/src/lib.rs, src/main.ts, qa-reports/headless-smoke.mjs, src-tauri/tauri.conf.json (all read 2026-10-19). Note: PRD-hosterm-v2.md landed mid-authoring from pm; header/flows reconciled against it. §12 addendum + ADR-13..16 + INV-14..19 authored for card t_a367888f (Fleet Run Unit 0). §13 Dusk addendum + ADR-18..22 + INV-21..26 authored for card t_60df4386 (Redesign Dusk v1 SDD), derived from docs/FEATURE-SPEC-redesign-dusk-v1.md + docs/UX/prototypes/proto-a-dusk{,-settings}.html + verification-report.json (all read 2026-10-31). §14 Ansible v1 addendum + ADR-A1..A3 + INV-28..31 authored for card t_ed2de8f6 (Ansible v1 SDD), derived FROM docs/FEATURE-SPEC-ansible-v1.md (commit 9dae0b1, nano-verified + MEKL-confirmed 2026-11-05) + live tree src-tauri/src/lib.rs (local_pty_spawn:1768, check_binaries:1901) + src/main.ts (fleet group-derive) (all read 2026-11-05).*
+*Sources: docs/PRD.md, docs/archive/SDD-hosterm-v1.md, docs/SDD-signing-updater.md, docs/EPIC-TSD-redesign-arus-v1.md, docs/archive/FEATURE-SPEC-wave-2-draft.md, docs/FEATURE-SPEC-fleet-run-v1.md, docs/STATE.md, docs/SPIKE-csp-findings.md, src-tauri/src/lib.rs, src/main.ts, qa-reports/headless-smoke.mjs, src-tauri/tauri.conf.json (all read 2026-10-19). Note: PRD-hosterm-v2.md landed mid-authoring from pm; header/flows reconciled against it. §12 addendum + ADR-13..16 + INV-14..19 authored for card t_a367888f (Fleet Run Unit 0). §13 Dusk addendum + ADR-18..22 + INV-21..26 authored for card t_60df4386 (Redesign Dusk v1 SDD), derived from docs/FEATURE-SPEC-redesign-dusk-v1.md + docs/UX/prototypes/proto-a-dusk{,-settings}.html + verification-report.json (all read 2026-10-31). §14 Ansible v1 addendum + ADR-A1..A3 + INV-28..31 authored for card t_ed2de8f6 (Ansible v1 SDD), derived FROM docs/FEATURE-SPEC-ansible-v1.md (commit 9dae0b1, nano-verified + MEKL-confirmed 2026-11-05) + live tree src-tauri/src/lib.rs (local_pty_spawn:1768, check_binaries:1901) + src/main.ts (fleet group-derive) (all read 2026-11-05). §15 Ansible auto-install v1 addendum + ADR-AI1..AI7 + INV-32..35 authored for card t_04709068 (Ansible auto-install SDD), derived FROM docs/FEATURE-SPEC-ansible-autoinstall-v1.md (spec commit `4b87a97` + OQ-AI2 lock `b22fdc5`, MEKL-approved 2026-11-12) + live tree src-tauri/src/lib.rs (PtyState/PtySession/NEXT_ID/pump_pty/pty_kill; binaries_missing/check_binaries/ansible_missing/check_ansible/ansible_run/build_ansible_argv) + src/main.ts (ansState/ansRefreshCheck/`pty://exit` handler) (all read 2026-11-12).*
 
 ---
 
@@ -1239,7 +1239,618 @@ lead settles in the TSD — none change the contract (§14.4), the invariants (�
 
 ### 14.11 Wave-2 parking lot (NOT designed — carried from spec §10)
 
-1. Auto-install Ansible from inside the app (pipx/apt/brew on Unix, WSL on Windows).
+1. Auto-install Ansible from inside the app (pipx/apt/brew on Unix, WSL on Windows) — **DESIGNED, see §15**.
 2. Playbook from a private Git repo (adds an OAuth/token surface).
 3. Password-host Ansible runs (the no-expose secret feed — architect spike owed, ADR-A2).
 4. Ad-hoc module runs, Vault editing from the UI, rolling/serial with a failure budget.
+
+## 15. Ansible auto-install v1 (addendum — installer pipeline, WSL invocation, frozen IPC contract)
+
+> Architect addendum (card t_04709068, 12 Nov 2026), derived FROM
+> `docs/FEATURE-SPEC-ansible-autoinstall-v1.md` (spec commit `4b87a97`; OQ-AI2 lock commit
+> `b22fdc5`, MEKL-approved 2026-11-12). **Design-first lane:** the spec's scope lock (§0), its
+> LOCKED Clarifying-Question answers (§1), its ADR-AI1..AI4 (§7) and its NFR-AI1..AI8 (§9) are
+> CLOSED — this section designs the mechanics only and re-opens no product decision. **OQ-AI2 is
+> CLOSED** (root-in-WSL for the in-distro install, approved 12 Nov 2026) and is carried as a fact.
+> This is an addendum to §14 (Ansible v1), not a replacement: §14's IPC inventory, invariants and
+> ADRs stay in force; §15 extends them. Downstream consumer: lead's TSD.
+>
+> **Numbering note.** The brief asked for a subsection under §14. This document's own convention
+> for a feature addendum is a top-level `##` section (§12 Fleet Run, §13 Dusk); auto-install ships
+> its own ADR range (ADR-AI1..AI7), invariant range (INV-32..35) and NFR set, so it lands as the
+> sibling section **§15**, with a cross-reference from §14.11. Nothing else in §14 is edited.
+>
+> **Relationship to `docs/tsd/ansible-v1.md`.** That TSD builds §14 (the runner). §15.6 changes
+> `ansible_run`'s *internals* (launcher resolution, cwd, path translation) without changing its IPC
+> payload — the lead carries those deltas into the runner TSD's §4 contract reproduction, and writes
+> the auto-install TSD from §15.
+
+### 15.1 Constraints honored (trace)
+
+| Constraint | Source | Honored at |
+|---|---|---|
+| No new Rust/JS dependency | NFR-AI1 | §15.4/§15.5 use std + the existing `portable-pty`/`tauri` stack; no `Cargo.toml`/`package.json` change |
+| No bundled Python/Ansible | NFR-AI1 | install spawns the OS package manager only (`pipx`/`brew`/`apt`); nothing is shipped |
+| pipx/brew are the only one-click installers | ADR-AI1 | `resolve_install_plan()` (§15.4) |
+| Install only on explicit user click | FR-AI9 | §15.7 — `ansible_install` is invoked from a click handler only; never on panel open or launch |
+| No root escalation from the app | §0 / ADR-AI3 | root only inside the WSL distro via `wsl --user root`; the host process stays the user |
+| No shell interpreter | INV-14 | every spawn is an argv array; `wsl --exec` bypasses the distro shell |
+| No secret in any payload | INV-28/29/31 | install/probe requests carry no host or secret; the install env adds nothing |
+| `HOSTERM_ANSIBLE_BIN` mirrors `HOSTERM_SFTP_BIN` | §2.2.3 | §15.6 launcher resolution |
+| Panel-open checks stay read-only, 0 spawn | NFR-AI2 | §15.3 — `check_ansible` keeps its 0-spawn guarantee; probe dirs are static |
+| Console renders via `textContent` | ADR-8 | §15.7 — installer output is untrusted bytes |
+
+### 15.2 Architecture
+
+Two units, one shared mechanism.
+
+- **Unit A — one-click installer pipeline (FR-AI1..AI9).** A pure plan resolver picks the installer
+  (`pipx` → `python3 -m pipx` on Linux, `brew` on macOS, `apt` inside WSL on Windows). A PTY session
+  runs the plan's command ladder, streams output over the existing `pty://output|exit/{id}` family,
+  and is killed by the existing `pty_kill`.
+- **Unit B — Windows WSL invocation + path translation (FR-AI10..AI14).** A pure translator
+  (`win_to_wsl_path`) plus the platform translator (`wslpath -a -u`) convert every path element the
+  Linux child sees. `ansible_run` resolves the launcher and sets the child cwd.
+- **Shared mechanism — the existing PTY engine.** Both units reuse `PtyState`/`NEXT_ID`/`pump_pty`/
+  `pty://output|exit/{id}`/`pty_kill`. No new IPC channel, no new state map, no new dependency.
+
+```
+          FRONTEND (src/main.ts)                     BACKEND (src-tauri/src/lib.rs)
+ ───────────────────────────────────────   ──────────────────────────────────────────────────────
+ #ansible-modal / #ansible-guide          PURE CORES (no I/O · no spawn · cargo --lib)
+   ansState guide machine (§15.7)           ansible_probe_dirs()    resolve_install_plan()
+   #ans-install-log (pre, read-only)        win_to_wsl_path()       build_wsl_argv()
+   Install · Re-check · Run               RESOLVER (spawns only in the WSL branch)
+                                              resolve_ansible_launcher() (§15.6)
+ ───────────────────────────────────────   ──────────────────────────────────────────────────────
+        │             │            │               │                │                 │
+        ▼             ▼            ▼               ▼                ▼                 ▼
+  check_ansible   check_wsl   ansible_wsl_      (internal)      ansible_install    ansible_run
+  (0 spawn)       (1 spawn)   probe          resolve_ansible_   (1 session id)     (§15.6 delta)
+        │             │       (1 spawn,      launcher()             │                  │
+        │             │        user-only)      │                    ▼                  ▼
+        └─────────────┴────────┘                │            PtyState.sessions[id]  PtyState.sessions[id]
+                                              │            pump_pty / pty://…     pump_pty / pty://…
+                                              │            pty_kill(id)           pty_kill(id)
+                                              ▼
+                              WSL mode → translate every path element (§15.5)
+                              native / HOSTERM_ANSIBLE_BIN → no translation
+```
+
+**What is new vs reused:**
+
+| Piece | Status | Note |
+|---|---|---|
+| `resolve_install_plan()` | NEW pure core | no I/O, unit-testable on Linux CI |
+| `win_to_wsl_path()` | NEW pure core | no I/O, unit-testable on Linux CI |
+| `translate_path_to_wsl()` | NEW thin wrapper | one `wslpath` subprocess + the pure fallback |
+| `resolve_ansible_launcher()` | NEW pure-ish core | reads env + OS; calls `check_wsl`/probe helpers only in the WSL branch |
+| `ansible_install` command | NEW | one session id, ladder in an orchestration thread |
+| `check_wsl` / `ansible_wsl_probe` | NEW | piped one-shot spawns, fail-closed |
+| `check_ansible` | EXTENDED | additive `os` + `probe_dirs`; `missing` semantics unchanged |
+| `PtyState` / `NEXT_ID` / `pump_pty` / `pty_kill` | REUSED | untouched; `pump_pty` carries the `7621b72` UTF-8 fix |
+| `PtyState.ephemeral` | REUSED, unchanged | stays exclusive to `ansible_run` (§15.4) |
+| `pty://output\|exit/{id}` | REUSED | no new event family |
+
+### 15.3 Frozen IPC contract
+
+Style follows §14.4 exactly: camelCase at the Tauri boundary, opaque error tokens, no secret in any
+payload. All four shapes below are **additive** — nothing in §14.4 changes.
+
+| Command | Request | Response | Errors | Spawn budget |
+|---|---|---|---|---|
+| `ansible_install` | `{ distro?: string }` | `number` (bare pty id) | `ansible-install:<code>` | 1 PTY session; N spawns = ladder length |
+| `check_wsl` | `{}` | `{ installed: boolean, distro: string \| null }` | none (classification) | exactly 1; 0 on non-Windows |
+| `ansible_wsl_probe` | `{ distro: string }` | `{ present: boolean }` | `ansible-wsl:<code>` | exactly 1 |
+| `check_ansible` | `{}` | `{ missing: boolean, os: "linux"\|"macos"\|"windows", probe_dirs: string[] }` | none | 0 |
+
+#### 15.3.1 `ansible_install`
+
+```ts
+interface AnsibleInstallReq { distro?: string }   // required on the Windows branch only
+type AnsibleInstallRes = number;                  // bare pty id — same shape as ansible_run
+```
+
+`distro` is omitted on Linux/macOS — the request stays platform-agnostic and the backend derives
+the platform itself (this is what removes the UA sniffing the spec's D-AI11 dropped). The spec locks
+the return type (`Result<u32, String>`, §2.1) and the error prefix; the request shape is the
+architect's minimal additive choice — one optional field, no UA, no platform enum. The id is
+allocated **before** any spawn so the console can render immediately; the caller never polls.
+
+Error vocabulary — opaque `ansible-install:<code>` tokens, **never** host/path/stdout data:
+
+| Token | Meaning | Side effects |
+|---|---|---|
+| `ansible-install:no-installer` | Linux: `pipx` and `python3` both unresolvable. macOS: `brew` unresolvable in PATH+probe dirs and at neither fixed path. | 0 spawn, no PTY allocated |
+| `ansible-install:wsl-unavailable` | Windows branch with no usable distro (absent/empty/unsafe) | 0 spawn, no PTY allocated |
+| `ansible-install:bad-distro` | `distro` fails the argv guard (INV-33) | 0 spawn, no PTY allocated |
+| `ansible-install:pty-failed` | `openpty` / reader / writer failure | PTY freed, no leak |
+| `ansible-install:spawn-failed` | installer child spawn failure | PTY freed, no leak |
+
+A non-zero installer exit is **not** an error token — it is streamed to the console and surfaced by
+the post-install re-check (UC-AI3 manual fallback).
+
+#### 15.3.2 `check_wsl`
+
+```ts
+type WslCheck = { installed: boolean; distro: string | null };
+```
+
+Behavior matrix (fail-closed):
+
+| Condition | Result |
+|---|---|
+| non-Windows host | `{ installed: false, distro: null }` — **no spawn**, no Err |
+| `wsl.exe --list --quiet` spawn failure, rc≠0, or deadline exceeded | `{ installed: false, distro: null }` |
+| rc=0, stdout non-empty | `{ installed: true, distro: <first non-empty line, trimmed> }` |
+| rc=0, stdout empty/whitespace | `{ installed: true, distro: null }` |
+
+This command **never returns `Err`** — every failure is a classification, so the frontend's `catch`
+path cannot be triggered by a WSL problem. Deadline: 500 ms (NFR-AI3), enforced by polling
+`Child::try_wait` every 10 ms (the ADR-14 pattern) and killing the child on expiry.
+
+#### 15.3.3 `ansible_wsl_probe`
+
+```ts
+interface AnsibleWslProbeReq { distro: string }
+interface AnsibleWslProbeRes { present: boolean }
+```
+
+Spawn `wsl.exe --distribution <distro> --exec ansible-playbook --version` (argv array, no shell,
+stdout/stderr piped). rc=0 → `present:true`; rc≠0, spawn failure, or deadline → `present:false`.
+Deadline: 5 s (NFR-AI3). **User-triggered only** — never called on panel open (§15.7).
+
+Error vocabulary: `Err("ansible-wsl:bad-distro")` when `distro` fails the argv guard (INV-33). That
+token is reachable only from a frontend bug (the distro value comes from `check_wsl`), so the
+frontend maps it to a generic "could not probe the WSL distro" line and never surfaces the raw token.
+
+#### 15.3.4 `check_ansible` (extended, backward-compatible)
+
+```ts
+type AnsibleOs = "linux" | "macos" | "windows";
+interface AnsibleCheck {
+  missing: boolean;      // unchanged: not resolvable in PATH + probe dirs
+  os: AnsibleOs;         // NEW — backend-derived, replaces UA sniffing (D-AI11)
+  probe_dirs: string[];  // NEW — additional dirs the resolver consulted
+}
+```
+
+- Still **read-only, 0 spawn, no network, no side effects** (NFR-AI2). The existing frontend code
+  that reads only `.missing` keeps working.
+- `os` = `std::env::consts::OS` mapped: `"windows"` → `windows`, `"macos"` → `macos`, anything else
+  → `linux` (the Unix default; the frontend treats it as the pipx branch).
+- `probe_dirs` = `ansible_probe_dirs()` deduped against PATH entries and filtered to directories
+  that exist. Empty when `HOSTERM_ANSIBLE_BIN` is set (the override replaces the lookup, §15.6).
+- `missing` keeps its exact v1 meaning — the resolver now also consults `probe_dirs` (D-AI8), so a
+  binary in `~/.local/bin` is found on a GUI app whose PATH lacks it.
+
+**Error-token summary (frozen):**
+
+| Command | Prefix | Tokens |
+|---|---|---|
+| `ansible_install` | `ansible-install:` | `no-installer`, `wsl-unavailable`, `bad-distro`, `pty-failed`, `spawn-failed` |
+| `check_wsl` | — | none (classification only) |
+| `ansible_wsl_probe` | `ansible-wsl:` | `bad-distro` |
+| `check_ansible` | — | none |
+| existing `ansible:*` (unchanged) | `ansible:` | `no-eligible-hosts`, `config-unreadable`, `inv-write-failed`, `cfg-write-failed`, `pty-failed`, `spawn-failed`, **`path-untranslatable`** (§15.5) |
+
+The frontend's `ansErrText()` gains a second lookup for `ansible-install:`; `ansible-wsl:` maps to a
+generic line. Raw tokens are never rendered.
+
+**IPC inventory:** 45 registered commands at the time of writing (lib.rs 43 + fleet.rs 2; measured
+`grep -rc "tauri::command" src-tauri/src/*.rs` == `generate_handler!` entries) → **48** after this
+addendum. §14.8's "43 gate / 42 registered" and `docs/STATE.md`'s "42" are the BE-ANS1..3 baseline;
+the managed-key edit wave (`read_identity_file`, `rename_identity_file`, `write_identity_file`) added
+3 commands after that baseline. The lead re-measures at dispatch.
+
+### 15.4 Install-plan resolution + install session orchestration
+
+#### 15.4.1 Pure core
+
+```rust
+enum InstallPlan {
+    Pipx       { bin: String },   // argv[0] = resolved pipx path
+    PipxModule { bin: String },   // python3 -m pipx
+    Brew       { bin: String },
+    WslApt     { distro: String },
+}
+enum InstallError { NoInstaller, WslUnavailable }
+
+fn resolve_install_plan(
+    os: AnsibleOs,
+    distro: Option<&str>,
+    path_dirs: &[PathBuf],
+    probe_dirs: &[PathBuf],
+) -> Result<InstallPlan, InstallError>
+```
+
+Exact resolution order:
+
+- **linux** — `find_in_dirs("pipx", PATH+probe)` → `Pipx`; else `find_in_dirs("python3", PATH+probe)`
+  → `PipxModule`; else `NoInstaller`.
+- **macos** — `find_in_dirs("brew", PATH+probe)` → `Brew`; else `/opt/homebrew/bin/brew` is a file →
+  `Brew`; else `/usr/local/bin/brew` is a file → `Brew`; else `NoInstaller`.
+- **windows** — `distro` is `Some` **and** passes `sftp_safe(distro, "Distro")` → `WslApt`; else
+  `WslUnavailable`.
+
+`probe_dirs` MUST be in the search path: pipx installs itself into `~/.local/bin`, which a GUI
+app's PATH frequently lacks — this is exactly why D-AI8 added probe dirs. The two fixed brew paths
+are **not** redundant with that list: D-AI8's macOS probe dirs cover `/opt/homebrew/bin` (Apple
+Silicon) and `~/.local/bin`, but Intel Macs keep brew in `/usr/local/bin`, which the probe list
+omits — the explicit check closes that gap. `find_in_dirs` is the existing helper (`name` + `.exe`
+on Windows).
+
+#### 15.4.2 Command ladder (frozen argv)
+
+| Plan | argv |
+|---|---|
+| `Pipx` | `[bin, "install", "--include-deps", "ansible"]` |
+| `PipxModule` | `[bin, "-m", "pipx", "install", "--include-deps", "ansible"]` |
+| `Brew` | `[bin, "install", "ansible"]` |
+| `WslApt` | 1. `["wsl.exe","--distribution",distro,"--user","root","--exec","apt-get","update"]` <br> 2. `["wsl.exe","--distribution",distro,"--user","root","--exec","apt-get","install","-y","ansible"]` |
+
+- Rung 2 runs only when rung 1 exits 0. A non-zero rung 1 stops the ladder; the console shows the
+  native output and the post-install re-check decides the next state (UC-AI3 manual fallback).
+- `apt-get` (not `apt`) is deliberate: script-friendly, never opens a debconf TUI. The lead MAY also
+  set `DEBIAN_FRONTEND=noninteractive` in the child env (an env detail, **not** contract) so a package
+  hook cannot block on a prompt.
+- Install-spawn env = the parent env, unchanged, plus nothing. No secret, host, or path from
+  `~/.ssh` enters the environment (INV-31 extension).
+
+#### 15.4.3 Session orchestration (ADR-AI6)
+
+One `ansible_install` call = one PTY session id = one console. The ladder runs in an orchestration
+thread so INV-14 is honored without `sh -c "a && b"`.
+
+1. `id = NEXT_ID.fetch_add(1, SeqCst)`; allocated **before** any spawn.
+2. Spawn the orchestration thread; return the bare `id` immediately (the console shows
+   "Installing…" from that moment).
+3. Per rung: `openpty` → spawn with the frozen argv → `try_clone_reader` / `take_writer` →
+   **replace** `sessions[id]` with the new `PtySession` → spawn the pump thread → wait for pump
+   completion, polling `sessions.contains_key(id)` every 50 ms.
+4. **Cancellation:** if the entry vanished, `child.kill()` + `child.wait()`, stop the ladder.
+   `pty_kill` is the only other remover.
+5. **Ladder stop:** a non-zero rung rc ends the ladder (last rc wins).
+6. **End:** `sessions.remove(id)` (idempotent with `pty_kill`), `cleanup_ephemeral(ephemeral, id)`
+   (no-op — install registers nothing), emit `pty://exit/{id}` **exactly once**.
+
+**Why one id for two rungs (ADR-AI6):** INV-14 forbids `sh -c "a && b"`, so the two apt spawns must
+be separate processes; a single session id keeps one console, one exit event, one kill handle and
+one slot in the ring buffer. The frontend never sees a rung boundary.
+
+**UTF-8 carry:** the pump thread calls the existing `pump_pty`, which carries incomplete trailing
+bytes via `decode_utf8_stream` (commit `7621b72`). Installer output therefore gets the same carry as
+Fleet Run and TUIs — no new decoder, and no second implementation to drift.
+
+**Ephemeral registration:** install registers **zero** entries in `PtyState.ephemeral`; the map stays
+exclusive to `ansible_run`. `cleanup_ephemeral` is still called on the install exit path so any future
+install artifact is cleaned by the same idempotent helper.
+
+**Residual risk (documented, not solved here):** a child that ignores SIGHUP keeps its PTY open; the
+50 ms poll bounds how fast the kill is noticed and `child.kill()` then force-terminates it. This is
+strictly better than the existing `pty_kill` posture for `ssh` (§12.7) and adds no machinery.
+
+### 15.5 Path translation mechanics
+
+Two layers: a pure Rust core and a platform-translator wrapper.
+
+#### 15.5.1 Pure core — `win_to_wsl_path()`
+
+```rust
+/// Translate a Windows-form path to the WSL `/mnt/<drive>/...` form.
+/// `None` = not translatable (UNC, drive-relative, relative, empty, NUL) —
+/// the caller fails the run closed (INV-34).
+fn win_to_wsl_path(path: &str) -> Option<String>
+```
+
+Exact rules, in order:
+
+1. Already-Unix (`starts_with('/')`) → return verbatim (passthrough, NFR-AI8).
+2. `\` → `/`; collapse repeated separators.
+3. Drive-letter absolute (`C:\...`, `C:/...`) → `/mnt/<lowercased letter>/<rest>`; a trailing slash is
+   trimmed except at the drive root (`C:\` → `/mnt/c`).
+4. Everything else → `None`: UNC (`\\server\share`), drive-relative (`C:foo`), bare relative
+   (`foo\bar`), empty, or containing NUL.
+
+#### 15.5.2 Platform translator — `wslpath -a -u`
+
+```rust
+/// The only outward failure: the path is not translatable. A `wslpath`
+/// absence/failure is handled INSIDE (pure-Rust fallback), never returned.
+enum TranslateError { Untranslatable }
+fn translate_path_to_wsl(path: &str) -> Result<String, TranslateError>
+```
+
+1. Spawn `wslpath.exe` with argv `["wslpath.exe", "-a", "-u", path]` — one subprocess per path, argv
+   array, no shell, stdout piped, 2 s deadline (poll `try_wait` every 10 ms; `kill()` on expiry).
+2. rc=0 **and** trimmed stdout is non-empty **and** starts with `/` → that value.
+3. Otherwise (absent / rc≠0 / deadline / empty output) → `win_to_wsl_path(path)`; `Some` → value,
+   `None` → `Err(Untranslatable)`.
+4. **Never** fall back to the raw Windows path (INV-34).
+
+`wslpath -a -u` is the platform's own translator and stays correct across WSL versions (trailing
+slashes, `//`, UNC-adjacent edge cases); the pure-Rust layer keeps the logic unit-testable on Linux CI
+and covers a missing or failing `wslpath` without weakening the fail-closed rule.
+
+**When `wslpath` is unavailable:** the pure-Rust fallback runs. A translatable path (drive-letter
+absolute) proceeds; an untranslatable one (UNC, drive-relative, relative) refuses the run with
+`ansible:path-untranslatable` and **no spawn** occurs. The run is never attempted with an untranslated
+path.
+
+#### 15.5.3 Every translated element + ordering (spec §2.2.3)
+
+| # | Element | Written at | Child receives | Notes |
+|---|---|---|---|---|
+| 1 | every `IdentityFile` (after `~` expansion to a real Windows path) | inside the ephemeral inventory body | translated `/mnt/...` value | **must precede the inventory write** — the Linux child reads it at parse time |
+| 2 | ephemeral inventory path | `data_dir()/ansible-inv-<id>.ini` (Windows path, 0600) | translated `/mnt/...` value as `-i` | the body already holds translated IdentityFile values |
+| 3 | ephemeral cfg path | `data_dir()/ansible-cfg-<id>.ini` (Windows path, 0600) | translated `/mnt/...` value as `ANSIBLE_CONFIG` | |
+| 4 | playbook path | — (user-supplied) | translated `/mnt/...` value as the positional arg | |
+| 5 | `ANSIBLE_CONFIG` env value | — | the translated cfg path | same value as #3 — no extra spawn |
+
+The translation pass runs on the eligible-host list first, then the inventory body is built from the
+translated values, then the files are written, then argv/env are assembled from the translated paths.
+A translation failure aborts **before** any file write or spawn — fail-closed, no partial artifacts.
+
+**`wslpath` spawn count:** `1 (inventory) + 1 (cfg) + 1 (playbook) + N (IdentityFile)` = **N + 3**
+subprocesses per WSL run, bounded by the picker size. Do not "optimise" this away without re-reading
+ADR-AI5 — one subprocess per path is what keeps each translation independently verifiable.
+
+### 15.6 Launcher resolution + cwd (`ansible_run` delta)
+
+```rust
+enum AnsibleLauncher {
+    Native(String),          // argv[0] verbatim, NO translation
+    Wsl { distro: String },  // wsl.exe --distribution <distro> --exec ansible-playbook <argv…>, ALL paths translated
+}
+
+fn resolve_ansible_launcher() -> AnsibleLauncher
+```
+
+Exact order:
+
+1. `HOSTERM_ANSIBLE_BIN` set and non-empty → `Native(value)` verbatim. No PATH lookup, **no
+   translation** (test hook; ADR-AI7).
+2. `cfg!(windows)` **and** `wsl_ansible_ready()` → `Wsl { distro }`.
+3. Otherwise → `Native("ansible-playbook")`.
+
+`wsl_ansible_ready()` = `check_wsl()` returns `installed && distro.is_some()` **and**
+`ansible_wsl_probe(distro)` returns `present`. Both are the exact helper paths the commands expose —
+no hidden third route.
+
+**Cost (accepted):** on Windows this adds at most 2 spawns to a run — `check_wsl` (<500 ms) and, only
+when a distro exists, `ansible_wsl_probe` (<5 s). When WSL is absent (the common Windows case) only
+the <500 ms query is paid. **Rejected alternative:** a frontend-declared `launcher` field — the
+backend must own argv shape, and the launcher choice decides whether paths are translated, so it must
+not come from the webview.
+
+**cwd (new).** The child is spawned with `cwd = playbook parent directory` for **every** launcher
+mode. `wsl.exe` inherits the Windows cwd and maps it to `/mnt/<drive>/...` inside the distro, so
+playbook-relative lookups (`roles/`, `files/`, `collections/`) resolve; the plain `ansible-playbook`
+path gets the same cwd so all three modes behave identically. The playbook argument stays absolute
+(translated in WSL mode), so cwd only affects relative resolution. This is a behavior change from v1
+(which inherited the app's cwd) and is required by FR-AI14. If the playbook path has no parent
+(bare filename), fall back to the v1 behavior (no cwd).
+
+**`wsl.exe` argv shape (frozen):**
+
+```
+wsl.exe --distribution <distro> --exec ansible-playbook <argv…>
+```
+
+`--exec` runs the command directly with no shell (INV-14). `<distro>` passes the `sftp_safe` guard
+(INV-33). `<argv…>` is exactly `build_ansible_argv(...)` with translated values.
+
+**Delta summary vs v1 `ansible_run`:**
+
+| Concern | v1 (§14.6) | auto-install addendum (§15.6) |
+|---|---|---|
+| argv[0] | `"ansible-playbook"` | `resolve_ansible_launcher()` |
+| path translation | none | all elements, WSL mode only |
+| cwd | inherited from the app | playbook parent (all modes) |
+| inventory / cfg | same | same (written at Windows paths, handed over translated) |
+| env | `ANSIBLE_HOST_KEY_CHECKING=True`, `ANSIBLE_CONFIG`, `ANSIBLE_NOCOLOR=1` | unchanged; `ANSIBLE_CONFIG` carries the translated path |
+| error tokens | `ansible:*` | unchanged, plus `ansible:path-untranslatable` |
+| IPC payload | `AnsibleRunReq` | **unchanged** |
+
+### 15.7 Frontend guide state machine + install console + panel close
+
+#### 15.7.1 Guide state machine (explicit)
+
+The spec §2.2.1 flow, spelled out as the machine the frontend implements (its "5 state" is a sketch;
+this is the explicit version):
+
+| # | State | Entry condition | Render |
+|---|---|---|---|
+| 1 | `checking` | panel opened, `check_ansible` in flight | spinner |
+| 2 | `native-ready` | `missing:false` | runner body |
+| 3 | `native-missing` | `missing:true`, `os != "windows"` | Install (pipx/brew) + manual fallback |
+| 4 | `wsl-absent` | `missing:true`, Windows, `check_wsl.installed:false` | WSL-required block, `wsl --install` |
+| 5 | `wsl-no-distro` | `installed:true`, `distro:null` | WSL-required block, `wsl --install -d Ubuntu` |
+| 6 | `wsl-unknown` | `installed:true`, `distro:Some` — panel open stops here | "Install Ansible inside WSL" + Re-check |
+| 7 | `wsl-ansible-missing` | probe `present:false` | Install inside WSL + manual fallback |
+| 8 | `wsl-ready` | probe `present:true` | runner body |
+
+#### 15.7.2 Call sequences (frozen)
+
+**Panel open** (`openAnsible` → `ansRefreshCheck`):
+
+1. `check_ansible()` → `missing:false` → state 2. Stop.
+2. `missing:true`, `os != "windows"` → state 3. Stop.
+3. `missing:true`, `os == "windows"` → `check_wsl()`: `installed:false` → 4; `distro:null` → 5;
+   else → 6.
+
+No `ansible_wsl_probe` on panel open (NFR-AI3 — the probe is user-triggered). Panel-open spawns:
+**0** (states 2–3) or **1** (states 4–6). Never on app launch.
+
+**Re-check (user click):**
+
+- state 3 → `check_ansible()` again.
+- state 6 → `ansible_wsl_probe(distro)` → `present:true` → 8; `present:false` → 7.
+- states 4/5 → `check_wsl()` again (the user may have installed WSL since).
+
+**Install click:**
+
+- state 3 → `ansible_install({})` → `ptyId` → console + busy state.
+- states 6/7 → `ansible_install({distro})` → same.
+- Guard: `ansState.installing` true → ignore the click (NFR-AI7).
+
+#### 15.7.3 Install console + busy state
+
+- `#ans-install-log` is a read-only `<pre>`, auto-scrolling, with **no input field ever** (D-AI6).
+- Content is set via `textContent` only (ADR-8) — installer output is untrusted bytes.
+- Frontend ring buffer capped at **64 KB** (NFR-AI7), the same retention pattern as the fleet console.
+- `#ans-install-status` status line: "Installing…" → "Done" / "Finished with errors".
+- Busy state: Install disabled + label "Installing…". **Decision (flagged, not in the spec):** Re-check
+  is also disabled during an install — a concurrent read-only check would race the console and could
+  show "still missing" while the installer is mid-flight. Low-risk and reversible.
+
+#### 15.7.4 Exit handling (existing handler, extended trigger)
+
+The existing `pty://exit/{id}` listener runs `ansRefreshCheck()` when the id is the install session:
+
+- non-Windows → `check_ansible()` → `missing:false` → state 2.
+- Windows + WSL → `check_ansible()` **and** `ansible_wsl_probe(distro)` → `present:true` → state 8;
+  otherwise stay in state 7 with the manual fallback visible.
+
+This is D-AI7. The re-check is read-only and safe to run after a user cancel too (the state may have
+changed — e.g. rung 1 of 2 completed).
+
+#### 15.7.5 Panel close during install (FR-AI8 / D-AI17)
+
+`#ansible-close` → if `ansState.installing`:
+
+1. in-app confirm ("Cancel the installation? The installer will be stopped.");
+2. confirm → `invoke("pty_kill", { id: ansState.installPtyId })`, clear the id, `installing = false`;
+3. dismiss → abort the close; the panel stays open and the install continues.
+
+The backend orchestration thread observes the removed session and aborts the ladder (§15.4.3) — no
+orphan process, no leaked temp file, no orphaned PTY.
+
+**Out of scope (flagged):** v1's FR-ANS16 (`should`: closing the panel during a *run* → confirm +
+Stop) is **not implemented today** — `#ansible-close` calls `closeOverlay` only, and `pty_kill` is
+reachable solely from terminal-tab close. This addendum implements the install case (FR-AI8) only.
+Lead/nano: decide whether to close the FR-ANS16 gap in the same TSD.
+
+### 15.8 Security invariants
+
+Restated from §14.8 and extended. The mapping is normative; the spec's invariants keep their
+original wording.
+
+| Invariant | Source | How §15 honors it |
+|---|---|---|
+| **INV-14** — no shell interpreter | §14.8 | every install/probe/run spawn is an argv array; `wsl --exec` bypasses the distro shell. The install ladder is two spawns, never `sh -c "a && b"` |
+| **INV-28** — argv only, no string interpolation | §14.8 | `distro` and every translated path is its own argv element; `build_wsl_argv` never joins a string |
+| **INV-29** — no secret in any payload | §14.8 | install/probe requests carry no host or secret; install env adds nothing; `pty://output` carries installer stdout, which is not a secret |
+| **INV-31** — secrets never in env/argv/payload | §14.8 | unchanged; the install path reads no secret store at all |
+| **ADR-A1** — host key checking stays `True` | §14.7 | untouched; `ANSIBLE_HOST_KEY_CHECKING=True` + the pinned cfg remain |
+| **ADR-A2** — password hosts stay skipped | §14.7 | untouched; eligibility is computed before any translation or spawn |
+| **ADR-8** — console renders via `textContent` | §13 | `#ans-install-log` sets text only; installer bytes are never parsed as HTML |
+
+**New invariants (the spec missed these):**
+
+- **INV-32 — install/probe byte-identity.** `ansible_install` and `ansible_wsl_probe` never read or
+  write `~/.ssh/config` or the secrets sidecar; the config file and sidecar are hash- and
+  mtime-identical before and after. Install registers zero persistent artifacts. Gate: cargo test +
+  source audit (§15.10).
+- **INV-33 — WSL distro argv guard.** The distro name is a single argv element and must pass
+  `sftp_safe` (refuse a leading `-`, CR, LF) before it reaches `wsl.exe --distribution`, mirroring
+  the existing guard on host/path values. Gate: cargo unit test + the NFR-AI4 grep.
+- **INV-34 — path translation is total and fail-closed.** In WSL mode every path element (playbook,
+  inventory, cfg, every `IdentityFile`, `ANSIBLE_CONFIG`) is either translated to a `/mnt/...` form or
+  the run is refused with `ansible:path-untranslatable`; **no Windows-form path reaches the Linux
+  child**. `wslpath` absence falls back to the pure-Rust translator, never to an untranslated path.
+  Gate: cargo unit tests + Windows CI integration (§15.10).
+- **INV-35 — install is explicit-click-only.** No installer process is spawned except as a direct
+  result of an `ansible_install` invoke. Panel open, app launch, Re-check and the post-install
+  re-check never spawn an installer. Gate: smoke invoke counter (panel open → 0 installer spawns)
+  + source audit.
+
+### 15.9 ADRs
+
+**Confirmed from the spec (unchanged):**
+
+- **ADR-AI1 — installer choice.** pipx on Linux (module fallback), brew on macOS, `apt-get` inside the
+  WSL distro on Windows. No bundled runtime, no new dependency. *Confirmed* — it is the only set that
+  satisfies NFR-AI1 and "no root escalation from the app".
+- **ADR-AI2 — WSL invocation.** Backend-native `wsl.exe --distribution <distro> --exec …` with
+  pre-translated argv, not a shim script. *Confirmed* — a shim would be a second file to secure and
+  would re-introduce a shell boundary.
+- **ADR-AI3 — root in WSL.** The in-distro install runs as `wsl --user root`. *Confirmed* — OQ-AI2 is
+  closed (MEKL, 12 Nov 2026); root is scoped to the distro, never the host.
+- **ADR-AI4 — no key copy.** The install and probe paths never copy or read SSH keys. *Confirmed*.
+
+**New ADRs:**
+
+- **ADR-AI5 — hybrid path translation (`wslpath` preferred, pure-Rust fallback).** *Status:
+  accepted.* `wslpath -a -u` is authoritative when present; `win_to_wsl_path()` covers its absence and
+  keeps the logic unit-testable on Linux CI. *Consequences:* N+3 subprocesses per WSL run (bounded);
+  a missing `wslpath` is not fatal for drive-letter paths; UNC/drive-relative/relative paths still
+  fail closed. *Alternatives rejected:* pure-Rust only (drifts from platform edge cases); always
+  `wslpath` (breaks when WSL is installed but the service is not running, and is untestable on Linux
+  CI).
+- **ADR-AI6 — one install session id, sequential PTY children.** *Status: accepted.* INV-14 forbids
+  `sh -c "a && b"`, so the two apt spawns are separate processes; one session id keeps one console,
+  one exit event, one kill handle. *Consequences:* the orchestration thread must poll for
+  cancellation (§15.4.3); a rung boundary is invisible to the frontend. *Alternative rejected:* two
+  session ids (two consoles, two exit events, ambiguous kill semantics).
+- **ADR-AI7 — `HOSTERM_ANSIBLE_BIN` override semantics.** *Status: accepted.* Read fresh per
+  resolution; when set, it replaces the launcher and **disables path translation** (argv[0] verbatim,
+  no PATH lookup, no shell). *Consequences:* on a Windows+WSL host a set override makes the run
+  interpret Windows paths inside the distro and fail — it is a **test hook only**, never set by the
+  app, the same risk class as `HOSTERM_SSH_BIN` (ADR-16) and `HOSTERM_SFTP_BIN`. Documented in the
+  Settings → Advanced help text the same way. *Alternative rejected:* translating even under the
+  override (the override exists precisely to point at a native/fake binary with plain argv).
+
+### 15.10 Test strategy
+
+Each NFR-AI maps to a concrete gate. Baselines are never lowered (STATE.md carries the live numbers).
+
+| NFR | Gate | Type |
+|---|---|---|
+| **AI1** no new dep, no bundled runtime | `cargo build --locked` (Cargo.lock unchanged) + `npm run build` (package-lock unchanged); argv-builder test asserts the installer resolves only `pipx`/`python3`/`brew`/`wsl.exe` | cargo + build |
+| **AI2** `check_ansible` read-only, 0 spawn, <50 ms, static deduped probe dirs | cargo test on the pure resolver with a temp PATH (binary only in a probe dir → found; probe dir already in PATH → listed once); smoke asserts panel open issues exactly one `check_ansible` invoke and **no other backend call** | cargo + smoke |
+| **AI3** `check_wsl` 1 query <500 ms; probe user-initiated <5 s | cargo test with a fake `wsl.exe` on PATH asserting the classification matrix (absent / rc≠0 / empty / named) and that `check_wsl` spawns exactly once; smoke asserts `ansible_wsl_probe` is **not** invoked on panel open and is invoked on Re-check | cargo + smoke |
+| **AI4** no shell string in the install/WSL path | grep gate: `sh -c`, `bash -c`, `cmd /C`, `powershell` = **0** matches in the Ansible install/WSL regions of `src-tauri/src/lib.rs` and `src/main.ts` | grep |
+| **AI5** install/probe byte-identity (`~/.ssh/config` + sidecar hash **and** mtime) | cargo test `ansible_install_path_never_touches_ssh_state`: snapshot config+sidecar hash/mtime → run `resolve_install_plan` + the WSL probe helper with a fake `wsl.exe` → assert identical. Wired path covered by smoke + a source audit that the install body calls no `config_path`/`read_secrets` | cargo + smoke + audit |
+| **AI6** console renders via `textContent`, 0 CSP violation, 0 script element | smoke: mock `pty://output` emitting `<script>alert(1)</script>` + a hostile-bytes fixture → assert 0 CSP violations and 0 `script` elements in `#ans-install-log` | smoke |
+| **AI7** one install at a time; button disabled; 64 KB ring | smoke: click Install twice → exactly 1 `ansible_install` invoke; assert Install disabled + label "Installing…"; emit >64 KB → assert the buffer is capped | smoke |
+| **AI8** `win_to_wsl_path` unit tests + `wslpath` integration | cargo unit tests: drive letter, backslash, `~`-expanded path, UNC rejection, already-Unix passthrough; Windows CI integration test running the real `wslpath -a -u` (skipped when WSL is absent) | cargo + Windows CI |
+
+Plus the spec §8 plan: cargo (argv-builder WSL shape, install-plan resolution, `check_ansible`
+probe-dir dedup, byte-identity, `check_wsl` classification), build 0 TS errors, smoke (platform-specific
+Install button, busy state + console streaming mock, auto re-check on exit, Windows WSL state machine,
+`HOSTERM_ANSIBLE_BIN` override, hostile bytes), Windows CI `wslpath` integration.
+
+### 15.11 Hotspot + recommended unit sequence
+
+**Hotspot:** `src-tauri/src/lib.rs` is already a 6.5k-line hotspot and carries an **uncommitted
+sibling edit** at the time of writing (an SFTP UTF-8 carry fix). The auto-install work adds ~200 LOC
+to the same file. Architect recommendation (unchanged from §14.10 LQ-1, now stronger): if the body
+grows past ~150 LOC, extract the install code into a `mod ansible_install` (or keep the pure cores
+in a `mod ansible`) so the `lib.rs` diff stays thin — the command names and payloads are identical
+either way. The pure cores
+(`resolve_install_plan`, `win_to_wsl_path`, `build_wsl_argv`, `ansible_probe_dirs`) should land as a
+separate unit from the command wiring regardless.
+
+**Recommended unit order (dependency-driven):**
+
+1. Pure cores + cargo tests (no wiring): `ansible_probe_dirs`, `resolve_install_plan`,
+   `win_to_wsl_path`, `build_wsl_argv`.
+2. `check_wsl` + `ansible_wsl_probe` + the `check_ansible` extension (additive IPC).
+3. `ansible_install` + orchestration + PTY wiring.
+4. `ansible_run` delta (launcher resolution, cwd, translation).
+5. Frontend guide state machine + install console + panel-close cancel.
+6. Windows CI `wslpath` integration.
+
+### 15.12 Open items for the lead (granularity only — no architectural decision left open)
+
+- **LQ-4 (install console retention primitive):** whether the 64 KB ring buffer is a shared helper
+  with the fleet console or a local one. Recommendation: shared helper (one retention rule, one test).
+- **LQ-5 (`DEBIAN_FRONTEND=noninteractive`):** whether to set it for the apt rungs. Recommendation:
+  yes (env only, no argv change) so a package hook cannot block the PTY.
+- **LQ-6 (`wslpath` deadline):** the 2 s cap is an implementation choice; the fallback makes it
+  non-fatal. Lead may tune, but the fallback order (wslpath → pure Rust → refuse) is contract.
+- **LQ-7 (`HOSTERM_ANSIBLE_BIN` + `check_ansible` interaction):** when the override is set,
+  `check_ansible` resolves it as a file (mirroring `binaries_missing`' `HOSTERM_SFTP_BIN` branch) and
+  `probe_dirs` is empty. Lead confirms the smoke expectation.
+- **LQ-8 (module split):** see §15.11 — the pure cores should be a separate unit from the wiring.
