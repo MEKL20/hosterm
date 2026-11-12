@@ -2389,11 +2389,13 @@ fn pty_spawn(
 
     // password prompt auto-fill: when a stored password exists for this host,
     // the reader loop below watches for OpenSSH's prompt and injects the
-    // secret once through the shared writer.
+    // secret through the shared writer. On Windows the first prompt is
+    // answered with a sacrificial CR and the secret follows after a short
+    // grace (see pump_pty); a later prompt re-injects the secret.
     let auto_pw = lookup_stored_password(&host);
     let writer = Arc::new(Mutex::new(writer));
 
-    // reader -> frontend events (+ one-shot password injection)
+    // reader -> frontend events (+ password auto-fill)
     let app_r = app.clone();
     let w_inject = writer.clone();
     let auto_pw2 = auto_pw.clone();
