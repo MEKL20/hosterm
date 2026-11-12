@@ -6257,6 +6257,21 @@ fn main() {
             }
         }
         eprintln!("[winlive] pump_pty flush probe output: {:?}", out);
+        // libtest captures a passing test's stdout/stderr, so a green run would
+        // hide the evidence that this test really drove the PTY. Write it
+        // straight to FD 2, which the CI log keeps.
+        {
+            use std::io::Write;
+            let mut e = std::io::stderr();
+            let _ = write!(
+                e,
+                "[winlive] pump_pty flush probe built={} elapsed={:?} output={:?}\n",
+                built,
+                start.elapsed(),
+                out
+            );
+            let _ = e.flush();
+        }
         drop(pair.master);
         let _ = child.kill();
         let _ = child.wait();
