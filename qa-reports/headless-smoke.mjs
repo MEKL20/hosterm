@@ -4217,12 +4217,16 @@ await page.locator("#k-save").click();
 await page.waitForTimeout(80);
 const uploadSaveCalls = calls.filter((c) => c.cmd === "create_identity_file");
 const lastUploadSave = uploadSaveCalls[uploadSaveCalls.length - 1];
+const afterSave = await page.evaluate(() => ({
+  hidden: document.getElementById("key-modal").classList.contains("hidden"),
+  text: document.getElementById("k-text").value,
+}));
 check("FE: Save after upload sends the uploaded bytes via create_identity_file",
   uploadSaveCalls.length === createCallsBeforeUpload + 1 &&
   lastUploadSave.args.name === "id_uploaded" &&
   lastUploadSave.args.privateKey === UPLOAD_KEY &&
-  (await page.evaluate(() => document.getElementById("key-modal").classList.contains("hidden"))),
-  JSON.stringify({ name: lastUploadSave?.args?.name, keyLen: lastUploadSave?.args?.privateKey?.length }));
+  afterSave.hidden && afterSave.text === "",
+  JSON.stringify({ name: lastUploadSave?.args?.name, keyLen: lastUploadSave?.args?.privateKey?.length, textAfterClose: afterSave.text }));
 // An empty picked file is a visible error in #key-err; the textarea keeps
 // whatever the user already had (no partial/blank overwrite).
 await page.locator("#sb-keys-add").click();
@@ -4241,8 +4245,19 @@ const emptyUpload = await page.evaluate(() => ({
 check("FE: empty picked file shows a visible error and leaves #k-text untouched",
   emptyUpload.text === "pasted-before-upload" && /empty/i.test(emptyUpload.err || ""),
   JSON.stringify(emptyUpload));
+// Cancel must wipe key bytes from #k-text (and the half-entered name), matching
+// the Edit dialog invariant: key material never outlives the modal.
+await page.locator("#k-name").fill("id_cancel_wipe");
 await page.evaluate(() => { document.getElementById("k-cancel").click(); });
 await page.waitForTimeout(40);
+const afterCancelKey = await page.evaluate(() => ({
+  hidden: document.getElementById("key-modal").classList.contains("hidden"),
+  text: document.getElementById("k-text").value,
+  name: document.getElementById("k-name").value,
+}));
+check("FE: Cancel closes the Add-key dialog and wipes the key bytes",
+  afterCancelKey.hidden && afterCancelKey.text === "" && afterCancelKey.name === "",
+  JSON.stringify(afterCancelKey));
 
 // Restore the precondition the next NAV-RAIL check assumes: focus on the Keys
 // view's first action (the edit roundtrip moved focus into/out of the dialog).

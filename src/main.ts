@@ -2692,6 +2692,9 @@ function openKeyModal() {
 }
 
 function closeKey() {
+  // Wipe key material on close: #k-text may hold a pasted/uploaded private key.
+  ($("#k-text") as HTMLTextAreaElement).value = ""; // never retain key bytes
+  ($("#k-name") as HTMLInputElement).value = "";
   closeOverlay("#key-modal");
   keyModalReturnsToKeys = false;
 }
