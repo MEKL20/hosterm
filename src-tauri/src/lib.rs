@@ -2091,7 +2091,10 @@ fn cleanup_ephemeral(ephemeral: &Mutex<HashMap<u32, Vec<PathBuf>>>, id: u32) {
 ///
 /// `pending` is caller-owned and must be flushed with
 /// `String::from_utf8_lossy` once the stream hits EOF.
-fn decode_utf8_stream(pending: &mut Vec<u8>, incoming: &[u8]) -> String {
+///
+/// Shared by `pump_pty` (local PTY) and `fleet::spawn_reader` (Fleet Run
+/// pipes) — both read at arbitrary chunk boundaries.
+pub(crate) fn decode_utf8_stream(pending: &mut Vec<u8>, incoming: &[u8]) -> String {
     pending.extend_from_slice(incoming);
     let mut out = String::new();
     loop {

@@ -119,7 +119,7 @@ pub struct FleetOutputChunk {
     pub alias: String,
     pub seq: u32,           // starts 1, monotonic per host ACROSS both streams
     pub stream: Stream,
-    pub bytes: String,      // from_utf8_lossy of ≤ 8192 raw bytes
+    pub bytes: String,      // incrementally decoded; ≤ 8192 bytes, may be shorter when a char spans reads
     pub total_bytes: u64,   // stdout+stderr observed AFTER this chunk (pre-cap truth)
     pub truncated: bool,    // total_bytes > RETENTION_BYTES at this chunk
 }
@@ -701,6 +701,12 @@ fn run_host(run: &RunArgs, alias: &str) -> HostOutcome {
 /// Backend memory is O(8 KiB) per host by construction; nothing buffers.
 /// `seq` is one counter shared by BOTH readers of the host (monotonic
 /// across streams, §12.3); `total_bytes` is the post-chunk observed sum.
+///
+/// Bytes are decoded INCREMENTALLY via `decode_utf8_stream`: a multi-byte
+/// UTF-8 char split across two reads is carried in `pending` instead of
+/// being destroyed with U+FFFD (the old per-chunk `from_utf8_lossy` bug).
+/// A char truncated by EOF is flushed lossily on the EOF path, mirroring
+/// `pump_pty`.
 fn spawn_reader<R: Read + Send + 'static>(
     mut pipe: R,
     stream: Stream,
@@ -711,27 +717,42 @@ fn spawn_reader<R: Read + Send + 'static>(
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let mut buf = [0u8; CHUNK_READ];
+        // Undecoded trailing bytes carried across reads (see decode_utf8_stream).
+        let mut pending: Vec<u8> = Vec::new();
         let topic = format!("fleet://output/{}", run_id);
+        let emit_chunk = |bytes: String| {
+            let seq = counters.seq.fetch_add(1, Ordering::AcqRel) + 1;
+            let total = counters.out.load(Ordering::Relaxed) + counters.err.load(Ordering::Relaxed);
+            emit(
+                &sink,
+                &topic,
+                &FleetOutputChunk {
+                    alias: alias.clone(),
+                    seq,
+                    stream,
+                    bytes,
+                    total_bytes: total,
+                    truncated: total > RETENTION_BYTES,
+                },
+            );
+        };
         loop {
             match pipe.read(&mut buf) {
-                Ok(0) => break, // EOF: exit/kill closed the pipe
+                Ok(0) => {
+                    // EOF: flush whatever is left undecoded, best effort. A
+                    // character truncated by the stream ending still becomes
+                    // U+FFFD here — the documented fallback (mirrors pump_pty).
+                    if !pending.is_empty() {
+                        let tail = String::from_utf8_lossy(&pending).to_string();
+                        pending.clear();
+                        emit_chunk(tail);
+                    }
+                    break; // EOF: exit/kill closed the pipe
+                }
                 Ok(n) => {
                     let own = if stream == Stream::Stdout { &counters.out } else { &counters.err };
                     own.fetch_add(n as u64, Ordering::Relaxed);
-                    let seq = counters.seq.fetch_add(1, Ordering::AcqRel) + 1;
-                    let total = counters.out.load(Ordering::Relaxed) + counters.err.load(Ordering::Relaxed);
-                    emit(
-                        &sink,
-                        &topic,
-                        &FleetOutputChunk {
-                            alias: alias.clone(),
-                            seq,
-                            stream,
-                            bytes: String::from_utf8_lossy(&buf[..n]).to_string(),
-                            total_bytes: total,
-                            truncated: total > RETENTION_BYTES,
-                        },
-                    );
+                    emit_chunk(crate::decode_utf8_stream(&mut pending, &buf[..n]));
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(_) => break,
@@ -1115,6 +1136,109 @@ mod tests {
             assert!(t0.elapsed() < Duration::from_secs(secs), "event {topic} never arrived");
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    // §12.6 / U+FFFD fix: spawn_reader must decode INCREMENTALLY so a
+    // multi-byte UTF-8 char split across reads survives. Drives the REAL
+    // reader thread with a 1-byte-at-a-time pipe and an 8192-boundary pipe;
+    // concatenated chunk output must be byte-identical to the input with zero
+    // U+FFFD. Reverting to per-chunk `String::from_utf8_lossy` fails this.
+    #[test]
+    fn spawn_reader_reassembles_utf8_split_across_reads() {
+        /// Pipe that hands back at most `step` bytes per `read()` call.
+        struct StepReader {
+            data: Vec<u8>,
+            pos: usize,
+            step: usize,
+        }
+        impl Read for StepReader {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if self.pos >= self.data.len() {
+                    return Ok(0);
+                }
+                let n = self.step.min(buf.len()).min(self.data.len() - self.pos);
+                buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+                self.pos += n;
+                Ok(n)
+            }
+        }
+
+        // Every multi-byte width class: box-drawing (3), CJK (3), emoji (4),
+        // plus ASCII and multi-byte chars at the start/end of the stream.
+        let text = "┌─ 主机 🚀 日本語 ✓\n".repeat(64);
+        // Force a 4-byte emoji to straddle the 8192-byte read boundary: pad
+        // with ASCII so its first byte lands at offset 8191 (the last byte of
+        // the first 8192-byte read).
+        let mut boundary = vec![b'A'; CHUNK_READ - 1];
+        boundary.extend_from_slice("🚀主机".as_bytes());
+        boundary.extend_from_slice(&[b'B'; 64]);
+
+        for (label, data, step) in [
+            ("1-byte", text.as_bytes().to_vec(), 1usize),
+            ("8192-boundary", boundary, CHUNK_READ),
+        ] {
+            let (sink, log) = recorder();
+            let counters = Arc::new(HostCounters::default());
+            let handle = spawn_reader(
+                StepReader { data: data.clone(), pos: 0, step },
+                Stream::Stdout,
+                "h".to_string(),
+                "r".to_string(),
+                sink,
+                counters,
+            );
+            assert!(handle.join().is_ok(), "{label}: reader thread panicked");
+            let chunks = events(&log, "fleet://output/r");
+            assert!(!chunks.is_empty(), "{label}: reader emitted no chunks");
+            let mut out = String::new();
+            for c in &chunks {
+                out.push_str(c["bytes"].as_str().unwrap());
+            }
+            let want = String::from_utf8(data).unwrap();
+            assert_eq!(out, want, "{label}: concatenated chunks must be byte-identical");
+            assert!(!out.contains('\u{FFFD}'), "{label}: zero U+FFFD");
+        }
+    }
+
+    // EOF flush: a char truncated by the stream ending is flushed lossily on
+    // the EOF path (best effort, mirrors pump_pty) — never silently dropped.
+    #[test]
+    fn spawn_reader_flushes_truncated_tail_on_eof() {
+        struct StepReader {
+            data: Vec<u8>,
+            pos: usize,
+        }
+        impl Read for StepReader {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if self.pos >= self.data.len() {
+                    return Ok(0);
+                }
+                let n = buf.len().min(self.data.len() - self.pos);
+                buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+                self.pos += n;
+                Ok(n)
+            }
+        }
+        // "ok" + first two bytes of 🚀 (F0 9F) — truncated at EOF.
+        let mut data = b"ok".to_vec();
+        data.extend_from_slice(&"🚀".as_bytes()[..2]);
+        let (sink, log) = recorder();
+        let counters = Arc::new(HostCounters::default());
+        let handle = spawn_reader(
+            StepReader { data, pos: 0 },
+            Stream::Stdout,
+            "h".to_string(),
+            "r".to_string(),
+            sink,
+            counters,
+        );
+        assert!(handle.join().is_ok(), "reader thread panicked");
+        let chunks = events(&log, "fleet://output/r");
+        let mut out = String::new();
+        for c in &chunks {
+            out.push_str(c["bytes"].as_str().unwrap());
+        }
+        assert_eq!(out, "ok\u{FFFD}", "truncated tail must be flushed best-effort");
     }
 
     // ---- fake-ssh integration (Linux; §12.5 fixtures; env-serialized) ----
