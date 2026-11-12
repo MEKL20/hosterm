@@ -5767,18 +5767,45 @@ fn main() {
             acc
         );
         use std::io::Write as _;
-        let _ = writer.write_all(b"x\r");
-        let _ = writer.flush();
-        let start = std::time::Instant::now();
-        while !acc.contains("RESUMED") && start.elapsed() < std::time::Duration::from_secs(10) {
-            if let Ok(s) = rx.recv_timeout(std::time::Duration::from_millis(50)) {
-                acc = s;
+        // `pause` flushes the console input buffer right after printing its
+        // prompt (the Windows PAUSE path calls FlushConsoleInputBuffer; the same
+        // post-prompt flush class as read_passphrase()'s `while (_kbhit())
+        // _getch();`). That flush discards every event queued at that moment,
+        // including a key written as soon as we see the prompt, so a single
+        // prompt-time write is racy. Retry the key until `pause` consumes one and
+        // prints RESUMED, with a bounded deadline. This is not a tautology:
+        // RESUMED only prints after `pause` reads a KEY_EVENT from the raw
+        // console input queue, so if ConPTY never feeds ReadConsoleInput every
+        // attempt fails and the assert fires.
+        let mut attempts = 0u32;
+        let mut resumed = false;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::time::Instant::now() < deadline && !resumed {
+            let _ = writer.write_all(b"x\r");
+            let _ = writer.flush();
+            attempts += 1;
+            let attempt_deadline = std::time::Instant::now() + std::time::Duration::from_millis(400);
+            while std::time::Instant::now() < attempt_deadline {
+                if let Ok(s) = rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                    acc = s;
+                }
+                if acc.contains("RESUMED") {
+                    resumed = true;
+                    break;
+                }
+            }
+            if attempts >= 8 {
+                break;
             }
         }
-        eprintln!("[winlive] readconsoleinput probe post: {:?}", acc);
+        eprintln!(
+            "[winlive] readconsoleinput probe post: {:?} (attempts={}, resumed={})",
+            acc, attempts, resumed
+        );
         assert!(
-            acc.contains("RESUMED"),
-            "ConPTY input never reached the raw console input queue: {:?}",
+            resumed,
+            "ConPTY input never reached the raw console input queue ({} attempts): {:?}",
+            attempts,
             acc
         );
     }
