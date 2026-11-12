@@ -8,6 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Windows releases are currently **unsigned** (Authenticode signing postponed —
 see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
+## [0.15.5] - 2026-11-12
+
+### Fixed
+- Terminal no longer corrupts text in full-screen TUIs (k9s, vim, htop, tmux).
+  Multi-byte UTF-8 characters split across PTY read boundaries were decoded
+  independently and turned into permanent replacement characters; the decoder
+  now carries an incomplete tail across reads. Commits `7621b72`, `974fd88`.
+- Fleet Run output had the same per-chunk UTF-8 decode and stopped corrupting
+  for the same reason. Commit `974fd88`.
+- SFTP no longer panics or drains the wrong span when a remote directory
+  contains a filename that is not valid UTF-8 (the prompt needle is now matched
+  on raw bytes and the drain uses a byte offset). Commit `d054e2b`.
+- Windows terminal: SSH password auto-fill now survives the post-prompt console
+  input flush that could swallow the first character. `pump_pty` mirrors
+  `sftp_spawn`'s mitigation (sacrificial CR plus a short grace window).
+  Commits `4bab320`, `8510ce5`, `8fe52ee`.
+- Add-key modal wipes the private key bytes from the DOM on close (both Save
+  and Cancel), matching the Edit-key dialog. Commit `931f383`.
+
+### Changed
+- A nested password prompt for a *different* host (`ssh otherhost`) now
+  re-injects that host's stored password. Previously only the first prompt was
+  answered. This mirrors `sftp_spawn`; the secret stays inside the user's own
+  PTY session and the user opted into auto-fill. Reviewed and accepted by the
+  lead on card `t_e2240a3d`.
+
 ## [0.15.4] - 2026-11-11
 
 ### Added
