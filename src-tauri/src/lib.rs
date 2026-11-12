@@ -6040,7 +6040,7 @@ mod con {
             nlength: u32,
             lpnumberwritten: *mut u32,
         ) -> i32;
-        pub fn GetNumberOfInputEvents(hconsoleinput: *mut c_void, lpcount: *mut u32) -> i32;
+        pub fn GetNumberOfConsoleInputEvents(hconsoleinput: *mut c_void, lpcount: *mut u32) -> i32;
     }
 
     const GENERIC_READ: u32 = 0x8000_0000;
@@ -6105,10 +6105,10 @@ mod con {
             let mut written = 0u32;
             WriteConsoleInputW(h, &rec as *const _ as *const c_void, 1, &mut written);
             let mut before = 0u32;
-            GetNumberOfInputEvents(h, &mut before);
+            GetNumberOfConsoleInputEvents(h, &mut before);
             FlushConsoleInputBuffer(h);
             let mut after = 0u32;
-            GetNumberOfInputEvents(h, &mut after);
+            GetNumberOfConsoleInputEvents(h, &mut after);
             CloseHandle(h);
             written > 0 && before > 0 && after == 0
         }
@@ -6179,16 +6179,25 @@ fn main() {
         let probe = dir.join("flush-probe.exe");
         let probe_src = dir.join("flush-probe.rs");
         std::fs::write(&probe_src, FLUSH_PROBE_SRC).unwrap();
-        let built = std::process::Command::new("rustc")
+        let built_output = std::process::Command::new("rustc")
             .arg("--edition")
             .arg("2021")
             .arg("-O")
             .arg(&probe_src)
             .arg("-o")
             .arg(&probe)
-            .status()
-            .map(|s| s.success())
+            .output();
+        let built = built_output
+            .as_ref()
+            .map(|o| o.status.success())
             .unwrap_or(false);
+        if !built {
+            let err = built_output
+                .as_ref()
+                .map(|o| String::from_utf8_lossy(&o.stderr).to_string())
+                .unwrap_or_default();
+            eprintln!("[winlive] flush probe build stderr: {}", err);
+        }
         eprintln!("[winlive] flush probe built: {}", built);
         assert!(built, "flush probe failed to compile");
 
