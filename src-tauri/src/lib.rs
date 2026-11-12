@@ -2143,9 +2143,22 @@ pub(crate) fn decode_utf8_stream(pending: &mut Vec<u8>, incoming: &[u8]) -> Stri
     }
 }
 
+/// OpenSSH's password-prompt suffix, matched against the PTY output stream.
+const PW_PROMPT: &[u8] = b"'s password:";
+
 /// Pump a PTY: forward output chunks through `on_chunk`, watching for
 /// OpenSSH's password prompt when `auto_pw` is set, injecting the secret
 /// once into `writer`. Shared by pty_spawn and the live test module.
+///
+/// Windows: Win32-OpenSSH's console password reader flushes the console
+/// input buffer right after printing its prompt (`while (_kbhit())
+/// _getch();`), so a password written at prompt time can be drained whole.
+/// Mirror `sftp_spawn`: answer the first prompt with a sacrificial CR and
+/// send the real password after a short grace, once the flush has drained.
+/// If the sacrificial is taken as the password instead, the next prompt
+/// gets the real password directly (that flush is already past). The grace
+/// runs on its own thread because this loop blocks in `read()` and cannot
+/// otherwise notice that the delay elapsed.
 fn pump_pty(
     mut reader: Box<dyn std::io::Read + Send>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
@@ -2153,10 +2166,19 @@ fn pump_pty(
     mut on_chunk: impl FnMut(&str),
 ) {
     let mut buf = [0u8; 4096];
-    let mut tail: Vec<u8> = Vec::new();
     // Undecoded trailing bytes carried across reads (see decode_utf8_stream).
     let mut pending: Vec<u8> = Vec::new();
-    let mut injected = false;
+    // Trailing bytes carried across reads so a prompt straddling two reads is
+    // still counted; PW_PROMPT.len() - 1 is the longest possible overlap.
+    let mut prompt_carry: Vec<u8> = Vec::new();
+    let mut prompts_seen = 0usize;
+    let mut real_sent = false;
+    #[cfg(windows)]
+    let pw_grace = std::time::Duration::from_millis(120);
+    #[cfg(windows)]
+    let mut sacrificial = true;
+    #[cfg(windows)]
+    let mut grace_cancel: Option<Arc<AtomicBool>> = None;
     loop {
         match reader.read(&mut buf) {
             Ok(0) => {
@@ -2173,17 +2195,74 @@ fn pump_pty(
             Ok(n) => {
                 let s = decode_utf8_stream(&mut pending, &buf[..n]);
                 if let Some(pw) = auto_pw.as_deref() {
-                    if !injected {
-                        tail.extend_from_slice(&buf[..n]);
-                        if tail.len() > 8192 {
-                            tail.drain(..tail.len() - 512);
+                    if !real_sent {
+                        let mut scan = [0u8; 4096 + 16];
+                        let scan_len = prompt_carry.len() + n;
+                        scan[..prompt_carry.len()].copy_from_slice(&prompt_carry);
+                        scan[prompt_carry.len()..scan_len].copy_from_slice(&buf[..n]);
+                        let mut count = 0usize;
+                        let mut i = 0;
+                        while i + PW_PROMPT.len() <= scan_len {
+                            if &scan[i..i + PW_PROMPT.len()] == PW_PROMPT {
+                                count += 1;
+                                i += PW_PROMPT.len();
+                            } else {
+                                i += 1;
+                            }
                         }
-                        if String::from_utf8_lossy(&tail).contains("'s password:") {
-                            injected = true;
-                            let mut w = writer.lock().unwrap();
-                            let _ = w.write_all(pw.as_bytes());
-                            let _ = w.write_all(b"\r");
-                            let _ = w.flush();
+                        let keep = scan_len.saturating_sub(PW_PROMPT.len() - 1);
+                        prompt_carry.clear();
+                        prompt_carry.extend_from_slice(&scan[keep..scan_len]);
+                        if count > 0 {
+                            prompts_seen += count;
+                            #[cfg(windows)]
+                            {
+                                if prompts_seen >= 2 {
+                                    // A second prompt means the sacrificial was
+                                    // taken as the password, so the post-prompt
+                                    // flush is already past: cancel the grace
+                                    // write and send the real password directly.
+                                    sacrificial = false;
+                                    if let Some(c) = grace_cancel.take() {
+                                        c.store(true, Ordering::SeqCst);
+                                    }
+                                }
+                                if sacrificial {
+                                    {
+                                        let mut w = writer.lock().unwrap();
+                                        let _ = w.write_all(b"\r");
+                                        let _ = w.flush();
+                                    }
+                                    let cancel = Arc::new(AtomicBool::new(false));
+                                    let w2 = Arc::clone(&writer);
+                                    let pw2 = pw.to_string();
+                                    let c2 = Arc::clone(&cancel);
+                                    thread::spawn(move || {
+                                        thread::sleep(pw_grace);
+                                        let mut w = w2.lock().unwrap();
+                                        if !c2.load(Ordering::SeqCst) {
+                                            let _ = w.write_all(pw2.as_bytes());
+                                            let _ = w.write_all(b"\r");
+                                            let _ = w.flush();
+                                        }
+                                    });
+                                    grace_cancel = Some(cancel);
+                                } else {
+                                    let mut w = writer.lock().unwrap();
+                                    let _ = w.write_all(pw.as_bytes());
+                                    let _ = w.write_all(b"\r");
+                                    let _ = w.flush();
+                                    real_sent = true;
+                                }
+                            }
+                            #[cfg(not(windows))]
+                            {
+                                let mut w = writer.lock().unwrap();
+                                let _ = w.write_all(pw.as_bytes());
+                                let _ = w.write_all(b"\r");
+                                let _ = w.flush();
+                                real_sent = true;
+                            }
                         }
                     }
                 }
@@ -5925,6 +6004,244 @@ fn main() {
             }
         }
         eprintln!("[winlive] early-CR outcome: {:?}", acc);
+    }
+
+    /// Source of the tiny ConPTY probe used by
+    /// [`pump_pty_autopw_survives_post_prompt_flush`]. Compiled on the fly with
+    /// `rustc` (cargo test --lib builds no bin targets), mirroring the existing
+    /// askpass-helper pattern. It reproduces Win32-OpenSSH `read_passphrase()`'s
+    /// shape: print the prompt, flush the console input buffer, then read the
+    /// password line. `cmd.exe`'s `pause` cannot be used here because it
+    /// *consumes* a key, which would eat the first character of the real
+    /// password in the drained-sacrificial case and make the probe racy.
+    #[cfg(windows)]
+    const FLUSH_PROBE_SRC: &str = r#"use std::io::{self, Read, Write};
+
+#[cfg(windows)]
+mod con {
+    use core::ffi::c_void;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        pub fn CreateFileW(
+            lpfilename: *const u16,
+            dwdesiredaccess: u32,
+            dwsharemode: u32,
+            lpsecurityattributes: *mut c_void,
+            dwcreationdisposition: u32,
+            dwflagsandattributes: u32,
+            htemplatefile: *mut c_void,
+        ) -> *mut c_void;
+        pub fn CloseHandle(hobject: *mut c_void) -> i32;
+        pub fn FlushConsoleInputBuffer(hconsoleinput: *mut c_void) -> i32;
+        pub fn WriteConsoleInputW(
+            hconsoleinput: *mut c_void,
+            lpbuffer: *const c_void,
+            nlength: u32,
+            lpnumberwritten: *mut u32,
+        ) -> i32;
+        pub fn GetNumberOfInputEvents(hconsoleinput: *mut c_void, lpcount: *mut u32) -> i32;
+    }
+
+    const GENERIC_READ: u32 = 0x8000_0000;
+    const GENERIC_WRITE: u32 = 0x4000_0000;
+    const FILE_SHARE_READ: u32 = 0x0000_0001;
+    const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+    const OPEN_EXISTING: u32 = 3;
+    const CONIN: [u16; 6] = [
+        'C' as u16, 'O' as u16, 'N' as u16, 'I' as u16, 'N' as u16, '$' as u16,
+    ];
+    const EVENT_KEY: u16 = 0x0001;
+
+    #[repr(C)]
+    struct KeyEventRecord {
+        key_down: i32,
+        repeat_count: u16,
+        virtual_key_code: u16,
+        virtual_scan_code: u16,
+        unicode_char: u16,
+        control_key_state: u32,
+    }
+
+    #[repr(C)]
+    struct InputRecord {
+        event_type: u16,
+        event: KeyEventRecord,
+    }
+
+    fn invalid(h: *mut c_void) -> bool {
+        h.is_null() || h as isize == -1
+    }
+
+    /// Open CONIN$ (the handle `pause` uses), write a sentinel key, then flush
+    /// the console input buffer. Returns true only when the sentinel was
+    /// pending and the flush really drained it — i.e. the post-prompt flush
+    /// this probe exists to reproduce actually works under ConPTY.
+    pub fn flush_and_verify() -> bool {
+        unsafe {
+            let h = CreateFileW(
+                CONIN.as_ptr(),
+                GENERIC_READ | GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                core::ptr::null_mut(),
+                OPEN_EXISTING,
+                0,
+                core::ptr::null_mut(),
+            );
+            if invalid(h) {
+                return false;
+            }
+            let rec = InputRecord {
+                event_type: EVENT_KEY,
+                event: KeyEventRecord {
+                    key_down: 1,
+                    repeat_count: 1,
+                    virtual_key_code: 0x41,
+                    virtual_scan_code: 0x1E,
+                    unicode_char: 'A' as u16,
+                    control_key_state: 0,
+                },
+            };
+            let mut written = 0u32;
+            WriteConsoleInputW(h, &rec as *const _ as *const c_void, 1, &mut written);
+            let mut before = 0u32;
+            GetNumberOfInputEvents(h, &mut before);
+            FlushConsoleInputBuffer(h);
+            let mut after = 0u32;
+            GetNumberOfInputEvents(h, &mut after);
+            CloseHandle(h);
+            written > 0 && before > 0 && after == 0
+        }
+    }
+}
+
+fn main() {
+    let pw = std::env::args().nth(1).unwrap_or_default();
+    let mut out = io::stdout();
+    let mut any_flush_ok = false;
+    for attempt in 0..3u32 {
+        let _ = write!(out, "fakebox@127.0.0.1's password: ");
+        let _ = out.flush();
+        #[cfg(windows)]
+        let flush_ok = con::flush_and_verify();
+        #[cfg(not(windows))]
+        let flush_ok = true;
+        any_flush_ok = any_flush_ok || flush_ok;
+        let _ = writeln!(out, "[probe] attempt {} flush_ok={}", attempt, flush_ok);
+        let _ = out.flush();
+        // Read one line the way read_passphrase() does: raw bytes up to CR.
+        let mut line: Vec<u8> = Vec::new();
+        let mut b = [0u8; 1];
+        loop {
+            match io::stdin().read(&mut b) {
+                Ok(0) => break,
+                Ok(_) => {
+                    if b[0] == b'\r' || b[0] == b'\n' {
+                        break;
+                    }
+                    line.push(b[0]);
+                }
+                Err(_) => break,
+            }
+        }
+        let got = String::from_utf8_lossy(&line).to_string();
+        let _ = writeln!(out, "[probe] attempt {} got {:?}", attempt, got);
+        let _ = out.flush();
+        if got == pw {
+            let _ = writeln!(out, "ACCESS_GRANTED flush_ok={}", any_flush_ok);
+            let _ = out.flush();
+            return;
+        }
+    }
+    let _ = writeln!(out, "WRONG flush_ok={}", any_flush_ok);
+    let _ = out.flush();
+}
+"#;
+
+    /// Windows live test for `pump_pty`'s `auto_pw` path: the stored password
+    /// must reach a real ConPTY child that flushes the console input buffer
+    /// right after printing its prompt — the same post-prompt flush class as
+    /// Win32-OpenSSH `read_passphrase()`. Before the sacrificial-CR + grace
+    /// mitigation, a single prompt-time write could be drained whole and the
+    /// child never saw the password. Gated behind HOSTERM_WINLIVE=1 (the CI
+    /// workflow sets it at build-windows.yml:234) so it actually runs on
+    /// Windows instead of early-returning like the bash-only `live_*` tests.
+    #[cfg(windows)]
+    #[test]
+    fn pump_pty_autopw_survives_post_prompt_flush() {
+        if std::env::var("HOSTERM_WINLIVE").as_deref() != Ok("1") {
+            return;
+        }
+        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("hosterm-ptyflush-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let probe = dir.join("flush-probe.exe");
+        let probe_src = dir.join("flush-probe.rs");
+        std::fs::write(&probe_src, FLUSH_PROBE_SRC).unwrap();
+        let built = std::process::Command::new("rustc")
+            .arg("--edition")
+            .arg("2021")
+            .arg("-O")
+            .arg(&probe_src)
+            .arg("-o")
+            .arg(&probe)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        eprintln!("[winlive] flush probe built: {}", built);
+        assert!(built, "flush probe failed to compile");
+
+        let password = "s3cret-pw-xyz";
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize { rows: 24, cols: 200, pixel_width: 0, pixel_height: 0 })
+            .unwrap();
+        let mut cmd = CommandBuilder::new(&probe);
+        cmd.arg(password);
+        let mut child = pair.slave.spawn_command(cmd).unwrap();
+        drop(pair.slave);
+        let reader = pair.master.try_clone_reader().unwrap();
+        let writer = pair.master.take_writer().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        let pump = std::thread::spawn(move || {
+            pump_pty(
+                reader,
+                Arc::new(Mutex::new(writer)),
+                Some(password.to_string()),
+                move |s| {
+                    let _ = tx.send(s.to_string());
+                },
+            );
+        });
+        let mut out = String::new();
+        let start = std::time::Instant::now();
+        while start.elapsed() < std::time::Duration::from_secs(15) {
+            match rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                Ok(s) => {
+                    out.push_str(&s);
+                    if out.contains("ACCESS_GRANTED") || out.contains("WRONG") {
+                        break;
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(_) => break,
+            }
+        }
+        eprintln!("[winlive] pump_pty flush probe output: {:?}", out);
+        drop(pair.master);
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = pump.join();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            out.contains("ACCESS_GRANTED"),
+            "pump_pty auto_pw did not deliver the password past the post-prompt flush: {out:?}"
+        );
+        assert!(
+            out.contains("flush_ok=true"),
+            "the probe could not prove the post-prompt flush drains input: {out:?}"
+        );
     }
 
     #[test]
