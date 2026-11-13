@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Windows releases are currently **unsigned** (Authenticode signing postponed —
 see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
+## [0.16.0] - 2026-11-13
+
+### Added
+- Visible sidebar collapse/expand toggle `#panel-toggle` in the tab bar, always
+  shown in both states with `aria-expanded`, `title`, and a chevron direction
+  that follows the panel state. The visible collapse/expand control was removed
+  in v0.14.7 (`b20ca98`), leaving the panel toggleable only by clicking the
+  active rail item — not discoverable.
+
+### Changed
+- Fresh profiles now boot with the context panel **collapsed**, so the terminal
+  gets full width immediately (icon rail 56px only; the 248px panel + 5px resize
+  handle are gone → terminal +253px). The persisted preference
+  (`localStorage` `hosterm.panel-collapsed`) still wins if the user chose
+  otherwise; the legacy `hosterm.sb-collapsed` fallback is intentionally dropped
+  (dead since v0.14.7).
+
+Feature card `t_d09787e0`, feature commit `e128b8d`.
+
 ## [0.15.6] - 2026-11-12
 
 ### Changed
