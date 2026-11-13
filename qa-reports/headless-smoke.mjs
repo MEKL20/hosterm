@@ -397,6 +397,26 @@ const firstResp = await page.goto("http://localhost:4199/");
 const servedCsp = (firstResp.headers()["content-security-policy"] || "").trim();
 await page.waitForTimeout(400);
 
+// -- v0.15.7 (FE): a fresh profile boots rail-only (context panel collapsed) --
+// The visible #panel-toggle in the tab bar is the discoverable collapse/expand
+// control (v0.14.7 removed the old arrow buttons). This smoke uses a fresh
+// browser context with no storageState, so localStorage starts empty and the
+// default is deterministic. Expand here so the rest of the suite keeps its
+// panel-visible preconditions (host list, sidebar actions, rail checks).
+const freshPanel = await page.evaluate(() => ({
+  collapsed: document.body.classList.contains("panel-collapsed"),
+  panelVisible: document.getElementById("section-panel").getClientRects().length > 0,
+}));
+check("v0.15.7: fresh profile boots with the context panel collapsed (rail only)",
+  freshPanel.collapsed && !freshPanel.panelVisible, JSON.stringify(freshPanel));
+check("v0.15.7: #panel-toggle exists and is visible in the tab bar",
+  await page.locator("#panel-toggle").isVisible());
+await page.locator("#panel-toggle").click();
+await page.waitForTimeout(60);
+check("v0.15.7: #panel-toggle expands the panel",
+  await page.evaluate(() => !document.body.classList.contains("panel-collapsed") &&
+    document.getElementById("section-panel").getClientRects().length > 0));
+
 const openSettingsFromAccount = async () => {
   if (await page.locator("#signin-popover").isHidden()) await page.locator("#user-chip").click();
   await page.locator("#acct-settings-btn").click();
@@ -468,6 +488,16 @@ const spawns1 = calls.filter((c) => c.cmd === "pty_spawn").length;
 await winPage.locator("#ssh-recheck").click();
 await winPage.waitForTimeout(300);
 check("re-check fixed: guide closes", await winPage.locator("#ssh-modal").evaluate((el) => el.classList.contains("hidden")));
+// v0.15.7: winPage is its own fresh browser context, so the rail-only default
+// applies here too. Expand via the visible #panel-toggle (the blocking guide is
+// gone by now) before the first host-row interaction.
+if (await winPage.evaluate(() => document.body.classList.contains("panel-collapsed"))) {
+  await winPage.locator("#panel-toggle").click();
+  await winPage.waitForTimeout(60);
+}
+check("v0.15.7: winPage (fresh context) expands via #panel-toggle before host interactions",
+  await winPage.evaluate(() => !document.body.classList.contains("panel-collapsed") &&
+    document.getElementById("section-panel").getClientRects().length > 0));
 await winPage.locator(".host-item .h-name").first().click();
 await winPage.waitForTimeout(300);
 check("re-check fixed: connect works without restart",
@@ -623,6 +653,43 @@ const stored = await page.evaluate(() => localStorage.getItem("hosterm.panel-col
 check("collapse: persisted", stored === "1");
 await page.locator('.rail-item[data-view="host"]').click();
 check("expand: class removed", await page.evaluate(() => !document.body.classList.contains("panel-collapsed")));
+
+// 9c (v0.15.7): the visible #panel-toggle mirrors and drives the same state —
+// aria-expanded matches the panel, the title names the action the click will
+// perform, and the chevron direction flips with the state.
+const panelToggleState = () => page.evaluate(() => {
+  const t = document.getElementById("panel-toggle");
+  const vis = [...t.querySelectorAll("path")].find((p) => getComputedStyle(p).display !== "none");
+  return {
+    exists: !!t,
+    visible: t.getClientRects().length > 0,
+    expanded: t.getAttribute("aria-expanded"),
+    title: t.title,
+    icon: vis ? vis.getAttribute("d") : null,
+    collapsed: document.body.classList.contains("panel-collapsed"),
+    panelVisible: document.getElementById("section-panel").getClientRects().length > 0,
+  };
+});
+const toggleOpen = await panelToggleState();
+check("v0.15.7 §9c: #panel-toggle is visible, aria-expanded=true, title=Collapse, chevron points left",
+  toggleOpen.exists && toggleOpen.visible && toggleOpen.expanded === "true" &&
+  toggleOpen.title === "Collapse sidebar panel" && !toggleOpen.collapsed && toggleOpen.panelVisible &&
+  toggleOpen.icon === "m9 4-4 4 4 4",
+  JSON.stringify(toggleOpen));
+await page.locator("#panel-toggle").click();
+await page.waitForTimeout(60);
+const toggleShut = await panelToggleState();
+check("v0.15.7 §9c: #panel-toggle collapses the panel, aria-expanded=false, title=Expand, chevron points right",
+  toggleShut.collapsed && !toggleShut.panelVisible && toggleShut.expanded === "false" &&
+  toggleShut.title === "Expand sidebar panel" && toggleShut.icon === "m7 4 4 4-4 4",
+  JSON.stringify(toggleShut));
+await page.locator("#panel-toggle").click();
+await page.waitForTimeout(60);
+const toggleReopen = await panelToggleState();
+check("v0.15.7 §9c: #panel-toggle expands again, aria-expanded=true, title flips back to Collapse",
+  !toggleReopen.collapsed && toggleReopen.expanded === "true" &&
+  toggleReopen.title === "Collapse sidebar panel" && toggleReopen.icon === "m9 4-4 4 4 4",
+  JSON.stringify(toggleReopen));
 
 // 9d. Edit/Delete left the row (fix #4) -> context menu; Delete uses in-app dialog (not native confirm)
 check("edit/delete buttons gone from rows",

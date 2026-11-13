@@ -530,6 +530,19 @@ body.panel-collapsed #sb-resize { display: none; }
   background: var(--sidebar);
   border-bottom: 1px solid var(--border);
 }
+/* Visible panel collapse/expand (v0.15.7): the first child of #tabbar so it is
+   discoverable in both states and sits right beside the section panel. The
+   chevron direction follows aria-expanded via #panel-toggle[aria-expanded]. */
+#panel-toggle {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 28px;
+  height: 28px;
+  margin: 0 0 0 6px;
+}
+#panel-toggle .pt-collapse { display: none; }
+#panel-toggle[aria-expanded="true"] .pt-expand { display: none; }
+#panel-toggle[aria-expanded="true"] .pt-collapse { display: block; }
 #tabs {
   flex: 1;
   min-width: 0;

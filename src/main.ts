@@ -4440,15 +4440,21 @@ window.addEventListener("DOMContentLoaded", () => {
   setPanelCollapsed = (c: boolean) => {
     panelCollapsed = c;
     document.body.classList.toggle("panel-collapsed", c);
+    // Visible toggle in the tab bar: aria-expanded mirrors the panel state and
+    // the chevron flips direction via #panel-toggle[aria-expanded] in styles.css.
+    const toggle = $("#panel-toggle");
+    toggle.setAttribute("aria-expanded", String(!c));
+    toggle.title = c ? "Expand sidebar panel" : "Collapse sidebar panel";
     syncRailExpanded();
     try { localStorage.setItem("hosterm.panel-collapsed", c ? "1" : ""); } catch { /* private mode */ }
     setTimeout(fitActiveSessions, 0);
   };
+  // Default collapsed: a fresh profile gets the rail-only shell so the terminal
+  // is full width; the persisted flag only overrides when the user chose else.
   const storedPanel = localStorage.getItem("hosterm.panel-collapsed");
-  const initialPanelCollapsed = storedPanel === null
-    ? localStorage.getItem("hosterm.sb-collapsed") === "1"
-    : storedPanel === "1";
+  const initialPanelCollapsed = storedPanel === null ? true : storedPanel === "1";
   setPanelCollapsed(initialPanelCollapsed);
+  $("#panel-toggle").addEventListener("click", () => setPanelCollapsed(!panelCollapsed));
   const narrowPanel = window.matchMedia("(max-width: 520px)");
   const collapseForNarrowWindow = () => { if (narrowPanel.matches) setPanelCollapsed(true); };
   narrowPanel.addEventListener("change", collapseForNarrowWindow);
