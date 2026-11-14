@@ -1854,3 +1854,370 @@ separate unit from the command wiring regardless.
   `check_ansible` resolves it as a file (mirroring `binaries_missing`' `HOSTERM_SFTP_BIN` branch) and
   `probe_dirs` is empty. Lead confirms the smoke expectation.
 - **LQ-8 (module split):** see §15.11 — the pure cores should be a separate unit from the wiring.
+
+---
+
+## 16. AI backend v1 (addendum — BYO OpenAI-compatible endpoint, frozen IPC contract)
+
+> Architect addendum (card t_29463663, 14 Nov 2026), derived FROM `docs/FEATURE-SPEC-ai-backend-v1.md`
+> (OQ-4 LOCKED by MEKL 13 Nov 2026, card `t_5009863d`). **Design-first lane:** the spec's scope lock
+> (§0), its LOCKED decisions D-AI1..15 (§1.3), its frozen IPC contract (§2), and its NFR-3 verdict
+> (§7) are CLOSED — this section designs the mechanics only and re-opens no product decision. Units
+> code against §16.3 verbatim; the frontend mocks this contract without any backend. A payload or
+> name change requires an edit to this section (new ADR revision), never an implementation-side drift.
+>
+> **Transport is a reuse, not an invention.** The feature adds ONE new outbound path — `reqwest`
+> blocking (already a dependency, used by OAuth/Drive) — and ONE new secret store — the OS keyring
+> (already a dependency, used by OAuth refresh + backup device key). **Nol dependency baru**, no
+> bundled runtime, no sidecar, no new file under `~/.ssh`.
+
+### 16.1 Constraints honored (trace)
+
+| Constraint (FEATURE-SPEC) | Mechanism (this section) |
+|---|---|
+| FR-AI1 — AI panel: thread, command card, input | `ai_chat` contract (§16.3) + system prompt (§16.6); smoke §8.1 (§16.9) |
+| FR-AI2 — command card: exact host alias, mono command, impact description, state badge | `AiProposal` (§16.3) + proposal validation (§16.4); label honesty §16.3 |
+| FR-AI3 — `AWAITING APPROVAL` + Run once / Always allow / Reject | §13.6 FROZEN (unchanged) + §16.3; state machine verbatim |
+| FR-AI4 — Always allow visually secondary | §13.6 + INV-25 (unchanged); §16.7 |
+| FR-AI5 — Run once executes once via real-ssh terminal | §13.6 FROZEN; §16.5 step 9 (nol execute in backend); §16.6 |
+| FR-AI6 — Always allow persists exact `(host,command)` | §13.6 + ADR-21 (unchanged); §16.2 |
+| FR-AI7 — exact match renders `ALWAYS ALLOWED` | §13.6 (unchanged); §16.3 |
+| FR-AI8 — Reject cancels, no execute, no allowlist write | §13.6 (unchanged) |
+| FR-AI9 — never auto-run implicitly | §16.5 (nol execute) + §16.7 + INV-36 |
+| FR-AI10 — Settings › AI Assistant / Approvals read+revoke list | §13.6 (unchanged); §16.2 |
+| FR-AI11 — hostile output escaped | §16.7 (`esc()`/`escAttr()`, ADR-8); INV-11 family |
+| FR-AI12 — head-tag reflects real backend | `AiChatResp.backend` (§16.3) + label rules §16.3; §16.6 |
+| FR-AI13 — argv safety check on proposed alias | §16.4 proposal validation (`sftp_safe`) + INV-26; §16.7 |
+| NFR-3 — zero external network | §16.7 loopback-only v1 + ADR-24; no NFR-3 amendment (§7) |
+| NFR-5 — re-measure baseline at dispatch | §16.10 / §16.11 (live grep + STATE.md verify loop) |
+| NFR-8 — machine-local, no cross-device sync | §16.2 (stateless, no sync; §6 out of scope) |
+| OQ-4 LOCKED (arah C, BYO endpoint) | §16.1 + ADR-23; spec §1.2 verbatim MEKL quote |
+| OQ-AI1 (= OQ-4) — RESOLVED | §16.1 + ADR-23 |
+| OQ-AI2 — remote toggle removed, loopback-only | §16.2 + §16.7 + ADR-24 |
+| OQ-AI3 — keyring fallback = fail-closed | §16.2 + §16.7 |
+| OQ-AI4 — host scope: backend validates (no selector v1) | §16.4 proposal host validation + §16.5 step 8 |
+| OQ-AI5 — history not persisted (stateless) | §16.2 |
+| OQ-AI6 — stub `AI_PROPOSALS` removed, no fake card | §16.2 + INV-38 |
+
+D-AI1..15 (spec §1.3) are honored through the rows above; none is re-opened here.
+
+### 16.2 Data model
+
+No DB. One new app-data file + one OS-keyring entry. Entities:
+
+| Entity | Location | Lifetime | Shape |
+|---|---|---|---|
+| `ai-settings.json` | `dirs::config_dir()/hosterm/` | persistent, app-data (INV-22) | `AiSettings`; atomic whole-file write (temp → rename, 0600-class); corrupt → `DEFAULT_AI_SETTINGS` (INV-24 class) |
+| AI API key | OS keyring, service `hosterm`, account `ai-api-key` | persistent, secret | `has_key` only; the key byte never enters `ai-settings.json`, IPC, log, argv, or error strings |
+
+Schema `AiSettings` (verbatim from spec §2.1):
+
+```ts
+interface AiSettings {
+  version: number;          // 1
+  endpoint: string;         // NO DEFAULT; starts empty = not configured (MEKL 13 Nov 2026)
+  model: string;            // NO DEFAULT; starts empty = not configured
+  remote_allowed: boolean;  // defense-in-depth only; UI toggle removed in v1 (D-AI5)
+  has_key: boolean;         // keyring only; the key is never in this payload
+}
+```
+
+Atomic write: whole-file temp → rename, 0600-class perms where the OS supports it (pattern of
+`settings.json`, §13.4). `HOSTERM_DATA_DIR` test override (ADR-18 pattern). Corrupt/missing → defaults,
+corrupt bytes untouched until a legitimate write (INV-24 class).
+
+**Never** reads or writes `~/.ssh/config` or the secrets sidecar (INV-22 class) — the AI path has no
+business touching ssh state. The keyring entry is **separate** from `google-refresh-token` (OAuth) and
+`backup-data-key` (backup); `read_ai_settings` returns `has_key: boolean` only.
+
+**Stateless:** no prompt/response/history persistence (OQ-AI5); no cross-device sync (NFR-8, §6).
+
+### 16.3 Frozen IPC contract
+
+Conventions identical to §12.3/§13.5: command args camelCase at the Tauri boundary (v2 auto-maps to
+snake_case Rust), JSON payload fields snake_case. **Request/response only — no events** (no streaming
+in v1, §13.5 posture). **IPC inventory 45 → 48** (see §16.11). This block is the freeze — implement
+verbatim, mock verbatim.
+
+```ts
+invoke("read_ai_settings"): Promise<AiSettings>
+// Never throws: missing/corrupt ai-settings.json → DEFAULT_AI_SETTINGS (INV-24 class).
+// `has_key` dibaca dari OS keyring; key itu sendiri TIDAK PERNAH dikembalikan.
+interface AiSettings {
+  version: number;          // 1
+  endpoint: string;         // NO DEFAULT; starts empty = not configured (MEKL 13 Nov 2026)
+  model: string;            // NO DEFAULT; starts empty = not configured
+  remote_allowed: boolean;  // defense-in-depth only; UI toggle removed in v1 (D-AI5)
+  has_key: boolean;         // keyring only; the key is never in this payload
+}
+
+invoke("write_ai_settings", { req: WriteAiSettingsReq }): Promise<null>
+// Atomic whole-file write (temp → rename, 0600-class) ke ai-settings.json (app-data).
+// `key`: undefined/null = biarkan key apa adanya; "" = hapus key; non-empty = simpan ke keyring.
+// Rejects (frozen): ai-settings:invalid-endpoint | ai-settings:remote-disabled |
+//   ai-settings:invalid-model | ai-settings:keyring-unavailable | ai-settings:write-failed.
+// NEVER reads/writes ~/.ssh/config atau sidecar (INV-22 class).
+interface WriteAiSettingsReq {
+  endpoint: string;
+  model: string;
+  remote_allowed: boolean;
+  key?: string | null;
+}
+
+invoke("ai_chat", { req: AiChatReq }): Promise<AiChatResp>
+// Proposal-only. NEVER executes. Stateless (no server-side history).
+interface AiChatReq {
+  prompt: string;            // non-empty after trim; ≤ 8192 UTF-8 bytes
+  host: string | null;       // scope alias dari panel AI; null = belum dispesifikkan
+  history: AiMessage[];      // ≤ 20 turns, total ≤ 16384 UTF-8 bytes
+  timeout_secs: number;      // 5..120; default 30 — backend REJECTS out of range, never clamps
+}
+interface AiMessage { role: "user" | "assistant"; content: string }
+
+interface AiChatResp {
+  reply: string;             // model text; ≤ 16384 bytes (truncated dengan penanda bila lewat)
+  proposal: AiProposal | null;
+  backend: "loopback" | "remote";  // sumber label jujur (FR-AI12)
+  warning: string | null;    // frozen reason codes di bawah; null bila proposal valid
+}
+interface AiProposal {
+  host: string;              // alias PERSIS, tervalidasi terhadap config snapshot
+  command: string;           // single-line, ≤ 2048 UTF-8 bytes
+  description: string;       // ≤ 1024 UTF-8 bytes
+}
+```
+
+**Label honesty (FR-AI12).** `AiChatResp.backend` is the sole source of the head-tag label:
+`not configured` (empty endpoint/model), `local endpoint` (loopback), `remote endpoint`
+(non-loopback; unreachable from the v1 UI, kept as defense-in-depth). `on-device` is **forbidden** in
+v1 (the model runs in a separate process; loopback ≠ on-device). The label is derived from
+`AiChatResp.backend` / `read_ai_settings` + loopback lookup, never hardcoded.
+
+Mock fixture (copy-paste for the frontend units, spec §2.7):
+
+```json
+{ "version": 1, "endpoint": "http://127.0.0.1:11434/v1", "model": "llama3.2",
+  "remote_allowed": false, "has_key": false }
+```
+
+### 16.4 Pure functions
+
+All pure cores live in the AI module (file target below), are `#[cfg(test)]`-covered, and do **no
+network, no spawn, no FS mutation**. Rules are frozen:
+
+| # | Function | Rule (frozen) |
+|---|---|---|
+| 1 | prompt validation | trim → empty ⇒ `ai:empty-prompt`; UTF-8 bytes > `AI_PROMPT_MAX_BYTES` ⇒ `ai:prompt-too-large` |
+| 2 | history validation | turns > `AI_HISTORY_MAX_TURNS` OR total UTF-8 bytes > `AI_HISTORY_MAX_BYTES` ⇒ `ai:history-too-large` |
+| 3 | timeout validation | outside 5..120 ⇒ `ai:bad-timeout` (reject, never clamp) |
+| 4 | endpoint validation | URL parse fail / scheme ∉ {http,https} / userinfo present / bytes > `AI_ENDPOINT_MAX_BYTES` ⇒ `ai:bad-endpoint`; non-loopback with `remote_allowed == false` ⇒ `ai:remote-endpoint-disabled`; non-loopback with `remote_allowed == true` requires `https` |
+| 5 | proposal validation | host must pass `sftp_safe` (leading `-`/CR/LF) **and** exist in the config snapshot; command single-line ≤ `AI_COMMAND_MAX_BYTES`; description ≤ `AI_DESC_MAX_BYTES`; else `warning` + `proposal: null` |
+| 6 | reply truncation | truncate to `AI_REPLY_MAX_BYTES` + append the frozen marker when over cap |
+
+**Constants (single source of truth, spec §2.4 — all 8):**
+
+| Name | Value | Meaning |
+|---|---|---|
+| `AI_PROMPT_MAX_BYTES` | 8192 | request prompt cap |
+| `AI_HISTORY_MAX_TURNS` | 20 | prior turns cap |
+| `AI_HISTORY_MAX_BYTES` | 16384 | total history cap |
+| `AI_REPLY_MAX_BYTES` | 16384 | reply cap (truncate + penanda) |
+| `AI_COMMAND_MAX_BYTES` | 2048 | proposal command cap |
+| `AI_DESC_MAX_BYTES` | 1024 | proposal description cap |
+| `AI_ENDPOINT_MAX_BYTES` | 2048 | endpoint URL cap |
+| `AI_MODEL_MAX_BYTES` | 256 | model name cap |
+
+`timeout_secs`: default 30, range 5–120 (reject, never clamp) — a request field, not a named constant.
+
+**File target (lead's decision; architect recommendation).** A new `src-tauri/src/ai.rs` module is
+recommended (mirrors `fleet.rs`, §12.2): all pure cores + DTOs + keyring/HTTP wiring live there, keeping
+the `lib.rs` diff to `mod ai;` + 3 `generate_handler!` entries and shrinking the `lib.rs` hotspot
+collision surface. If the body stays small, `lib.rs` is acceptable — command names and payloads
+(§16.3) are identical either way. **Decision is the lead's** (LQ-1, §16.12).
+
+### 16.5 Backend flow `ai_chat` (contract, not implementation)
+
+Nine steps, frozen from spec §2.5. **Nol execute** at every step.
+
+1. Load `ai-settings.json` (missing/corrupt → defaults). `model` empty OR `endpoint` empty ⇒ `ai:not-configured`.
+2. Validate prompt/history/timeout (§16.4 #1–3; §2.2 table).
+3. Validate endpoint (§16.4 #4): URL parse; scheme http/https; userinfo forbidden; loopback check (`localhost`/`127.0.0.1`/`[::1]`). Non-loopback: `remote_allowed` must be `true` **and** scheme must be `https` (defense-in-depth; v1 UI always `remote_allowed=false`).
+4. Build `POST <endpoint>/chat/completions` (OpenAI-compatible) with system prompt + `history` + `prompt`. **Never** send `~/.ssh/config` contents, the key, sidecar bytes, or terminal output.
+5. Header `Authorization: Bearer <key>` **only** when `has_key` and endpoint remote; key read from keyring, **never** placed in log/error.
+6. Timeout `timeout_secs`; redirect policy **none** (prevent SSRF/credential leak). Send; map errors → frozen strings (§16.8).
+7. Parse `choices[0].message.content`. Try to parse the JSON proposal `{reply, proposal{host,command,description}}`. On failure → `reply` = raw text, `proposal: null`.
+8. Validate proposal (§16.4 #5): host `sftp_safe` + in config snapshot; command single-line + ≤2048; description ≤1024. Failure → `warning` + `proposal: null`.
+9. Return `AiChatResp`. **Nol execute.**
+
+### 16.6 System prompt contract (LOCKED)
+
+The system prompt instructs the model to reply with JSON `{reply, proposal}` where `proposal` carries
+only a single-line command + host alias + impact description. Behavioral contract (frozen):
+
+- **Never** execute anything.
+- **Never** claim to have terminal access.
+- **Never** ask for or send secrets/keys.
+
+Exact wording is the lead's detail (LQ-2); the behavioral contract is frozen. The prompt must not claim
+`on-device`/`private`/`local` contrary to the real backend state (FR-AI12).
+
+### 16.7 Security
+
+- **FR-AI11 hostile input → escaping.** `reply`, `proposal.host`, `proposal.command`,
+  `proposal.description`, and every error string are hostile input → render via
+  `textContent`/`esc()`/`escAttr()`; **no `innerHTML`** with model data. CSP (ADR-6) is the structural
+  backstop (ADR-8 unchanged).
+- **FR-AI9 nol auto-run implisit.** `ai_chat` never executes. Execution only via (a) Run once click,
+  (b) exact `(host,command)` allowlist re-match (§13.6 FROZEN). INV-36.
+- **Key custody.** OS keyring only (service `hosterm`, account `ai-api-key`); `has_key` boolean; the
+  key never enters `ai-settings.json`, IPC response, log, argv, or error string. `read_ai_settings`
+  returns `has_key` only. INV-37. Fail-closed: keyring unavailable + key required ⇒
+  `ai:keyring-unavailable` / `ai-settings:keyring-unavailable` (OQ-AI3).
+- **NFR-3 loopback-only v1.** Endpoint non-loopback rejected: `write_ai_settings` ⇒
+  `ai-settings:remote-disabled`; `ai_chat` ⇒ `ai:remote-endpoint-disabled`. No external network added;
+  no NFR-3 amendment (§7). ADR-24.
+- **Logging policy.** No log of prompt/response/key/credential-bearing endpoint. Error strings are
+  frozen codes only (§16.8). No `log::`/`eprintln!` on the AI path carrying model data or key.
+
+**New ADRs (ADR-23..25).** Numbering reconciliation: §7 ends at ADR-17; §13.8 added ADR-18..22;
+Ansible uses `ADR-A*` and auto-install uses `ADR-AI*`. The AI backend continues the numeric sequence at
+ADR-23.
+
+- **ADR-23 — BYO endpoint + nol default model/endpoint.** *Status: accepted (MEKL, 13 Nov 2026).*
+  hosterm ships no default endpoint or model; both `AiSettings` fields start empty = not configured.
+  The user configures an OpenAI-compatible endpoint (loopback example `http://127.0.0.1:11434/v1`).
+  *Consequences:* no sponsor/model to account for; empty state disables AI (`ai:not-configured`,
+  0 network); quality depends on the user's setup. *Alternatives rejected:* on-device bundle (installer
+  bloat, sidecar, weak model); remote vendor default (NFR-3 violation, prompt leaves device).
+- **ADR-24 — loopback-only v1.** *Status: accepted (MEKL, 13 Nov 2026).* Non-loopback endpoints are
+  rejected (`ai-settings:remote-disabled` / `ai:remote-endpoint-disabled`); the "Allow remote
+  endpoints" UI toggle is removed. Defense-in-depth (HTTPS-only, redirect none, loopback validation)
+  stays in code. *Consequences:* v1 adds zero external network; NFR-3 needs no amendment; the remote
+  label is retained in the contract as defense-in-depth. *Alternatives rejected:* shipping remote by
+  default (NFR-3 amendment + prompt leaves device); keeping the toggle (re-decides a locked decision).
+- **ADR-25 — proposal-only / nol execute di backend AI.** *Status: accepted (OQ-4 LOCKED; §13.6
+  FROZEN).* `ai_chat` returns text + a validated proposal; it never executes. Execution stays
+  human-in-the-loop via the existing real-ssh terminal (Run once) or an exact `(host,command)`
+  allowlist re-match. *Consequences:* no new execution engine; a hallucinating/compromised model
+  cannot run anything the user never approved; §13.6 state machine is unchanged. *Alternatives
+  rejected:* auto-exec (FR-AI9 violation); tool-use by the model (out of scope §6).
+
+**New invariants (INV-36..38; continue from INV-35, §15.8):**
+
+- **INV-36 — proposal-only.** The AI backend never executes a command. `ai_chat` returns
+  `AiChatResp` only; the sole execution paths are the §13.6 Run-once click and the exact
+  `(host,command)` allowlist re-match. Gate: cargo test (no spawn/execute call in the AI path) +
+  smoke (§8.1 #5/#6: unsafe/unknown host → 0 card, 0 execute).
+- **INV-37 — key never crosses IPC/log.** The AI API key lives only in the OS keyring
+  (`hosterm`/`ai-api-key`); `read_ai_settings` returns `has_key: boolean` only; the key never enters
+  `ai-settings.json`, any IPC payload/response, log, argv, or error string. Gate: cargo (keyring
+  save/delete/has_key; payload-shape review) + grep (`ai-api-key` not in `settings.json`/`~/.ssh/config`)
+  + smoke §8.1 #8.
+- **INV-38 — empty-state nol hardcoded proposal.** When endpoint/model is empty, the AI thread shows
+  no fake command card; the `AI_PROPOSALS` hardcoded stub is removed (D-AI12). Gate: smoke (empty
+  state → 0 proposal card) + grep (`AI_PROPOSALS` absent from the AI path).
+
+### 16.8 Error handling
+
+**`ai_chat` rejections (`Err(...)`, 0 network / 0 execute on these):**
+
+| Err string | Condition |
+|---|---|
+| `ai:not-configured` | `model` kosong ATAU endpoint kosong (empty state) |
+| `ai:empty-prompt` | `prompt` kosong/whitespace-only |
+| `ai:prompt-too-large` | `prompt` > 8192 UTF-8 bytes |
+| `ai:history-too-large` | `history` > 20 turns ATAU total > 16384 UTF-8 bytes |
+| `ai:bad-timeout` | `timeout_secs` di luar 5..120 |
+| `ai:bad-endpoint` | URL parse gagal / scheme bukan http(s) / userinfo ada / > 2048 bytes |
+| `ai:remote-endpoint-disabled` | endpoint non-loopback saat `remote_allowed == false` |
+| `ai:endpoint-unreachable` | DNS/connect/TLS gagal (pesan TIDAK PERNAH memuat key/URL ber-credential) |
+| `ai:timeout` | request melewati `timeout_secs` |
+| `ai:unauthorized` | HTTP 401/403 (key ditolak endpoint) |
+| `ai:model-error` | HTTP non-2xx lain, body unparseable, atau `choices[0].message.content` absen |
+| `ai:keyring-unavailable` | key diperlukan tapi keyring gagal dibaca → `ai_chat` menolak (fail-closed) |
+
+**`ai_chat` warnings (`Ok` + `proposal: null` + `warning`):**
+
+| warning | Condition |
+|---|---|
+| `ai:unsafe-host` | proposal host gagal `sftp_safe` (leading `-`, CR/LF) — INV-26 |
+| `ai:unknown-host` | proposal host tidak ada di config snapshot |
+| `ai:command-too-large` | proposal command > 2048 bytes |
+| `ai:invalid-proposal` | JSON proposal gagal validasi lain (schema/description > 1024 bytes) |
+
+**`write_ai_settings` rejections:** `ai-settings:invalid-endpoint`, `ai-settings:remote-disabled`,
+`ai-settings:invalid-model`, `ai-settings:keyring-unavailable`, `ai-settings:write-failed`.
+
+> **Measured count (spec §2.2).** §2.2 defines **12 `ai_chat` Err strings + 4 `ai_chat` warning
+> strings + 5 `write_ai_settings` rejection strings** (17 `Err`-class + 4 warnings total). The task
+> brief's "5 warning strings" does not match the spec — no fifth warning string exists. All §2.2
+> strings are reproduced above byte-for-byte regardless.
+
+**Frontend `aiErrText()` copy mapper.** Maps the frozen prefix → user copy; the raw token is **never**
+rendered. `ai:not-configured` → empty state + Set up AI; any other error → escaped message via the
+mapper; **nol execute** (§2.6).
+
+### 16.9 Testing strategy
+
+| Layer | Gate | Type |
+|---|---|---|
+| cargo unit | pure cores (§16.4) + store round-trip + URL/proposal validation + caps + keyring save/delete/has_key + error-string table | `cargo test --lib` |
+| smoke (frontend) | spec §8.1 (settings fields, empty state, loopback mock reply+proposal, hostile escape, unsafe/unknown host, remote-disabled, key custody, approval parity §13.6, head-tag label) | `qa-reports/headless-smoke.mjs` |
+| grep gates | spec §8.3: `on-device` in `src/` = 0; `ai-api-key` not in `settings.json`/`~/.ssh/config`; `sh -c|bash -c|cmd /C` = 0 on the AI path; no key/prompt log | grep |
+| verify loop | spec §8.4: cargo green on baseline + AI tests; build 0 TS; smoke green + AI checks; IPC 45 → 48; CSP 0; baseline re-measured at dispatch | full loop |
+
+### 16.10 Verification steps
+
+1. `cd src-tauri && cargo test --lib` → baseline **225 pass** (STATE.md, v0.16.0 `6c8c7cd`) + new AI
+   tests (pure cores, store, validation, caps, keyring, error-string table). Re-measure; never
+   hard-code the new total.
+2. `npm run build` → **0 TS errors**.
+3. `npm install --no-save playwright@1.63.0 && node qa-reports/headless-smoke.mjs` → baseline
+   **500/500** + new AI assertions (§16.9). Re-measure.
+4. `grep -rc "tauri::command" src-tauri/src/*.rs` → **48** (baseline 45 + 3 AI commands; §16.11).
+5. `grep -rn "on-device" src/` → **0** (FR-AI12 / spec §8.3).
+6. `grep -rn "pt-expand" src/ docs/FEATURE-SPEC-ai-backend-v1.md` → **0** (brief-listed token; measured
+   absent from the spec and the repo — retained verbatim for traceability, not a spec §8.3 gate).
+7. `grep -rn "sh -c\|bash -c\|cmd /C" src-tauri/src/ai.rs` → **0** (INV-14 class; the AI path spawns
+   nothing).
+
+### 16.11 IPC inventory gate
+
+**Gate 45 → 48.** The canonical gate is `grep -rc "tauri::command" src-tauri/src/*.rs`. Measured at
+dispatch (14 Nov 2026, working tree): `lib.rs:43  fleet.rs:2` = **45** (`backup.rs` false-positive
+already neutralized; `backup.rs:0`). The three AI commands (`read_ai_settings`, `write_ai_settings`,
+`ai_chat`) land in the AI module / `lib.rs` → gate **48**.
+
+`§11.5` self-check and the `docs/STATE.md` verify loop are updated when the unit lands: IPC line 45 →
+48, `cargo test --lib` 225 + AI tests, smoke 500/500 + AI checks. The canonical gate is the live grep
+— re-measure, don't trust verbatim.
+
+### 16.12 Open items for the lead (granularity only — no architectural decision left open)
+
+Every architectural decision is LOCKED above. These are implementation-granularity choices the lead
+settles in the TSD — none change the contract (§16.3), the invariants (§16.7), or the ADRs (§16.7):
+
+- **LQ-1 (module split):** `ai.rs` (recommended, §16.4) vs `lib.rs`. Command names and payloads are
+  identical either way.
+- **LQ-2 (system prompt wording):** exact text is the lead's; the behavioral contract is frozen
+  (§16.6).
+- **LQ-3 (reply truncation marker):** marker wording is the lead's; the cap is frozen (§16.4).
+- **LQ-4 (`ai_chat` request JSON shape):** field names frozen (§16.3); serde tagging/untagging detail
+  is the lead's.
+- **LQ-5 (keyring error mapping):** how keyring errors map to `ai:keyring-unavailable` /
+  `ai-settings:keyring-unavailable` — the lead's mapping; the strings are frozen (§16.8).
+- **LQ-6 (`has_key` probe cost):** whether `read_ai_settings` caches the keyring probe — the lead's
+  call; no contract change.
+- **LQ-7 (`aiErrText()` copy table):** user-facing copy wording is the lead's; the prefix set is
+  frozen (§16.8).
+- **LQ-8 (smoke loopback mock):** how the smoke harness stands up a loopback mock endpoint — the
+  lead's harness detail.
+
+---
+
+*Sources: docs/FEATURE-SPEC-ai-backend-v1.md (OQ-4 LOCKED, MEKL 13 Nov 2026, card `t_5009863d`) §0–§9;
+docs/SDD.md §12.3 (frozen IPC pattern), §13.5/§13.6 (approval FROZEN), §14.8/§15.12 (gate + LQ pattern);
+docs/STATE.md (verify loop, IPC baseline 45, cargo 225, smoke 500/500); docs/PRD.md §5 NFR-3;
+src-tauri/Cargo.toml (`reqwest =0.12.9`, `keyring =3.6.3` — both already present, zero new deps);
+live tree `grep -rc "tauri::command" src-tauri/src/*.rs` → lib.rs:43 fleet.rs:2 = 45 (read 2026-11-14).
+§16 addendum + ADR-23..25 + INV-36..38 authored for card t_29463663 (AI backend v1 SDD).*
