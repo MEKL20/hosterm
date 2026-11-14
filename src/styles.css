@@ -530,9 +530,9 @@ body.panel-collapsed #sb-resize { display: none; }
   background: var(--sidebar);
   border-bottom: 1px solid var(--border);
 }
-/* Visible panel collapse/expand (v0.15.7): the first child of #tabbar so it is
-   discoverable in both states and sits right beside the section panel. The
-   chevron direction follows aria-expanded via #panel-toggle[aria-expanded]. */
+/* Visible panel toggle (v0.17.0): hamburger, morphs to an X while the panel is
+   open so the button still shows state. Behaviour is unchanged — the click
+   handler and aria-expanded are the source of truth. */
 #panel-toggle {
   flex: 0 0 auto;
   align-self: center;
@@ -540,9 +540,14 @@ body.panel-collapsed #sb-resize { display: none; }
   height: 28px;
   margin: 0 0 0 6px;
 }
-#panel-toggle .pt-collapse { display: none; }
-#panel-toggle[aria-expanded="true"] .pt-expand { display: none; }
-#panel-toggle[aria-expanded="true"] .pt-collapse { display: block; }
+#panel-toggle .pt-line {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform .15s ease, opacity .15s ease;
+}
+#panel-toggle[aria-expanded="true"] .pt-1 { transform: translateY(3.5px) rotate(45deg); }
+#panel-toggle[aria-expanded="true"] .pt-2 { opacity: 0; }
+#panel-toggle[aria-expanded="true"] .pt-3 { transform: translateY(-3.5px) rotate(-45deg); }
 #tabs {
   flex: 1;
   min-width: 0;

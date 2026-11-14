@@ -4441,7 +4441,7 @@ window.addEventListener("DOMContentLoaded", () => {
     panelCollapsed = c;
     document.body.classList.toggle("panel-collapsed", c);
     // Visible toggle in the tab bar: aria-expanded mirrors the panel state and
-    // the chevron flips direction via #panel-toggle[aria-expanded] in styles.css.
+    // the hamburger morphs into an X via #panel-toggle[aria-expanded] in styles.css.
     const toggle = $("#panel-toggle");
     toggle.setAttribute("aria-expanded", String(!c));
     toggle.title = c ? "Expand sidebar panel" : "Collapse sidebar panel";

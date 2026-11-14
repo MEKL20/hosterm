@@ -653,42 +653,58 @@ const stored = await page.evaluate(() => localStorage.getItem("hosterm.panel-col
 check("collapse: persisted", stored === "1");
 await page.locator('.rail-item[data-view="host"]').click();
 check("expand: class removed", await page.evaluate(() => !document.body.classList.contains("panel-collapsed")));
+// The toggle's hamburger→X morph is a .15s CSS transition; settle before the
+// state reads below so they sample the end state, not a mid-flight frame.
+await page.waitForTimeout(250);
 
 // 9c (v0.15.7): the visible #panel-toggle mirrors and drives the same state —
 // aria-expanded matches the panel, the title names the action the click will
-// perform, and the chevron direction flips with the state.
+// perform, and the hamburger morphs into an X while the panel is open (middle
+// line fades out, the outer two rotate onto the centre). Behaviour is driven by
+// aria-expanded; the morph is pure presentation.
 const panelToggleState = () => page.evaluate(() => {
   const t = document.getElementById("panel-toggle");
-  const vis = [...t.querySelectorAll("path")].find((p) => getComputedStyle(p).display !== "none");
+  const line = (el) => {
+    const cs = getComputedStyle(el);
+    return {
+      shown: cs.display !== "none" && cs.visibility !== "hidden" && Number(cs.opacity) > 0.01,
+      rotated: cs.transform !== "none",
+    };
+  };
+  const lines = [...t.querySelectorAll("line.pt-line")].map(line);
   return {
     exists: !!t,
     visible: t.getClientRects().length > 0,
     expanded: t.getAttribute("aria-expanded"),
     title: t.title,
-    icon: vis ? vis.getAttribute("d") : null,
+    lines: lines.length,
+    hiddenLines: lines.filter((l) => !l.shown).length,
+    rotatedLines: lines.filter((l) => l.rotated).length,
     collapsed: document.body.classList.contains("panel-collapsed"),
     panelVisible: document.getElementById("section-panel").getClientRects().length > 0,
   };
 });
 const toggleOpen = await panelToggleState();
-check("v0.15.7 §9c: #panel-toggle is visible, aria-expanded=true, title=Collapse, chevron points left",
+check("v0.15.7 §9c: #panel-toggle is visible, aria-expanded=true, title=Collapse, hamburger morphed to X (3 lines, middle hidden, outer two rotated)",
   toggleOpen.exists && toggleOpen.visible && toggleOpen.expanded === "true" &&
   toggleOpen.title === "Collapse sidebar panel" && !toggleOpen.collapsed && toggleOpen.panelVisible &&
-  toggleOpen.icon === "m9 4-4 4 4 4",
+  toggleOpen.lines === 3 && toggleOpen.hiddenLines === 1 && toggleOpen.rotatedLines === 2,
   JSON.stringify(toggleOpen));
 await page.locator("#panel-toggle").click();
-await page.waitForTimeout(60);
+await page.waitForTimeout(250);
 const toggleShut = await panelToggleState();
-check("v0.15.7 §9c: #panel-toggle collapses the panel, aria-expanded=false, title=Expand, chevron points right",
+check("v0.15.7 §9c: #panel-toggle collapses the panel, aria-expanded=false, title=Expand, hamburger restored (3 lines shown, none rotated)",
   toggleShut.collapsed && !toggleShut.panelVisible && toggleShut.expanded === "false" &&
-  toggleShut.title === "Expand sidebar panel" && toggleShut.icon === "m7 4 4 4-4 4",
+  toggleShut.title === "Expand sidebar panel" &&
+  toggleShut.lines === 3 && toggleShut.hiddenLines === 0 && toggleShut.rotatedLines === 0,
   JSON.stringify(toggleShut));
 await page.locator("#panel-toggle").click();
-await page.waitForTimeout(60);
+await page.waitForTimeout(250);
 const toggleReopen = await panelToggleState();
-check("v0.15.7 §9c: #panel-toggle expands again, aria-expanded=true, title flips back to Collapse",
+check("v0.15.7 §9c: #panel-toggle expands again, aria-expanded=true, title flips back to Collapse, X restored",
   !toggleReopen.collapsed && toggleReopen.expanded === "true" &&
-  toggleReopen.title === "Collapse sidebar panel" && toggleReopen.icon === "m9 4-4 4 4 4",
+  toggleReopen.title === "Collapse sidebar panel" &&
+  toggleReopen.lines === 3 && toggleReopen.hiddenLines === 1 && toggleReopen.rotatedLines === 2,
   JSON.stringify(toggleReopen));
 
 // 9d. Edit/Delete left the row (fix #4) -> context menu; Delete uses in-app dialog (not native confirm)
