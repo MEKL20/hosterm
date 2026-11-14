@@ -1153,19 +1153,20 @@ function selectSettingsSection(section: string) {
     else button.removeAttribute("aria-current");
   });
   const appearance = $("#settings-appearance");
-  const approvals = $("#settings-approvals");
+  const ai = $("#settings-ai");
   const general = $("#settings-general");
   const placeholder = $("#settings-placeholder");
   const showingAppearance = section === "appearance";
-  const showingApprovals = section === "ai";
+  const showingAi = section === "ai";
   const showingGeneral = section === "general";
   appearance.classList.toggle("hidden", !showingAppearance);
-  approvals.classList.toggle("hidden", !showingApprovals);
+  ai.classList.toggle("hidden", !showingAi);
   general.classList.toggle("hidden", !showingGeneral);
-  placeholder.classList.toggle("hidden", showingAppearance || showingApprovals || showingGeneral);
-  if (showingApprovals) {
+  placeholder.classList.toggle("hidden", showingAppearance || showingAi || showingGeneral);
+  if (showingAi) {
     renderApprovals();
     void refreshApprovals();
+    void renderAiSettings();
   } else if (showingGeneral) {
     void populateGeneral();
   } else if (!showingAppearance) {
@@ -1217,7 +1218,7 @@ async function readAndApplySettings() {
 }
 
 async function persistSettings(): Promise<boolean> {
-  if (!settingsDirty) return true;
+  if (!settingsDirty && !aiSettingsDirty) return true;
   const status = $("#settings-status");
   const panel = $("#settings-panel");
   const controls = [...panel.querySelectorAll<HTMLButtonElement | HTMLInputElement>("button, input")];
@@ -1225,15 +1226,21 @@ async function persistSettings(): Promise<boolean> {
   panel.setAttribute("aria-busy", "true");
   controls.forEach((control) => { control.disabled = true; });
   try {
-    await invoke("write_settings", {
-      settings: {
-        version: 1,
-        theme: appSettings.theme,
-        accent: appSettings.accent,
-        allowlist: appSettings.allowlist,
-      },
-    });
-    settingsDirty = false;
+    if (settingsDirty) {
+      await invoke("write_settings", {
+        settings: {
+          version: 1,
+          theme: appSettings.theme,
+          accent: appSettings.accent,
+          allowlist: appSettings.allowlist,
+        },
+      });
+      settingsDirty = false;
+    }
+    // AI settings live in a separate frozen store (ai-settings.json + OS
+    // keyring). A rejected write keeps the panel open so the mapped copy and
+    // the key indicator stay visible (fail-closed, §3.2).
+    if (aiSettingsDirty && !(await persistAiSettings())) return false;
     return true;
   } catch (e) {
     status.textContent = `Could not save settings: ${msg(e)}. Try again.`;
@@ -1241,6 +1248,7 @@ async function persistSettings(): Promise<boolean> {
   } finally {
     panel.removeAttribute("aria-busy");
     controls.forEach((control) => { control.disabled = false; });
+    updateAiPreview();
   }
 }
 
@@ -1321,6 +1329,250 @@ async function revokeApproval(index: number, button: HTMLButtonElement) {
   }
 }
 
+// ---------- AI backend settings (AI-3) ----------
+// Frozen wire contract §16.3: `read_ai_settings` never throws (missing/corrupt
+// store → defaults); `write_ai_settings` and `ai_chat` both take a single `req`
+// object (Tauri camelCases the boundary key). The key byte never crosses IPC —
+// only the boolean `has_key` does. v1 is loopback-only (D-AI5): the UI has no
+// remote-endpoint toggle and always submits `remote_allowed: false`.
+interface AiSettingsDto {
+  version: number;
+  endpoint: string;
+  model: string;
+  remote_allowed: boolean;
+  has_key: boolean;
+}
+interface AiChatMessageDto { role: "user" | "assistant"; content: string }
+interface AiChatReqDto {
+  prompt: string;
+  host: string | null;
+  history: AiChatMessageDto[];
+  timeout_secs: number;
+}
+interface AiChatRespDto {
+  reply: string;
+  proposal: { host: string; command: string; description: string } | null;
+  backend: "loopback" | "remote";
+  warning: string | null;
+}
+interface WriteAiSettingsReqDto {
+  endpoint: string;
+  model: string;
+  remote_allowed: boolean;
+  key?: string | null;
+}
+
+const AI_TEST_PROMPT = "Reply with the single word: ok";
+const AI_TEST_TIMEOUT_SECS = 30;
+const DEFAULT_AI_SETTINGS: AiSettingsDto = {
+  version: 1,
+  endpoint: "",
+  model: "",
+  remote_allowed: false,
+  has_key: false,
+};
+let aiSettings: AiSettingsDto = { ...DEFAULT_AI_SETTINGS };
+let aiSettingsDirty = false;
+
+// LQ-16.7 copy table; the reason prefix set is frozen (§16.8). Every caller
+// assigns the result through `textContent` / `value` (never innerHTML), so the
+// mapped copy is inert. Unknown tokens fall back to the code itself — never to
+// a raw backend string that was not mapped.
+function aiErrText(token: string): string {
+  switch (token) {
+    case "ai:not-configured":
+      return "AI is not set up. Add an endpoint and model in Settings → AI Assistant.";
+    case "ai:empty-prompt":
+      return "Type a message first.";
+    case "ai:prompt-too-large":
+      return "That message is too long (max 8192 bytes).";
+    case "ai:history-too-large":
+      return "The conversation is too long (max 20 turns / 16384 bytes).";
+    case "ai:bad-timeout":
+      return "Timeout must be between 5 and 120 seconds.";
+    case "ai:bad-endpoint":
+      return "That endpoint URL is not valid (http/https only, no credentials).";
+    case "ai:remote-endpoint-disabled":
+      return "Remote endpoints are disabled in v1; use a loopback endpoint.";
+    case "ai:endpoint-unreachable":
+      return "Could not reach the endpoint.";
+    case "ai:timeout":
+      return "The endpoint took too long to respond.";
+    case "ai:unauthorized":
+      return "The endpoint rejected the API key.";
+    case "ai:model-error":
+      return "The endpoint returned an error or an unreadable response.";
+    case "ai:keyring-unavailable":
+      return "The OS keyring is unavailable; the API key could not be read.";
+    case "ai-settings:invalid-endpoint":
+      return "That endpoint URL is not valid (http/https only, no credentials).";
+    case "ai-settings:remote-disabled":
+      return "Remote endpoints are disabled in v1; use a loopback endpoint.";
+    case "ai-settings:invalid-model":
+      return "That model name is not valid (max 256 bytes).";
+    case "ai-settings:keyring-unavailable":
+      return "The OS keyring is unavailable; the API key could not be saved.";
+    case "ai-settings:write-failed":
+      return "Could not save the AI settings. Try again.";
+    default:
+      return token;
+  }
+}
+
+// Frontend mirror of the backend loopback check (§16.4 #4). `URL.hostname`
+// keeps the brackets on IPv6 literals, so both forms are accepted.
+function isLoopbackEndpoint(endpoint: string): boolean {
+  try {
+    const host = new URL(endpoint).hostname.toLowerCase();
+    return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+  } catch {
+    return false;
+  }
+}
+
+function aiConfigured(): boolean {
+  return aiSettings.endpoint.trim() !== "" && aiSettings.model.trim() !== "";
+}
+
+// Head-tag preview derived from the actual endpoint/model (FR-AI12 honesty:
+// never a static string, never a claim the configured endpoint cannot back).
+const AI_LABEL_LOCAL = "local endpoint";
+// v1 is loopback-only (D-AI5): a non-loopback URL is previewed as unusable
+// rather than as a live backend.
+const AI_LABEL_REMOTE = "remote endpoint (v1: loopback only)";
+
+function aiBackendLabel(endpoint: string, model: string): string {
+  if (endpoint.trim() === "" || model.trim() === "") return "not configured";
+  return isLoopbackEndpoint(endpoint) ? AI_LABEL_LOCAL : AI_LABEL_REMOTE;
+}
+
+function aiBackendTitle(label: string): string {
+  if (label === AI_LABEL_LOCAL) return "Connected to a local endpoint you configured.";
+  if (label === AI_LABEL_REMOTE) return "Remote endpoints are disabled in v1; use a loopback endpoint.";
+  return "No endpoint and model are set yet.";
+}
+
+function setAiKeyState(state: "saved" | "not-saved" | "keyring-unavailable"): void {
+  const indicator = $("#ai-key-state");
+  indicator.textContent = state === "saved"
+    ? "Saved"
+    : state === "keyring-unavailable"
+      ? "Keyring unavailable"
+      : "Not saved";
+  indicator.classList.toggle("ok", state === "saved");
+  indicator.classList.toggle("warn", state === "keyring-unavailable");
+}
+
+function setAiStatus(text: string, tone: "" | "ok" | "err" = ""): void {
+  const status = $("#ai-status");
+  status.textContent = text;
+  status.classList.toggle("ok", tone === "ok");
+  status.classList.toggle("err", tone === "err");
+}
+
+// Reflect the field values in the label + status + test affordance. The status
+// is only cleared on an explicit `clearStatus` (typing) so a save error is not
+// wiped by the shared `finally` in persistSettings.
+function updateAiPreview(clearStatus = false): void {
+  const endpoint = ($("#ai-endpoint") as HTMLInputElement).value;
+  const model = ($("#ai-model") as HTMLInputElement).value;
+  const label = aiBackendLabel(endpoint, model);
+  const tag = $("#ai-backend-label");
+  tag.textContent = label;
+  tag.setAttribute("title", aiBackendTitle(label));
+  const test = $("#ai-test") as HTMLButtonElement;
+  if (endpoint.trim() === "" || model.trim() === "") {
+    setAiStatus("Not configured — AI requests are disabled until a model is set.");
+    test.disabled = true;
+  } else {
+    if (clearStatus) setAiStatus("");
+    test.disabled = false;
+  }
+}
+
+async function renderAiSettings(): Promise<void> {
+  const section = $("#settings-ai");
+  // Re-entering the section with unsaved edits keeps them (the frozen store is
+  // the source of truth only when the panel is clean).
+  if (!aiSettingsDirty) {
+    section.setAttribute("aria-busy", "true");
+    let loaded: AiSettingsDto | null = null;
+    try {
+      loaded = await invoke<AiSettingsDto>("read_ai_settings");
+    } catch {
+      // §16.3: never throws. Treat a rejection as the frozen default store.
+      loaded = { ...DEFAULT_AI_SETTINGS };
+    }
+    aiSettings = { ...DEFAULT_AI_SETTINGS, ...loaded, remote_allowed: false };
+    ($("#ai-endpoint") as HTMLInputElement).value = aiSettings.endpoint;
+    ($("#ai-model") as HTMLInputElement).value = aiSettings.model;
+    ($("#ai-key") as HTMLInputElement).value = "";
+    setAiKeyState(aiSettings.has_key ? "saved" : "not-saved");
+    aiSettingsDirty = false;
+  }
+  updateAiPreview(true);
+  section.removeAttribute("aria-busy");
+}
+
+// "Send test request" hits the saved store — it never writes settings, so the
+// user saves first (Save / Done) and the test proves the live endpoint.
+async function testAiBackend(): Promise<void> {
+  const button = $("#ai-test") as HTMLButtonElement;
+  if (button.disabled) return;
+  button.disabled = true;
+  setAiStatus("Sending test request…");
+  try {
+    const req: AiChatReqDto = {
+      prompt: AI_TEST_PROMPT,
+      host: null,
+      history: [],
+      timeout_secs: AI_TEST_TIMEOUT_SECS,
+    };
+    const resp = await invoke<AiChatRespDto>("ai_chat", { req });
+    const label = resp.backend === "remote" ? AI_LABEL_REMOTE : AI_LABEL_LOCAL;
+    const tag = $("#ai-backend-label");
+    tag.textContent = label;
+    tag.setAttribute("title", aiBackendTitle(label));
+    setAiStatus("Test request succeeded.", "ok");
+  } catch (e) {
+    setAiStatus(aiErrText(msg(e)), "err");
+  } finally {
+    button.disabled = !aiConfigured();
+  }
+}
+
+async function persistAiSettings(): Promise<boolean> {
+  const endpoint = ($("#ai-endpoint") as HTMLInputElement).value;
+  const model = ($("#ai-model") as HTMLInputElement).value;
+  const key = ($("#ai-key") as HTMLInputElement).value;
+  setAiStatus("");
+  try {
+    const req: WriteAiSettingsReqDto = {
+      endpoint,
+      model,
+      remote_allowed: false,
+      // Blank = keep whatever the keyring already holds (§3.2).
+      key: key === "" ? null : key,
+    };
+    await invoke("write_ai_settings", { req });
+  } catch (e) {
+    const token = msg(e);
+    setAiStatus(aiErrText(token), "err");
+    if (token === "ai-settings:keyring-unavailable") setAiKeyState("keyring-unavailable");
+    return false;
+  }
+  aiSettingsDirty = false;
+  try {
+    const loaded = await invoke<AiSettingsDto>("read_ai_settings");
+    aiSettings = { ...DEFAULT_AI_SETTINGS, ...loaded, remote_allowed: false };
+    setAiKeyState(aiSettings.has_key ? "saved" : "not-saved");
+  } catch { /* keep the pre-write snapshot; the write itself succeeded */ }
+  ($("#ai-key") as HTMLInputElement).value = "";
+  updateAiPreview();
+  setAiStatus("AI settings saved.", "ok");
+  return true;
+}
+
 async function openSettings() {
   await settingsReady;
   selectSettingsSection("appearance");
@@ -1360,6 +1612,16 @@ function initSettings() {
   $("#accent-reset").addEventListener("click", () => {
     applyTheme("dusk", true);
     applyAccent(DEFAULT_SETTINGS.accent, true);
+  });
+  // AI backend fields (AI-3). Typing marks the separate store dirty; the
+  // preview + test affordance follow the field values live.
+  $("#ai-test").addEventListener("click", () => void testAiBackend());
+  $("#ai-save").addEventListener("click", () => void persistAiSettings());
+  ["#ai-endpoint", "#ai-model", "#ai-key"].forEach((selector) => {
+    ($(selector) as HTMLInputElement).addEventListener("input", () => {
+      aiSettingsDirty = true;
+      updateAiPreview(true);
+    });
   });
   settingsReady = readAndApplySettings();
 }

@@ -123,6 +123,13 @@ let ansiblePickName = "site.yml";              // basename for the valid pick
 let ansibleRunFail = false;                    // ansible_run rejects when true
 const ansibleRuns = [];                        // every ansible_run req payload
 let ansibleHistory = [];                       // ansible_history store (newest-last)
+// AI-3 Settings → AI Assistant mock state (frozen contract §16.3). The key byte
+// never crosses IPC — only `has_key` does. aiChatMode steers the test arm.
+let aiSettingsStore = { version: 1, endpoint: "", model: "", remote_allowed: false, has_key: false };
+let aiKeyStored = false;
+let aiChatMode = "ok";                      // ok | not-configured | timeout
+let aiKeyringFail = false;                  // write_ai_settings rejects keyring-unavailable
+const aiReads = [];                         // every read_ai_settings payload (key-custody)
 const invoke = (cmd, args = {}) => {
   calls.push({ cmd, args });
   switch (cmd) {
@@ -273,6 +280,31 @@ const invoke = (cmd, args = {}) => {
       // 200-cap FIFO mirror (the backend caps; the frontend just renders).
       if (ansibleHistory.length > 200) ansibleHistory = ansibleHistory.slice(-200);
       return Promise.resolve(JSON.parse(JSON.stringify(ansibleHistory)));
+    }
+    // ---- AI-3 Settings → AI Assistant ----
+    case "read_ai_settings": {
+      const payload = { ...aiSettingsStore, has_key: aiKeyStored };
+      aiReads.push(JSON.parse(JSON.stringify(payload)));
+      return Promise.resolve(payload);
+    }
+    case "write_ai_settings": {
+      if (aiKeyringFail) return Promise.reject("ai-settings:keyring-unavailable");
+      const req = args.req || {};
+      aiSettingsStore = {
+        version: 1,
+        endpoint: String(req.endpoint || ""),
+        model: String(req.model || ""),
+        remote_allowed: !!req.remote_allowed,
+        has_key: aiKeyStored,
+      };
+      if (req.key === "") aiKeyStored = false;
+      else if (typeof req.key === "string" && req.key !== "") aiKeyStored = true;
+      return Promise.resolve(null);
+    }
+    case "ai_chat": {
+      if (aiChatMode === "not-configured") return Promise.reject("ai:not-configured");
+      if (aiChatMode === "timeout") return Promise.reject("ai:timeout");
+      return Promise.resolve({ reply: "ok", proposal: null, backend: "loopback", warning: null });
     }
     default: return Promise.reject(`unmocked: ${cmd}`);
   }
@@ -3644,6 +3676,148 @@ check("U-D7 FR-AI10: Revoke removes one exact tuple through write_settings",
   !revokeWrite.args.settings.allowlist.some((entry) => entry.host === "prod-web" && entry.command === "docker system prune -af") &&
   (await page.locator("#approvals-status").textContent()) === "Approval revoked.",
   JSON.stringify(revokeWrite?.args?.settings?.allowlist));
+await page.locator("#settings-done").click();
+await page.waitForTimeout(100);
+
+// ---- AI-3: Settings → AI Assistant surface (empty state, save, test, copy) ----
+await openSettingsFromAccount();
+await page.locator('.set-nav[data-section="ai"]').click();
+await page.waitForFunction(() => {
+  const section = document.getElementById("settings-ai");
+  return section && !section.classList.contains("hidden");
+});
+const aiEmpty = await page.evaluate(() => {
+  const endpoint = document.getElementById("ai-endpoint");
+  const model = document.getElementById("ai-model");
+  const key = document.getElementById("ai-key");
+  const section = document.getElementById("settings-ai");
+  return {
+    sectionVisible: !section.classList.contains("hidden"),
+    approvalsVisible: !document.getElementById("settings-approvals").classList.contains("hidden"),
+    endpoint: endpoint.value,
+    endpointPlaceholder: endpoint.getAttribute("placeholder"),
+    model: model.value,
+    modelPlaceholder: model.getAttribute("placeholder"),
+    keyType: key.type,
+    keyHint: document.getElementById("ai-key-hint").textContent,
+    keyState: document.getElementById("ai-key-state").textContent,
+    testDisabled: document.getElementById("ai-test").disabled,
+    status: document.getElementById("ai-status").textContent,
+    label: document.getElementById("ai-backend-label").textContent,
+    checkboxes: section.querySelectorAll('input[type="checkbox"]').length,
+    remoteCopy: section.textContent.toLowerCase().includes("allow remote"),
+  };
+});
+check("AI-3 FR-AI: Settings > AI Assistant renders empty endpoint/model/key with the honest empty state",
+  aiEmpty.sectionVisible && aiEmpty.approvalsVisible && aiEmpty.endpoint === "" && aiEmpty.model === "" &&
+  aiEmpty.endpointPlaceholder === "http://127.0.0.1:11434/v1" && aiEmpty.modelPlaceholder === "llama3.2" &&
+  aiEmpty.keyType === "password" && aiEmpty.keyState === "Not saved" && aiEmpty.testDisabled,
+  JSON.stringify(aiEmpty));
+check("AI-3 empty state: exact not-configured copy + 'not configured' label + no remote toggle (D-AI5)",
+  aiEmpty.status === "Not configured — AI requests are disabled until a model is set." &&
+  aiEmpty.label === "not configured" && aiEmpty.checkboxes === 0 && !aiEmpty.remoteCopy &&
+  aiEmpty.keyHint === "Stored in the OS keyring. Leave blank to keep the saved key.",
+  JSON.stringify(aiEmpty));
+
+const aiFixedPrompt = (mainSrc.match(/const AI_TEST_PROMPT = "([^"]+)"/) || [])[1] || "";
+await page.locator("#ai-endpoint").fill("http://127.0.0.1:11434/v1");
+await page.locator("#ai-model").fill("llama3.2");
+const aiReady = await page.evaluate(() => ({
+  status: document.getElementById("ai-status").textContent,
+  testDisabled: document.getElementById("ai-test").disabled,
+  label: document.getElementById("ai-backend-label").textContent,
+  title: document.getElementById("ai-backend-label").getAttribute("title"),
+}));
+check("AI-3: filling endpoint+model enables the test and previews 'local endpoint'",
+  aiReady.status === "" && !aiReady.testDisabled && aiReady.label === "local endpoint" &&
+  aiReady.title === "Connected to a local endpoint you configured.", JSON.stringify(aiReady));
+
+await page.locator("#ai-endpoint").fill("http://example.com/v1");
+const aiRemote = await page.evaluate(() => ({
+  label: document.getElementById("ai-backend-label").textContent,
+  title: document.getElementById("ai-backend-label").getAttribute("title"),
+}));
+check("AI-3 D-AI5: a non-loopback URL previews as unusable instead of a live backend",
+  aiRemote.label === "remote endpoint (v1: loopback only)" &&
+  aiRemote.title === "Remote endpoints are disabled in v1; use a loopback endpoint.",
+  JSON.stringify(aiRemote));
+await page.locator("#ai-endpoint").fill("http://127.0.0.1:11434/v1");
+
+const aiSaveOffset = calls.length;
+await page.locator("#ai-save").click();
+await page.waitForFunction(() => document.getElementById("ai-status").textContent === "AI settings saved.");
+const aiWrite = calls.slice(aiSaveOffset).find((c) => c.cmd === "write_ai_settings");
+check("AI-3: Save persists endpoint/model with remote_allowed=false and a blank key kept",
+  !!aiWrite && aiWrite.args.req.endpoint === "http://127.0.0.1:11434/v1" && aiWrite.args.req.model === "llama3.2" &&
+  aiWrite.args.req.remote_allowed === false && aiWrite.args.req.key === null,
+  JSON.stringify(aiWrite));
+
+const aiTestOffset = calls.length;
+await page.locator("#ai-test").click();
+await page.waitForFunction(() => document.getElementById("ai-status").textContent === "Test request succeeded.");
+const aiOkClass = await page.evaluate(() => document.getElementById("ai-status").classList.contains("ok"));
+const aiChatCall = calls.slice(aiTestOffset).find((c) => c.cmd === "ai_chat");
+const writesDuringTest = calls.slice(aiTestOffset).filter((c) => c.cmd === "write_ai_settings").length;
+check("AI-3: Send test request calls ai_chat with the fixed prompt and saves nothing",
+  !!aiChatCall && aiFixedPrompt !== "" && aiChatCall.args.req.prompt === aiFixedPrompt &&
+  aiChatCall.args.req.prompt !== "docker system prune -af" &&
+  Array.isArray(aiChatCall.args.req.history) && aiChatCall.args.req.history.length === 0 &&
+  aiChatCall.args.req.host === null && writesDuringTest === 0 && aiOkClass,
+  JSON.stringify({ call: aiChatCall, fixedPrompt: aiFixedPrompt, okClass: aiOkClass }));
+
+aiChatMode = "timeout";
+await page.locator("#ai-test").click();
+await page.waitForFunction(() => document.getElementById("ai-status").textContent.includes("took too long"));
+const aiErr = await page.evaluate(() => {
+  const status = document.getElementById("ai-status");
+  return {
+    text: status.textContent,
+    children: status.childElementCount,
+    raw: status.textContent.includes("ai:"),
+    errClass: status.classList.contains("err"),
+  };
+});
+check("AI-3 LQ-16.7: an ai_chat rejection renders the mapped copy, never the raw token",
+  aiErr.text === "The endpoint took too long to respond." && aiErr.children === 0 && !aiErr.raw &&
+  aiErr.errClass,
+  JSON.stringify(aiErr));
+aiChatMode = "ok";
+
+await page.locator("#ai-key").fill("sk-live-test");
+await page.locator("#ai-save").click();
+await page.waitForFunction(() => document.getElementById("ai-key-state").textContent === "Saved");
+const aiKeyRead = aiReads.at(-1);
+check("AI-3 §3.2: saving a key flips the indicator to Saved; the read payload never carries the key",
+  !!aiKeyRead && aiKeyRead.has_key === true && !("key" in aiKeyRead) &&
+  aiKeyRead.endpoint === "http://127.0.0.1:11434/v1" && aiKeyRead.model === "llama3.2",
+  JSON.stringify(aiKeyRead));
+
+aiKeyringFail = true;
+await page.locator("#ai-key").fill("sk-should-not-save");
+await page.locator("#ai-save").click();
+await page.waitForFunction(() => document.getElementById("ai-key-state").textContent === "Keyring unavailable");
+const aiKeyErr = await page.evaluate(() => ({
+  status: document.getElementById("ai-status").textContent,
+  state: document.getElementById("ai-key-state").textContent,
+  raw: document.getElementById("ai-status").textContent.includes("ai-settings:"),
+}));
+check("AI-3 §3.2 fail-closed: keyring rejection maps the copy, marks the indicator, saves nothing",
+  aiKeyErr.status === "The OS keyring is unavailable; the API key could not be saved." &&
+  aiKeyErr.state === "Keyring unavailable" && !aiKeyErr.raw, JSON.stringify(aiKeyErr));
+aiKeyringFail = false;
+
+await page.locator('.set-nav[data-section="appearance"]').click();
+await page.locator('.set-nav[data-section="ai"]').click();
+await page.waitForTimeout(200);
+const aiKept = await page.evaluate(() => ({
+  endpoint: document.getElementById("ai-endpoint").value,
+  model: document.getElementById("ai-model").value,
+  key: document.getElementById("ai-key").value,
+}));
+check("AI-3: re-entering the section keeps unsaved edits instead of reloading the store",
+  aiKept.endpoint === "http://127.0.0.1:11434/v1" && aiKept.model === "llama3.2" &&
+  aiKept.key === "sk-should-not-save", JSON.stringify(aiKept));
+
 await page.locator("#settings-done").click();
 await page.waitForTimeout(100);
 

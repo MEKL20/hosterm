@@ -292,16 +292,50 @@
               </div>
             </section>
 
-            <section id="settings-approvals" class="hidden" aria-labelledby="approvals-title">
-              <h3 class="set-h" id="approvals-title">AI Assistant</h3>
-              <p class="set-sub">Review standing command approvals stored on this device.</p>
+            <section id="settings-ai" class="hidden" aria-labelledby="ai-title">
+              <h3 class="set-h" id="ai-title">AI Assistant</h3>
+              <p class="set-sub">Connect a local AI endpoint, then review the standing command approvals stored on this device.</p>
+
               <div class="set-block">
-                <div class="set-label">Approvals</div>
-                <p class="set-note approvals-note">Each approval matches one exact host alias and command. Revoke removes it; patterns are not editable in v1.</p>
-                <div id="approvals-list" class="approvals-list"></div>
-                <div id="approvals-empty" class="approvals-empty" role="status" hidden>No commands are always allowed.</div>
-                <div id="approvals-status" class="approvals-status" role="status" aria-live="polite"></div>
+                <div class="set-label">AI backend</div>
+                <p class="set-note ai-note">Loopback only in v1. Endpoint and model have no defaults — enter both to enable AI requests.</p>
+
+                <div class="ai-field">
+                  <label class="ai-k" for="ai-endpoint">Endpoint URL</label>
+                  <input id="ai-endpoint" type="text" placeholder="http://127.0.0.1:11434/v1" autocomplete="off" spellcheck="false" />
+                </div>
+                <div class="ai-field">
+                  <label class="ai-k" for="ai-model">Model</label>
+                  <input id="ai-model" type="text" placeholder="llama3.2" autocomplete="off" spellcheck="false" />
+                </div>
+                <div class="ai-field">
+                  <label class="ai-k" for="ai-key">API key</label>
+                  <div class="ai-key-row">
+                    <input id="ai-key" type="password" autocomplete="off" aria-describedby="ai-key-hint" />
+                    <span id="ai-key-state" class="ai-key-state" role="status" aria-live="polite">Not saved</span>
+                  </div>
+                  <p class="set-note" id="ai-key-hint">Stored in the OS keyring. Leave blank to keep the saved key.</p>
+                </div>
+
+                <div class="ai-actions">
+                  <button id="ai-test" class="btn-secondary" type="button" disabled>Send test request</button>
+                  <button id="ai-save" class="btn-primary" type="button">Save</button>
+                  <span id="ai-backend-label" class="head-tag" title="No endpoint and model are set yet.">not configured</span>
+                </div>
+                <p id="ai-status" class="ai-status" role="status" aria-live="polite"></p>
               </div>
+
+              <section id="settings-approvals" aria-labelledby="approvals-title">
+                <h3 class="set-h set-h-sub" id="approvals-title">Approvals</h3>
+                <p class="set-sub">Review standing command approvals stored on this device.</p>
+                <div class="set-block">
+                  <div class="set-label">Approvals</div>
+                  <p class="set-note approvals-note">Each approval matches one exact host alias and command. Revoke removes it; patterns are not editable in v1.</p>
+                  <div id="approvals-list" class="approvals-list"></div>
+                  <div id="approvals-empty" class="approvals-empty" role="status" hidden>No commands are always allowed.</div>
+                  <div id="approvals-status" class="approvals-status" role="status" aria-live="polite"></div>
+                </div>
+              </section>
             </section>
 
             <section id="settings-general" class="hidden" aria-labelledby="general-title">
