@@ -2033,7 +2033,7 @@ network, no spawn, no FS mutation**. Rules are frozen:
 recommended (mirrors `fleet.rs`, §12.2): all pure cores + DTOs + keyring/HTTP wiring live there, keeping
 the `lib.rs` diff to `mod ai;` + 3 `generate_handler!` entries and shrinking the `lib.rs` hotspot
 collision surface. If the body stays small, `lib.rs` is acceptable — command names and payloads
-(§16.3) are identical either way. **Decision is the lead's** (LQ-1, §16.12).
+(§16.3) are identical either way. **Decision is the lead's** (LQ-16.1, §16.12).
 
 ### 16.5 Backend flow `ai_chat` (contract, not implementation)
 
@@ -2058,7 +2058,7 @@ only a single-line command + host alias + impact description. Behavioral contrac
 - **Never** claim to have terminal access.
 - **Never** ask for or send secrets/keys.
 
-Exact wording is the lead's detail (LQ-2); the behavioral contract is frozen. The prompt must not claim
+Exact wording is the lead's detail (LQ-16.2); the behavioral contract is frozen. The prompt must not claim
 `on-device`/`private`/`local` contrary to the real backend state (FR-AI12).
 
 ### 16.7 Security
@@ -2194,23 +2194,26 @@ already neutralized; `backup.rs:0`). The three AI commands (`read_ai_settings`, 
 
 ### 16.12 Open items for the lead (granularity only — no architectural decision left open)
 
+> Numbering is section-scoped: each label carries the section number, so it cannot collide
+> with the bare addenda labels (`LQ-n`) used by §14.10/§15.12. Always cite the full label.
+
 Every architectural decision is LOCKED above. These are implementation-granularity choices the lead
 settles in the TSD — none change the contract (§16.3), the invariants (§16.7), or the ADRs (§16.7):
 
-- **LQ-1 (module split):** `ai.rs` (recommended, §16.4) vs `lib.rs`. Command names and payloads are
+- **LQ-16.1 (module split):** `ai.rs` (recommended, §16.4) vs `lib.rs`. Command names and payloads are
   identical either way.
-- **LQ-2 (system prompt wording):** exact text is the lead's; the behavioral contract is frozen
+- **LQ-16.2 (system prompt wording):** exact text is the lead's; the behavioral contract is frozen
   (§16.6).
-- **LQ-3 (reply truncation marker):** marker wording is the lead's; the cap is frozen (§16.4).
-- **LQ-4 (`ai_chat` request JSON shape):** field names frozen (§16.3); serde tagging/untagging detail
+- **LQ-16.3 (reply truncation marker):** marker wording is the lead's; the cap is frozen (§16.4).
+- **LQ-16.4 (`ai_chat` request JSON shape):** field names frozen (§16.3); serde tagging/untagging detail
   is the lead's.
-- **LQ-5 (keyring error mapping):** how keyring errors map to `ai:keyring-unavailable` /
+- **LQ-16.5 (keyring error mapping):** how keyring errors map to `ai:keyring-unavailable` /
   `ai-settings:keyring-unavailable` — the lead's mapping; the strings are frozen (§16.8).
-- **LQ-6 (`has_key` probe cost):** whether `read_ai_settings` caches the keyring probe — the lead's
+- **LQ-16.6 (`has_key` probe cost):** whether `read_ai_settings` caches the keyring probe — the lead's
   call; no contract change.
-- **LQ-7 (`aiErrText()` copy table):** user-facing copy wording is the lead's; the prefix set is
+- **LQ-16.7 (`aiErrText()` copy table):** user-facing copy wording is the lead's; the prefix set is
   frozen (§16.8).
-- **LQ-8 (smoke loopback mock):** how the smoke harness stands up a loopback mock endpoint — the
+- **LQ-16.8 (smoke loopback mock):** how the smoke harness stands up a loopback mock endpoint — the
   lead's harness detail.
 
 ---

@@ -11,21 +11,21 @@
 
 ---
 
-## 0. Analyze-Requirements Pass (LQ-1..LQ-8 + temuan terukur)
+## 0. Analyze-Requirements Pass (LQ-16.1..LQ-16.8 + temuan terukur)
 
-> Reasoning LINTAS SDD §16 × FEATURE-SPEC §8/§9 × STATE.md × kondisi repo. Setiap LQ di §16.12
+> Reasoning LINTAS SDD §16 × FEATURE-SPEC §8/§9 × STATE.md × kondisi repo. Setiap LQ-16.x di §16.12
 > diikat jadi keputusan final; tidak ada yang dropped.
 
 | # | Finding | Tipe | Keputusan final |
 |---|---|---|---|
-| 1 | **LQ-1 module split** (`ai.rs` vs `lib.rs`) | Placement | **DECIDED: `src-tauri/src/ai.rs` BARU** (mirror `fleet.rs`, §12.2). Alasan: (a) §16.10 grep gate #7 mensyaratkan `src-tauri/src/ai.rs` sebagai jalur AI kanonik; (b) body (DTO + 8 konstanta + 6 validasi + store + keyring + HTTP wiring) > 150 LOC, jauh di atas ambang "kecil" §16.4; (c) `lib.rs` diff tetap minimal = `mod ai;` + 3 entri `generate_handler!` + `pub(crate)` visibility yang dipakai ai.rs. Fallback: tidak dipakai. Command names/payloads §16.3 identik either way. |
-| 2 | **LQ-2 system prompt wording** | Copy | Kontrak perilaku beku (§16.6). Wording final (draft, AI-2 yang mengimplementasi): lihat §3 AI-2 "System prompt". Poin wajib: never execute, never claim terminal access, never ask/send secrets, `proposal` hanya command single-line + host alias + deskripsi, `proposal: null` bila tidak aman. |
-| 3 | **LQ-3 reply truncation marker** | Copy | Cap beku `AI_REPLY_MAX_BYTES = 16384`. Marker final: `"\n\n[truncated: exceeded 16384 bytes]"` (truncate ke 16384 byte UTF-8, lalu append marker). |
-| 4 | **LQ-4 `ai_chat` request JSON shape** | Serde detail | `#[serde(rename_all = "snake_case")]` pada req/resp; `AiChatReq { prompt: String, host: Option<String>, history: Vec<AiMessage>, timeout_secs: u32 }`; `AiMessage { role: String, content: String }` dengan `role` divalidasi `"user"|"assistant"`; `AiChatResp { reply: String, proposal: Option<AiProposal>, backend: String, warning: Option<String> }`. Nama field = §16.3 verbatim. |
-| 5 | **LQ-5 keyring error mapping** | Error mapping | `keyring::Error::NoEntry` → `has_key = false` (bukan error). `PlatformUnavailable`/error lain saat key dibutuhkan → **fail-closed**: `write_ai_settings` key non-kosong ⇒ `Err("ai-settings:keyring-unavailable")` + 0 write; `ai_chat` remote + key dibutuhkan ⇒ `Err("ai:keyring-unavailable")`. Loopback v1 tidak butuh key ⇒ tidak membaca keyring di jalur `ai_chat` loopback. Nol fallback file 0600 (OQ-AI3). |
-| 6 | **LQ-6 `has_key` probe cost** | Perf | **Tanpa cache.** `read_ai_settings` memprobe keyring setiap panggilan (`Entry::get_password()`; `NoEntry` → false). Probe murah; menghindari state basi saat key dihapus di luar app. |
-| 7 | **LQ-7 `aiErrText()` copy table** | Copy | Tabel lihat §3 AI-3. Prefix set beku §16.8; raw token **tidak pernah** dirender — selalu lewat mapper + `textContent`/`esc()`. |
-| 8 | **LQ-8 smoke loopback mock** | Harness | **Mock di batas invoke** (harness `qa-reports/headless-smoke.mjs` sudah memmock `window.__TAURI_INTERNALS__.invoke`): fixture §2.7 untuk `read_ai_settings`, fixture reply+proposal untuk `ai_chat`, reject token untuk kasus error. **Nol socket nyata** di smoke (deterministik, nol flake). Jalur HTTP reqwest yang nyata = matrix manual loopback (§5.6) + code review; bukan gate otomatis. |
+| 1 | **LQ-16.1 module split** (`ai.rs` vs `lib.rs`) | Placement | **DECIDED: `src-tauri/src/ai.rs` BARU** (mirror `fleet.rs`, §12.2). Alasan: (a) §16.10 grep gate #7 mensyaratkan `src-tauri/src/ai.rs` sebagai jalur AI kanonik; (b) body (DTO + 8 konstanta + 6 validasi + store + keyring + HTTP wiring) > 150 LOC, jauh di atas ambang "kecil" §16.4; (c) `lib.rs` diff tetap minimal = `mod ai;` + 3 entri `generate_handler!` + `pub(crate)` visibility yang dipakai ai.rs. Fallback: tidak dipakai. Command names/payloads §16.3 identik either way. |
+| 2 | **LQ-16.2 system prompt wording** | Copy | Kontrak perilaku beku (§16.6). Wording final (draft, AI-2 yang mengimplementasi): lihat §3 AI-2 "System prompt". Poin wajib: never execute, never claim terminal access, never ask/send secrets, `proposal` hanya command single-line + host alias + deskripsi, `proposal: null` bila tidak aman. |
+| 3 | **LQ-16.3 reply truncation marker** | Copy | Cap beku `AI_REPLY_MAX_BYTES = 16384`. Marker final: `"\n\n[truncated: exceeded 16384 bytes]"` (truncate ke 16384 byte UTF-8, lalu append marker). |
+| 4 | **LQ-16.4 `ai_chat` request JSON shape** | Serde detail | `#[serde(rename_all = "snake_case")]` pada req/resp; `AiChatReq { prompt: String, host: Option<String>, history: Vec<AiMessage>, timeout_secs: u32 }`; `AiMessage { role: String, content: String }` dengan `role` divalidasi `"user"|"assistant"`; `AiChatResp { reply: String, proposal: Option<AiProposal>, backend: String, warning: Option<String> }`. Nama field = §16.3 verbatim. |
+| 5 | **LQ-16.5 keyring error mapping** | Error mapping | `keyring::Error::NoEntry` → `has_key = false` (bukan error). `PlatformUnavailable`/error lain saat key dibutuhkan → **fail-closed**: `write_ai_settings` key non-kosong ⇒ `Err("ai-settings:keyring-unavailable")` + 0 write; `ai_chat` remote + key dibutuhkan ⇒ `Err("ai:keyring-unavailable")`. Loopback v1 tidak butuh key ⇒ tidak membaca keyring di jalur `ai_chat` loopback. Nol fallback file 0600 (OQ-AI3). |
+| 6 | **LQ-16.6 `has_key` probe cost** | Perf | **Tanpa cache.** `read_ai_settings` memprobe keyring setiap panggilan (`Entry::get_password()`; `NoEntry` → false). Probe murah; menghindari state basi saat key dihapus di luar app. |
+| 7 | **LQ-16.7 `aiErrText()` copy table** | Copy | Tabel lihat §3 AI-3. Prefix set beku §16.8; raw token **tidak pernah** dirender — selalu lewat mapper + `textContent`/`esc()`. |
+| 8 | **LQ-16.8 smoke loopback mock** | Harness | **Mock di batas invoke** (harness `qa-reports/headless-smoke.mjs` sudah memmock `window.__TAURI_INTERNALS__.invoke`): fixture §2.7 untuk `read_ai_settings`, fixture reply+proposal untuk `ai_chat`, reject token untuk kasus error. **Nol socket nyata** di smoke (deterministik, nol flake). Jalur HTTP reqwest yang nyata = matrix manual loopback (§5.6) + code review; bukan gate otomatis. |
 | 9 | **Baseline IPC** | Ukur ulang | `grep -rc "#[tauri::command]" src-tauri/src/*.rs` → `lib.rs:43  fleet.rs:2` = **45** (14 Nov 2026). `generate_handler!` (lib.rs:6770) = 45 entri (43 `lib.rs` + `fleet::fleet_start` + `fleet::fleet_stop`). Gate == registered. AI-2 menambah 3 ⇒ **48**. |
 | 10 | **Hotspot `lib.rs`** | Repo rule | `lib.rs` = satu kartu aktif pada satu waktu (standing rule). AI-1 dan AI-2 sama-sama menyentuh `lib.rs` (`mod ai;` / 3 `generate_handler!`) ⇒ **serial AI-1 → AI-2**. `ai.rs` juga dibagi AI-1/AI-2 ⇒ serial alami. |
 | 11 | **Hotspot frontend** | Repo rule | `src/main.ts` + `index.html` = satu kartu aktif. AI-3 dan AI-4 sama-sama menyentuh keduanya ⇒ **serial AI-3 → AI-4**. `qa-reports/headless-smoke.mjs` dibagi AI-3/AI-4/AI-5 ⇒ AI-5 paling akhir. |
@@ -91,7 +91,7 @@ Pemetaan task body → 6 unit. **AI-1..AI-2** backend (serial `ai.rs`/`lib.rs`);
 - **Cakupan file (persis):** `src-tauri/src/ai.rs` (commands, store, keyring, HTTP wiring, tests); `src-tauri/src/lib.rs` = **3 entri `generate_handler!`** (`read_ai_settings`, `write_ai_settings`, `ai_chat`) + `mod ai;` (dari AI-1).
 - **Sumber:** SDD §16.3 (kontrak beku) + §16.5 (flow 9 langkah) + §16.7 (security) + §16.8 (error strings) + §2.2 spec.
 - **AC (EARS):** WHEN `read_ai_settings` dipanggil THE SYSTEM SHALL mengembalikan `AiSettings` dan **tidak pernah throw** (missing/corrupt → defaults; `has_key` dari keyring); WHEN `write_ai_settings` dipanggil THE SYSTEM SHALL menulis atomic (temp → rename 0600) dan mengaplikasikan key semantics (`undefined/null` = biarkan; `""` = hapus; non-empty = simpan keyring) dengan reject beku `ai-settings:invalid-endpoint|remote-disabled|invalid-model|keyring-unavailable|write-failed`; WHEN `ai_chat` dipanggil THE SYSTEM SHALL menjalankan 9 langkah §16.5 (load → validate → endpoint → build → header → send → parse → validate proposal → return) dengan `Authorization: Bearer` **hanya** bila `has_key` + remote, redirect policy **none**, timeout `timeout_secs`, dan **nol execute**; WHEN endpoint/model kosong THE SYSTEM SHALL menolak `ai:not-configured` (0 network); WHEN keyring unavailable + key dibutuhkan THE SYSTEM SHALL fail-closed `ai:keyring-unavailable`/`ai-settings:keyring-unavailable`; semua error string persis §16.8 (12 Err + 4 warning + 5 write).
-- **System prompt (LQ-2, implement verbatim):**
+- **System prompt (LQ-16.2, implement verbatim):**
   ```
   You are hosterm's command assistant. The user describes an operational task.
   Reply with ONLY one JSON object, no prose outside it:
@@ -113,7 +113,7 @@ Pemetaan task body → 6 unit. **AI-1..AI-2** backend (serial `ai.rs`/`lib.rs`);
 - **Cakupan file (persis):** `index.html` (section `#settings-ai` baru di atas `#settings-approvals`, atau perluas section yang ada — nav `data-section="ai"` sudah ada di `index.html:221`); `src/main.ts` (wiring + `aiErrText()` + `ai-backend-label` preview); `src/styles.css`.
 - **Sumber:** FEATURE-SPEC §3 (field, empty state, penyimpanan key) + §4 (label) + §2.2 (strings) + SDD §16.3/§16.8.
 - **AC (EARS):** WHEN Settings > AI Assistant dibuka THE SYSTEM SHALL menampilkan field `#ai-endpoint` (text, nol default, placeholder `http://127.0.0.1:11434/v1`), `#ai-model` (text, nol default, placeholder `llama3.2`), `#ai-key` (password, hint "Stored in the OS keyring. Leave blank to keep the saved key."), indikator `#ai-key-state` = `Saved`/`Not saved`/`Keyring unavailable`, tombol `#ai-test` + `#ai-status`, dan `#ai-backend-label`; WHEN field kosong THE SYSTEM SHALL menampilkan status *"Not configured — AI requests are disabled until a model is set."* + test disabled; WHEN "Send test request" diklik THE SYSTEM SHALL memanggil `ai_chat` dengan prompt tetap (bukan user prompt) dan **tidak** menyimpan apa pun; THE SYSTEM SHALL **tidak** menampilkan toggle "Allow remote endpoints" (D-AI5); semua error string dilewatkan `aiErrText()` (raw token tidak pernah dirender) + `textContent`/`esc()`.
-- **`aiErrText()` copy table (LQ-7, prefix beku §16.8):**
+- **`aiErrText()` copy table (LQ-16.7, prefix beku §16.8):**
   ```
   ai:not-configured          → "AI is not set up. Add an endpoint and model in Settings → AI Assistant."
   ai:empty-prompt           → "Type a message first."
@@ -146,7 +146,7 @@ Pemetaan task body → 6 unit. **AI-1..AI-2** backend (serial `ai.rs`/`lib.rs`);
 
 ### AI-5 — Smoke assertion baru (§8.1) + grep gates (§8.3)
 
-- **Tujuan:** kanonisasi assertion AI + grep gates; harness loopback mock (LQ-8).
+- **Tujuan:** kanonisasi assertion AI + grep gates; harness loopback mock (LQ-16.8).
 - **Cakupan file (persis):** `qa-reports/headless-smoke.mjs` (mock state AI + assertion §8.1 sisa + grep gates §8.3 + ledger AI).
 - **Sumber:** FEATURE-SPEC §8.1 (11 item) + §8.3 (grep gates) + §8.4 (verify loop).
 - **AC (EARS):** WHEN suite dijalankan THE SYSTEM SHALL memuat assertion §8.1 #8 (key custody: `has_key=true`, key tidak di `ai-settings.json`/log) + loopback mock reply+proposal + semua grep gate §8.3; THE SYSTEM SHALL melaporkan total ≥ **516** (500 + ≥16 AI) dengan CSP counter **0**; grep gate: `on-device` di `src/` = 0; `sh -c|bash -c|cmd /C` di `src-tauri/src/ai.rs` = 0; `ai-api-key` tidak di `settings.json`/`~/.ssh/config`; nol log key/prompt.
@@ -205,7 +205,7 @@ AI-3 (main.ts/index.html) ──> AI-4 (main.ts/index.html) ──┘
 | # | Risiko | Mitigasi |
 |---|---|---|
 | 1 | **reqwest blocking di main thread** membekukan UI | `ai_chat` = `async fn` + `tauri::async_runtime::spawn_blocking` (atau std thread) untuk seluruh HTTP; timeout mencakup connect+read; UI disable selama in-flight (AI-4). |
-| 2 | **keyring gagal di platform tanpa backend** (Linux headless, CI) | Fail-closed (LQ-5): `write_ai_settings` key non-kosong ⇒ reject `ai-settings:keyring-unavailable` + 0 write; `ai_chat` remote + key dibutuhkan ⇒ `ai:keyring-unavailable`. Cargo test keyring di-skip bila keyring tidak tersedia (pola `backup.rs`). Nol fallback file 0600 (OQ-AI3). |
+| 2 | **keyring gagal di platform tanpa backend** (Linux headless, CI) | Fail-closed (LQ-16.5): `write_ai_settings` key non-kosong ⇒ reject `ai-settings:keyring-unavailable` + 0 write; `ai_chat` remote + key dibutuhkan ⇒ `ai:keyring-unavailable`. Cargo test keyring di-skip bila keyring tidak tersedia (pola `backup.rs`). Nol fallback file 0600 (OQ-AI3). |
 | 3 | **SSRF / credential leak via redirect** | `reqwest::Client::builder().redirect(reqwest::redirect::Policy::none())`; userinfo dilarang (`ai:bad-endpoint`); loopback-only v1 (D-AI5). |
 | 4 | **Eksekusi tak disengaja** | `ai_chat` nol spawn/execute (INV-36); grep `sh -c\|bash -c\|cmd /C` = 0 di `ai.rs`; eksekusi hanya state machine §13.6. |
 | 5 | **Key/prompt bocor** | Keyring only (`hosterm`/`ai-api-key`); `has_key` boolean; nol key di `ai-settings.json`/IPC/log/argv/error (INV-37); nol log prompt/response/key (§16.7). |
