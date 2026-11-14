@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
 mod fleet;
+mod ai;
 // BE-OAUTH owns these four backend module declarations (lib.rs is a hotspot;
 // later backend cards add only their own tauri command wrappers, never
 // touch these `mod` lines). oauth is implemented here; crypto/drive/backup are
