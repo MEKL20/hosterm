@@ -8,6 +8,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Windows releases are currently **unsigned** (Authenticode signing postponed —
 see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
+## [0.17.0] - 2026-11-15
+
+### Added
+- **AI Assistant backend (v1).** hosterm can now answer from any OpenAI-compatible
+  chat-completions endpoint you provide. Settings -> **AI Assistant** -> **AI backend**
+  holds the endpoint, the model name and the API key. Both endpoint and model start
+  **empty** -- hosterm ships no default model and has no AI sponsor -- so the assistant
+  stays disabled (`ai:not-configured`, zero network, zero process spawn) until you
+  fill them in.
+- The endpoint API key is stored **only** in the OS keyring (service `hosterm`,
+  account `ai-api-key`). The settings store carries a `has_key` flag; the key bytes
+  never appear in the store file, an IPC response, a command line, a log line or an
+  error string.
+- The AI panel sends the real prompt instead of the old hardcoded stub and renders
+  the reply plus its proposal through the **existing** approval contract
+  (`docs/SDD.md` section 13.6): **Run once**, **Always allow** (exact
+  `(host, command)` allowlist), or **Reject**. The assistant never executes anything
+  by itself; the command runs in your existing real-ssh terminal.
+- The panel's status tag reports where a reply actually came from (a local endpoint
+  you configured vs a remote one) instead of implying an on-device model (FR-AI12).
+
+### Changed
+- v1 is **loopback-only** (`localhost`, `127.0.0.1`, `[::1]`). A non-loopback
+  endpoint is refused at save time (`ai-settings:remote-disabled`) and at send time
+  (`ai:remote-endpoint-disabled`); there is deliberately no "allow remote" toggle.
+
+### Security
+- `ai_chat` is proposal-only: it never spawns a process and never touches the network
+  outside the configured endpoint. It runs on `spawn_blocking` with the timeout
+  enforced inside the blocking body, so a hung endpoint cannot freeze the WebView.
+- Frozen error/warning strings and size limits live in one place
+  (`src-tauri/src/ai.rs`: `AI_PROMPT_MAX_BYTES`, `AI_HISTORY_MAX_TURNS`,
+  `AI_HISTORY_MAX_BYTES`, `AI_REPLY_MAX_BYTES`, `AI_COMMAND_MAX_BYTES`,
+  `AI_DESC_MAX_BYTES`, `AI_ENDPOINT_MAX_BYTES`, `AI_MODEL_MAX_BYTES`).
+
+### Tests
+- `cargo test --lib` 256 passed; headless smoke 534/534 (CSP 0). New gates cover the
+  loopback refusal, key custody, and the approval state machine.
+
+Unit chain AI-1..AI-6 (`t_d917c569`, `t_7aa7754a`, `t_53d732d7`, `t_7f64fc3d`,
+`t_e5976bf9`, `t_6ef3a36a`); commits `932f71e`, `13b9822`, `8090414`, `fb5a025`.
+
 ## [0.16.0] - 2026-11-13
 
 ### Added
