@@ -45,16 +45,30 @@ interface SnippetGroup {
   items: Snippet[];
 }
 
+// Mirrors the frozen `AiChatResp.proposal` wire shape (§16.3): the model only
+// supplies host/command/description. The turn `id` is client-generated (below),
+// never taken from the model.
 interface AiProposal {
-  id: string;
-  prompt: string;
-  response: string;
   host: string;
   command: string;
   description: string;
 }
 
 type AiDecision = "proposed" | "ran" | "rejected" | "refused";
+
+// One thread turn = the user prompt plus whatever the endpoint answered.
+// `pending` renders while `ai_chat` is in flight; `error` already carries the
+// mapped copy (aiErrText), `backend` drives the honest head-tag (FR-AI12).
+interface AiTurn {
+  id: string;
+  prompt: string;
+  reply: string;
+  proposal: AiProposal | null;
+  warning: string | null;
+  error: string;
+  pending: boolean;
+  backend: "loopback" | "remote" | null;
+}
 
 // xterm cannot read CSS custom properties; keep this identical to --font-mono in styles.css
 const FONT_MONO = '"JetBrains Mono", "Geist Mono", "Cascadia Code", "SF Mono", ui-monospace, "DejaVu Sans Mono", monospace';
@@ -185,27 +199,18 @@ interface RestoreResult { restored: string[]; pre_restore_dir: string }
 interface PreflightTarget { path_role: string; path: string; exists: boolean }
 interface RestorePreflight { targets: PreflightTarget[] }
 let drivePending = false;
-const AI_PROPOSALS: AiProposal[] = [
-  {
-    id: "restart-netdata",
-    prompt: "restart the metrics agent on prod-web",
-    response: "This host-scoped command follows the exact-match approval contract shown below.",
-    host: "prod-web",
-    command: "sudo systemctl restart netdata",
-    description: "Restarts the Netdata service on prod-web. Monitoring briefly pauses while the service restarts.",
-  },
-  {
-    id: "prune-docker",
-    prompt: "free up disk space on prod-web",
-    response: "Docker cleanup can reclaim unused disk space. Review the exact command before it reaches the host terminal.",
-    host: "prod-web",
-    command: "docker system prune -af",
-    description: "Removes stopped containers, unused networks, dangling images, and build cache. Running containers are not touched.",
-  },
-];
+// Real AI thread state (AI-4): one entry per sent message. Nothing here is
+// hard-coded sample content — every turn is created from an `ai_chat` response
+// (INV-38). `id` is generated on the client so approval state can never be
+// steered by a model-supplied identifier.
+const aiTurns: AiTurn[] = [];
+let aiTurnSeq = 0;
+function nextAiTurnId(): string {
+  aiTurnSeq += 1;
+  return `ai-${Date.now().toString(36)}-${aiTurnSeq}`;
+}
 const aiDecisions = new Map<string, AiDecision>();
 const aiResults = new Map<string, string>();
-const aiExtraMessages: { role: "user" | "ai"; text: string }[] = [];
 
 interface Session {
   id: number;
@@ -277,10 +282,14 @@ const APPROVAL_ITEM_TEMPLATE = (() => {
   return staticTemplate(item);
 })();
 
-const AI_PROPOSAL_TEMPLATE = (() => {
+// One thread turn: user bubble + assistant block (reply, warning, proposal card).
+// Every model-origin string is assigned through `textContent` at render time —
+// this path never uses innerHTML (FR-AI11, ADR-8).
+const AI_TURN_TEMPLATE = (() => {
   const user = staticElement("div", "msg msg-user");
   const assistant = staticElement("div", "msg msg-ai");
-  const response = staticElement("p");
+  const response = staticElement("p", "ai-reply");
+  const warning = staticElement("p", "ai-warning");
   const card = staticElement("div", "cmd-card");
   card.setAttribute("data-ai-id", "");
 
@@ -308,15 +317,8 @@ const AI_PROPOSAL_TEMPLATE = (() => {
   );
   const output = staticElement("pre", "cmd-output");
   card.append(head, command, description, actions, foot, output);
-  assistant.append(response, card);
+  assistant.append(response, warning, card);
   return staticTemplate(user, assistant);
-})();
-
-const AI_EXTRA_USER_TEMPLATE = staticTemplate(staticElement("div", "msg msg-user"));
-const AI_EXTRA_RESPONSE_TEMPLATE = (() => {
-  const assistant = staticElement("div", "msg msg-ai");
-  assistant.append(staticElement("p"));
-  return staticTemplate(assistant);
 })();
 
 // Initials from the remote account name; a safe DOM-escaped fallback for the
@@ -1363,7 +1365,7 @@ interface WriteAiSettingsReqDto {
 }
 
 const AI_TEST_PROMPT = "Reply with the single word: ok";
-const AI_TEST_TIMEOUT_SECS = 30;
+const AI_TIMEOUT_SECS = 30;
 const DEFAULT_AI_SETTINGS: AiSettingsDto = {
   version: 1,
   endpoint: "",
@@ -1373,6 +1375,23 @@ const DEFAULT_AI_SETTINGS: AiSettingsDto = {
 };
 let aiSettings: AiSettingsDto = { ...DEFAULT_AI_SETTINGS };
 let aiSettingsDirty = false;
+// Live drawer state (AI-4): `aiLiveReady` mirrors the backend's own verdict
+// (`ai:not-configured` flips it false), `aiLastBackend` is the most recent
+// `AiChatResp.backend` and wins over the endpoint-derived preview, `aiPending`
+// is the in-flight gate for the input + send button.
+let aiLiveReady = false;
+let aiLastBackend: "loopback" | "remote" | null = null;
+let aiPending = false;
+
+// §16.3: never throws — missing/corrupt store reads as the frozen defaults.
+async function readAiSettingsStore(): Promise<AiSettingsDto> {
+  try {
+    const loaded = await invoke<AiSettingsDto>("read_ai_settings");
+    return { ...DEFAULT_AI_SETTINGS, ...loaded, remote_allowed: false };
+  } catch {
+    return { ...DEFAULT_AI_SETTINGS };
+  }
+}
 
 // LQ-16.7 copy table; the reason prefix set is frozen (§16.8). Every caller
 // assigns the result through `textContent` / `value` (never innerHTML), so the
@@ -1440,16 +1459,38 @@ const AI_LABEL_LOCAL = "local endpoint";
 // v1 is loopback-only (D-AI5): a non-loopback URL is previewed as unusable
 // rather than as a live backend.
 const AI_LABEL_REMOTE = "remote endpoint (v1: loopback only)";
+// Drawer head-tag vocabulary (spec §4): exactly these three labels are allowed.
+const AI_LABEL_NOT_CONFIGURED = "not configured";
+const AI_LABEL_REMOTE_ENDPOINT = "remote endpoint";
 
 function aiBackendLabel(endpoint: string, model: string): string {
-  if (endpoint.trim() === "" || model.trim() === "") return "not configured";
+  if (endpoint.trim() === "" || model.trim() === "") return AI_LABEL_NOT_CONFIGURED;
   return isLoopbackEndpoint(endpoint) ? AI_LABEL_LOCAL : AI_LABEL_REMOTE;
 }
 
 function aiBackendTitle(label: string): string {
   if (label === AI_LABEL_LOCAL) return "Connected to a local endpoint you configured.";
   if (label === AI_LABEL_REMOTE) return "Remote endpoints are disabled in v1; use a loopback endpoint.";
+  if (label === AI_LABEL_REMOTE_ENDPOINT) return "Connected to a remote endpoint you configured.";
   return "No endpoint and model are set yet.";
+}
+
+// `AiChatResp.backend` → the one allowed label for that state (FR-AI12). This is
+// the only mapping from a response to a head-tag label.
+function aiBackendLabelFor(backend: "loopback" | "remote"): string {
+  return backend === "remote" ? AI_LABEL_REMOTE_ENDPOINT : AI_LABEL_LOCAL;
+}
+
+function setAiHeadTag(label: string): void {
+  const tag = $("#ai-head-tag");
+  tag.textContent = label;
+  tag.setAttribute("title", aiBackendTitle(label));
+}
+
+function setAiSettingsLabel(label: string): void {
+  const tag = $("#ai-backend-label");
+  tag.textContent = label;
+  tag.setAttribute("title", aiBackendTitle(label));
 }
 
 function setAiKeyState(state: "saved" | "not-saved" | "keyring-unavailable"): void {
@@ -1477,9 +1518,7 @@ function updateAiPreview(clearStatus = false): void {
   const endpoint = ($("#ai-endpoint") as HTMLInputElement).value;
   const model = ($("#ai-model") as HTMLInputElement).value;
   const label = aiBackendLabel(endpoint, model);
-  const tag = $("#ai-backend-label");
-  tag.textContent = label;
-  tag.setAttribute("title", aiBackendTitle(label));
+  setAiSettingsLabel(label);
   const test = $("#ai-test") as HTMLButtonElement;
   if (endpoint.trim() === "" || model.trim() === "") {
     setAiStatus("Not configured — AI requests are disabled until a model is set.");
@@ -1496,21 +1535,17 @@ async function renderAiSettings(): Promise<void> {
   // the source of truth only when the panel is clean).
   if (!aiSettingsDirty) {
     section.setAttribute("aria-busy", "true");
-    let loaded: AiSettingsDto | null = null;
-    try {
-      loaded = await invoke<AiSettingsDto>("read_ai_settings");
-    } catch {
-      // §16.3: never throws. Treat a rejection as the frozen default store.
-      loaded = { ...DEFAULT_AI_SETTINGS };
-    }
-    aiSettings = { ...DEFAULT_AI_SETTINGS, ...loaded, remote_allowed: false };
+    aiSettings = await readAiSettingsStore();
     ($("#ai-endpoint") as HTMLInputElement).value = aiSettings.endpoint;
     ($("#ai-model") as HTMLInputElement).value = aiSettings.model;
     ($("#ai-key") as HTMLInputElement).value = "";
     setAiKeyState(aiSettings.has_key ? "saved" : "not-saved");
     aiSettingsDirty = false;
+    aiLiveReady = aiConfigured();
+    aiLastBackend = null;
   }
   updateAiPreview(true);
+  renderAiThread();
   section.removeAttribute("aria-busy");
 }
 
@@ -1526,13 +1561,16 @@ async function testAiBackend(): Promise<void> {
       prompt: AI_TEST_PROMPT,
       host: null,
       history: [],
-      timeout_secs: AI_TEST_TIMEOUT_SECS,
+      timeout_secs: AI_TIMEOUT_SECS,
     };
     const resp = await invoke<AiChatRespDto>("ai_chat", { req });
-    const label = resp.backend === "remote" ? AI_LABEL_REMOTE : AI_LABEL_LOCAL;
-    const tag = $("#ai-backend-label");
-    tag.textContent = label;
-    tag.setAttribute("title", aiBackendTitle(label));
+    // The test request is a real response: the drawer head-tag follows it too.
+    if (resp.backend === "remote" || resp.backend === "loopback") {
+      aiLastBackend = resp.backend;
+      const label = aiBackendLabelFor(resp.backend);
+      setAiHeadTag(label);
+      setAiSettingsLabel(label);
+    }
     setAiStatus("Test request succeeded.", "ok");
   } catch (e) {
     setAiStatus(aiErrText(msg(e)), "err");
@@ -1562,13 +1600,13 @@ async function persistAiSettings(): Promise<boolean> {
     return false;
   }
   aiSettingsDirty = false;
-  try {
-    const loaded = await invoke<AiSettingsDto>("read_ai_settings");
-    aiSettings = { ...DEFAULT_AI_SETTINGS, ...loaded, remote_allowed: false };
-    setAiKeyState(aiSettings.has_key ? "saved" : "not-saved");
-  } catch { /* keep the pre-write snapshot; the write itself succeeded */ }
+  aiSettings = await readAiSettingsStore();
+  setAiKeyState(aiSettings.has_key ? "saved" : "not-saved");
+  aiLiveReady = aiConfigured();
+  aiLastBackend = null;
   ($("#ai-key") as HTMLInputElement).value = "";
   updateAiPreview();
+  renderAiThread();
   setAiStatus("AI settings saved.", "ok");
   return true;
 }
@@ -1668,10 +1706,10 @@ function aiAllowlisted(host: string, command: string): boolean {
   return appSettings.allowlist.some((entry) => entry.host === host && entry.command === command);
 }
 
-function aiCardState(proposal: AiProposal) {
+function aiCardState(id: string, proposal: AiProposal) {
   const allowed = aiAllowlisted(proposal.host, proposal.command);
-  const decision = aiDecisions.get(proposal.id) ?? "proposed";
-  const result = aiResults.get(proposal.id) ?? "";
+  const decision = aiDecisions.get(id) ?? "proposed";
+  const result = aiResults.get(id) ?? "";
   let cardClass = "";
   let stateClass = "warn";
   let stateLabel = "AWAITING APPROVAL";
@@ -1702,40 +1740,110 @@ function aiCardState(proposal: AiProposal) {
   return { cardClass, stateClass, stateLabel, showActions, result };
 }
 
+// Drawer head-tag: the most recent `AiChatResp.backend` wins; before the first
+// response the endpoint/model store is the honest preview (FR-AI12). A
+// non-loopback URL therefore previews as v1-unusable, never as a live backend
+// (D-AI5) — the same verdict the Settings preview shows.
+function resolveAiHeadTag(): string {
+  if (aiLastBackend) return aiBackendLabelFor(aiLastBackend);
+  if (!aiLiveReady) return AI_LABEL_NOT_CONFIGURED;
+  return aiBackendLabel(aiSettings.endpoint, aiSettings.model);
+}
+
+// Sample prompts are UI affordances only (D-AI12: empty state + sample prompt,
+// no fake card). Clicking one fills the input; it never sends or renders a card.
+const AI_SAMPLE_PROMPTS = [
+  "What is using the disk on prod-web?",
+  "Show me a safe way to free up space on prod-web",
+];
+
+function renderAiEmptyState() {
+  const empty = $("#ai-empty");
+  const help = $("#ai-empty-help");
+  const samples = $("#ai-samples");
+  const setup = $("#ai-setup") as HTMLButtonElement;
+  const thread = $("#ai-thread");
+
+  if (!aiLiveReady) {
+    thread.hidden = true;
+    empty.hidden = false;
+    help.textContent = "AI is not set up. Add an endpoint and model to ask a question.";
+    samples.replaceChildren();
+    samples.hidden = true;
+    setup.hidden = false;
+    return;
+  }
+
+  setup.hidden = true;
+  if (aiTurns.length === 0) {
+    thread.hidden = true;
+    empty.hidden = false;
+    help.textContent = "Ask about a host, or start from a sample:";
+    const chips = AI_SAMPLE_PROMPTS.map((sample) => {
+      const chip = staticElement("button", "ai-sample", sample);
+      chip.setAttribute("type", "button");
+      chip.addEventListener("click", () => {
+        const input = $("#ai-input") as HTMLInputElement;
+        input.value = sample;
+        input.focus();
+      });
+      return chip;
+    });
+    samples.replaceChildren(...chips);
+    samples.hidden = false;
+    return;
+  }
+
+  empty.hidden = true;
+  samples.replaceChildren();
+  thread.hidden = false;
+}
+
 function renderAiThread() {
   const thread = $("#ai-thread");
   const rendered = document.createDocumentFragment();
-  AI_PROPOSALS.forEach((proposal) => {
-    const content = AI_PROPOSAL_TEMPLATE.content.cloneNode(true) as DocumentFragment;
-    const cardState = aiCardState(proposal);
-    content.querySelector<HTMLElement>(".msg-user")!.textContent = proposal.prompt;
-    content.querySelector<HTMLElement>(".msg-ai > p")!.textContent = proposal.response;
+  for (const turn of aiTurns) {
+    const content = AI_TURN_TEMPLATE.content.cloneNode(true) as DocumentFragment;
+    content.querySelector<HTMLElement>(".msg-user")!.textContent = turn.prompt;
+
+    const reply = content.querySelector<HTMLElement>(".ai-reply")!;
+    const warning = content.querySelector<HTMLElement>(".ai-warning")!;
+    if (turn.pending) {
+      reply.className = "ai-reply ai-pending";
+      reply.textContent = "Waiting for the endpoint…";
+    } else if (turn.error) {
+      reply.className = "ai-reply ai-error";
+      reply.textContent = turn.error;
+    } else {
+      reply.className = "ai-reply";
+      reply.textContent = turn.reply;
+    }
+    warning.textContent = turn.warning ?? "";
+    warning.hidden = !turn.warning;
 
     const card = content.querySelector<HTMLElement>(".cmd-card")!;
-    card.setAttribute("class", `cmd-card${cardState.cardClass}`);
-    card.setAttribute("data-ai-id", proposal.id);
-    card.querySelector<HTMLElement>(".cmd-scope")!.textContent = proposal.host;
-    const state = card.querySelector<HTMLElement>(".cmd-state")!;
-    state.setAttribute("class", `cmd-state ${cardState.stateClass}`);
-    state.textContent = cardState.stateLabel;
-    card.querySelector<HTMLElement>(".cmd-line")!.textContent = proposal.command;
-    card.querySelector<HTMLElement>(".cmd-desc")!.textContent = proposal.description;
-    if (!cardState.showActions) {
-      card.querySelector(".cmd-actions")!.remove();
-      card.querySelector(".cmd-foot")!.remove();
+    if (turn.proposal) {
+      const cardState = aiCardState(turn.id, turn.proposal);
+      card.setAttribute("class", `cmd-card${cardState.cardClass}`);
+      card.setAttribute("data-ai-id", turn.id);
+      card.querySelector<HTMLElement>(".cmd-scope")!.textContent = turn.proposal.host;
+      const state = card.querySelector<HTMLElement>(".cmd-state")!;
+      state.setAttribute("class", `cmd-state ${cardState.stateClass}`);
+      state.textContent = cardState.stateLabel;
+      card.querySelector<HTMLElement>(".cmd-line")!.textContent = turn.proposal.command;
+      card.querySelector<HTMLElement>(".cmd-desc")!.textContent = turn.proposal.description;
+      if (!cardState.showActions) {
+        card.querySelector(".cmd-actions")!.remove();
+        card.querySelector(".cmd-foot")!.remove();
+      }
+      const output = card.querySelector<HTMLElement>(".cmd-output")!;
+      if (cardState.result) output.textContent = cardState.result;
+      else output.remove();
+    } else {
+      card.remove();
     }
-    const output = card.querySelector<HTMLElement>(".cmd-output")!;
-    if (cardState.result) output.textContent = cardState.result;
-    else output.remove();
     rendered.append(content);
-  });
-
-  aiExtraMessages.forEach((message) => {
-    const template = message.role === "user" ? AI_EXTRA_USER_TEMPLATE : AI_EXTRA_RESPONSE_TEMPLATE;
-    const content = template.content.cloneNode(true) as DocumentFragment;
-    content.querySelector<HTMLElement>(message.role === "user" ? ".msg-user" : ".msg-ai > p")!.textContent = message.text;
-    rendered.append(content);
-  });
+  }
   thread.replaceChildren(rendered);
 
   thread.querySelectorAll<HTMLElement>(".cmd-card").forEach((card) => {
@@ -1745,6 +1853,12 @@ function renderAiThread() {
     card.querySelector<HTMLButtonElement>(".approval-always")?.addEventListener("click", () => void alwaysAllowAi(id, card));
     card.querySelector<HTMLButtonElement>(".approval-reject")?.addEventListener("click", () => rejectAi(id));
   });
+
+  renderAiEmptyState();
+  setAiHeadTag(resolveAiHeadTag());
+  const blocked = !aiLiveReady || aiPending;
+  ($("#ai-input") as HTMLInputElement).disabled = blocked;
+  ($("#ai-send") as HTMLButtonElement).disabled = blocked;
 }
 
 function visibleAiCommand(card: HTMLElement): { host: string; command: string } {
@@ -1846,35 +1960,109 @@ function rejectAi(id: string) {
   renderAiThread();
 }
 
-function sendAiStub() {
+// Real send path (§2.6): trim → abort on empty → append the user turn → call
+// `ai_chat` → render the escaped reply + proposal card. No execute on this path
+// ever (FR-AI9); the only execution is an explicit Run once / Always allow.
+async function sendAiMessage(): Promise<void> {
+  if (aiPending) return;
   const input = $("#ai-input") as HTMLInputElement;
-  if (!input.value.trim()) return;
-  aiExtraMessages.push(
-    { role: "user", text: input.value },
-    { role: "ai", text: "The AI backend is not connected. This mock did not send or execute your request." },
-  );
+  const send = $("#ai-send") as HTMLButtonElement;
+  const prompt = input.value.trim();
+  // Empty after trim = abort without touching the backend (0 network).
+  if (!prompt) return;
+  if (!aiLiveReady) return;
+
+  const turn: AiTurn = {
+    id: nextAiTurnId(),
+    prompt,
+    reply: "",
+    proposal: null,
+    warning: null,
+    error: "",
+    pending: true,
+    backend: null,
+  };
+  aiTurns.push(turn);
   input.value = "";
+  aiPending = true;
+  input.disabled = true;
+  send.disabled = true;
   renderAiThread();
   $("#ai-thread").scrollTop = $("#ai-thread").scrollHeight;
+
+  // Stateless backend, but the conversation so far is sent as history (D-AI10).
+  const history: AiChatMessageDto[] = [];
+  for (const prior of aiTurns) {
+    if (prior.pending) continue;
+    history.push({ role: "user", content: prior.prompt });
+    if (prior.reply) history.push({ role: "assistant", content: prior.reply });
+  }
+  if (history.length > 20) history.splice(0, history.length - 20);
+
+  try {
+    const req: AiChatReqDto = {
+      prompt,
+      host: null,
+      history,
+      timeout_secs: AI_TIMEOUT_SECS,
+    };
+    const resp = await invoke<AiChatRespDto>("ai_chat", { req });
+    turn.pending = false;
+    turn.reply = resp.reply ?? "";
+    turn.proposal = resp.proposal ?? null;
+    turn.warning = resp.warning ?? null;
+    if (resp.backend === "remote" || resp.backend === "loopback") {
+      turn.backend = resp.backend;
+      aiLastBackend = resp.backend;
+    }
+  } catch (e) {
+    turn.pending = false;
+    const token = msg(e);
+    turn.error = aiErrText(token);
+    // `ai:not-configured` is a state, not a message: empty state + Set up AI,
+    // input disabled (§2.3 / §3.3).
+    if (token === "ai:not-configured") {
+      aiLiveReady = false;
+      aiLastBackend = null;
+    }
+  } finally {
+    aiPending = false;
+    renderAiThread();
+    $("#ai-thread").scrollTop = $("#ai-thread").scrollHeight;
+    const blocked = !aiLiveReady;
+    input.disabled = blocked;
+    send.disabled = blocked;
+    if (!blocked) input.focus();
+  }
 }
 
 function initAiAssistant() {
   $("#mode-ai").addEventListener("click", () => {
-    void settingsReady.then(() => {
+    void settingsReady.then(async () => {
+      // The drawer always reflects the live store (never a stale snapshot).
+      aiSettings = await readAiSettingsStore();
+      aiLiveReady = aiConfigured();
+      aiLastBackend = null;
       renderAiThread();
       setAiDrawer(true);
-      ($("#ai-input") as HTMLInputElement).focus();
+      const input = $("#ai-input") as HTMLInputElement;
+      if (!input.disabled) input.focus();
     });
   });
   $("#ai-close").addEventListener("click", () => {
     setAiDrawer(false);
     $("#mode-ai").focus();
   });
-  $("#ai-send").addEventListener("click", sendAiStub);
+  $("#ai-send").addEventListener("click", () => void sendAiMessage());
   ($("#ai-input") as HTMLInputElement).addEventListener("keydown", (event) => {
     if (event.key !== "Enter" || event.isComposing) return;
     event.preventDefault();
-    sendAiStub();
+    void sendAiMessage();
+  });
+  // §3.3: the not-configured empty state offers a direct route to the fields.
+  $("#ai-setup").addEventListener("click", () => {
+    setAiDrawer(false);
+    void openSettings().then(() => selectSettingsSection("ai"));
   });
   void settingsReady.then(renderAiThread);
 }

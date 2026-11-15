@@ -136,13 +136,16 @@
           <aside id="ai-drawer" class="drawer drawer-ai" aria-label="AI assistant" hidden>
             <header class="drawer-head">
               <h2>Assistant</h2>
-              <span class="head-tag" title="UI-only mock; no AI backend is connected">mock</span>
+              <span id="ai-head-tag" class="head-tag" title="No endpoint and model are set yet.">not configured</span>
               <button id="ai-close" class="icon drawer-close" aria-label="Close assistant panel" title="Close panel">
                 <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M3 3l10 10M13 3 3 13"/></svg>
               </button>
             </header>
-            <div id="ai-thread" class="ai-thread" aria-live="polite">
-              <div class="ai-empty">Loading approval preview…</div>
+            <div id="ai-thread" class="ai-thread" aria-live="polite" hidden></div>
+            <div id="ai-empty" class="ai-empty" hidden>
+              <p id="ai-empty-help" class="ai-empty-help"></p>
+              <div id="ai-samples" class="ai-samples"></div>
+              <button id="ai-setup" class="btn-primary ai-setup" type="button" hidden>Set up AI</button>
             </div>
             <footer class="ai-input">
               <input id="ai-input" type="text" placeholder="Ask hosterm" aria-label="Ask the assistant" autocomplete="off" />

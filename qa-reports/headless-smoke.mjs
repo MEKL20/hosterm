@@ -4,8 +4,10 @@
 // Mocks window.__TAURI_INTERNALS__.invoke, loads dist/, asserts DOM behavior.
 import { chromium } from "playwright";
 import { createServer } from "http";
-import { readFileSync, existsSync, readdirSync } from "fs";
+import { readFileSync, existsSync, readdirSync, writeFileSync } from "fs";
 import { extname, join } from "path";
+import { homedir, tmpdir } from "os";
+import { execSync } from "child_process";
 import { fileURLToPath } from "url";
 
 // fileURLToPath (not .pathname): on Windows .pathname yields "/C:/.../dist"
@@ -127,9 +129,15 @@ let ansibleHistory = [];                       // ansible_history store (newest-
 // never crosses IPC — only `has_key` does. aiChatMode steers the test arm.
 let aiSettingsStore = { version: 1, endpoint: "", model: "", remote_allowed: false, has_key: false };
 let aiKeyStored = false;
-let aiChatMode = "ok";                      // ok | not-configured | timeout
+let aiChatMode = "ok";                      // ok | proposal | echo | not-configured | timeout
+let aiChatHost = "prod-web";
+let aiChatCommand = "sudo systemctl restart netdata";
+let aiChatDescription = "";
 let aiKeyringFail = false;                  // write_ai_settings rejects keyring-unavailable
 const aiReads = [];                         // every read_ai_settings payload (key-custody)
+// AI-5 §8.1 #8: the mock mirrors the backend's on-disk store (no key field,
+// INV-37) so the key-custody grep is a real file read, not an in-memory string.
+const AI_SETTINGS_FILE = join(tmpdir(), `hosterm-smoke-ai-settings-${process.pid}.json`);
 const invoke = (cmd, args = {}) => {
   calls.push({ cmd, args });
   switch (cmd) {
@@ -299,11 +307,44 @@ const invoke = (cmd, args = {}) => {
       };
       if (req.key === "") aiKeyStored = false;
       else if (typeof req.key === "string" && req.key !== "") aiKeyStored = true;
+      // Mirror ai-settings.json (§16.3): the key never enters the file.
+      writeFileSync(AI_SETTINGS_FILE, JSON.stringify({
+        version: 1,
+        endpoint: aiSettingsStore.endpoint,
+        model: aiSettingsStore.model,
+        remote_allowed: aiSettingsStore.remote_allowed,
+      }));
       return Promise.resolve(null);
     }
     case "ai_chat": {
       if (aiChatMode === "not-configured") return Promise.reject("ai:not-configured");
       if (aiChatMode === "timeout") return Promise.reject("ai:timeout");
+      // §8.1 #5/#6: the backend validates the proposal host BEFORE it becomes a
+      // card (§2.2 warnings). Mirror that: a bad host never yields a proposal.
+      if (aiChatMode === "unsafe-host" || aiChatMode === "unknown-host") {
+        const unsafe = aiChatHost.startsWith("-") || /[\r\n]/.test(aiChatHost);
+        const known = sampleHosts.some((h) => h.name === aiChatHost);
+        const warning = unsafe ? "ai:unsafe-host" : (!known ? "ai:unknown-host" : null);
+        return Promise.resolve({
+          reply: "The proposal was refused before it reached you.",
+          proposal: warning ? null : { host: aiChatHost, command: aiChatCommand, description: aiChatDescription },
+          backend: "loopback",
+          warning,
+        });
+      }
+      // §8.1 #7: non-loopback + remote_allowed=false rejects before any network.
+      if (aiChatMode === "remote-disabled") return Promise.reject("ai:remote-endpoint-disabled");
+      if (aiChatMode === "echo") {
+        return Promise.resolve({ reply: args.req.prompt, proposal: null, backend: "loopback", warning: null });
+      }
+      if (aiChatMode === "proposal") {
+        return Promise.resolve({
+          reply: "This host-scoped command follows the exact-match approval contract.",
+          proposal: { host: aiChatHost, command: aiChatCommand, description: aiChatDescription },
+          backend: "loopback",
+          warning: null,
+        });
+      }
       return Promise.resolve({ reply: "ok", proposal: null, backend: "loopback", warning: null });
     }
     default: return Promise.reject(`unmocked: ${cmd}`);
@@ -3468,40 +3509,165 @@ if (await page.evaluate(() => document.body.classList.contains("panel-collapsed"
 }
 // End FE-FIX checks.
 
-// U-D7 AI assistant + exact-command approval contract (FR-AI1..13, INV-25/26).
+// U-D7 + AI-4: AI assistant — real `ai_chat` thread, proposal card, honest label
+// (FR-AI1..13, INV-25/26/38, D-AI12). The thread is driven only by mock
+// `ai_chat` responses; no proposal exists before a real response.
 const aiCounts = () => ({
   spawn: calls.filter((c) => c.cmd === "pty_spawn").length,
   write: calls.filter((c) => c.cmd === "pty_write").length,
   settings: calls.filter((c) => c.cmd === "write_settings").length,
   readSettings: calls.filter((c) => c.cmd === "read_settings").length,
+  chat: calls.filter((c) => c.cmd === "ai_chat").length,
 });
 const openAi = async () => {
   await page.locator("#mode-ai").click();
   await page.locator('#ai-drawer.open:not([hidden])').waitFor({ timeout: 3000 });
 };
-const callsBeforeAiOpen = aiCounts();
-await openAi();
-const aiPanel = await page.evaluate(() => {
+// Cards are located by the exact command they render: `data-ai-id` is
+// client-generated and must never be assumed by the app or by these tests.
+const aiCardByCommand = (command) => page.locator(".cmd-card").filter({ hasText: command }).last();
+const aiCardMeta = (card) => card.evaluate((el) => ({
+  id: el.getAttribute("data-ai-id"),
+  host: el.querySelector(".cmd-scope")?.textContent,
+  command: el.querySelector(".cmd-line")?.textContent,
+  description: el.querySelector(".cmd-desc")?.textContent,
+  state: el.querySelector(".cmd-state")?.textContent,
+  stateClass: el.querySelector(".cmd-state")?.className,
+  awaiting: el.classList.contains("awaiting"),
+  actions: el.querySelectorAll(".cmd-actions button").length,
+  labels: [...el.querySelectorAll(".cmd-actions button")].map((button) => button.textContent),
+  classes: [...el.querySelectorAll(".cmd-actions button")].map((button) => button.className),
+  result: el.querySelector(".cmd-output")?.textContent,
+  hostKids: el.querySelector(".cmd-scope")?.childElementCount,
+  commandKids: el.querySelector(".cmd-line")?.childElementCount,
+}));
+const aiCardStateIs = (command, label) => page.waitForFunction((argv) => {
+  const cards = [...document.querySelectorAll(".cmd-card")]
+    .filter((card) => card.querySelector(".cmd-line")?.textContent === argv.command);
+  return cards.at(-1)?.querySelector(".cmd-state")?.textContent === argv.label;
+}, { command, label });
+const aiHostileFrame = () => page.evaluate((hostile) => {
+  const msgs = [...document.querySelectorAll("#ai-thread .msg-user")].filter((m) => m.textContent === hostile);
+  const el = msgs.at(-1);
+  return {
+    text: el?.textContent ?? null,
+    children: el?.childElementCount ?? -1,
+    pwn: typeof window.__pwn,
+    csp: (window.__cspViolations || []).length,
+  };
+}, HOSTILE);
+const aiDrawer = () => page.evaluate(() => {
   const drawer = document.getElementById("ai-drawer");
   const input = document.getElementById("ai-input");
+  const send = document.getElementById("ai-send");
+  const tag = document.getElementById("ai-head-tag");
+  const empty = document.getElementById("ai-empty");
+  const setup = document.getElementById("ai-setup");
   return {
     width: Math.round(drawer.getBoundingClientRect().width),
     label: drawer.getAttribute("aria-label"),
-    thread: document.querySelectorAll("#ai-thread .msg-user").length,
-    cards: document.querySelectorAll("#ai-thread .cmd-card").length,
     placeholder: input.getAttribute("placeholder"),
-    focused: document.activeElement?.id,
-    tag: drawer.querySelector(".head-tag")?.textContent,
-    tagTitle: drawer.querySelector(".head-tag")?.getAttribute("title"),
+    tag: tag?.textContent,
+    tagTitle: tag?.getAttribute("title"),
+    threadHidden: document.getElementById("ai-thread").hidden,
+    emptyVisible: !!empty && !empty.hidden,
+    setupVisible: !!setup && !setup.hidden,
+    setupText: setup?.textContent,
+    samples: document.querySelectorAll("#ai-samples .ai-sample").length,
+    inputDisabled: input.disabled,
+    sendDisabled: send.disabled,
+    userMsgs: document.querySelectorAll("#ai-thread .msg-user").length,
+    cards: document.querySelectorAll("#ai-thread .cmd-card").length,
   };
 });
-check("U-D7 FR-AI1/12: 340px mock assistant drawer has thread, command cards, and Ask hosterm input",
-  aiPanel.width === 340 && aiPanel.label === "AI assistant" && aiPanel.thread === 2 && aiPanel.cards === 2 &&
-  aiPanel.placeholder === "Ask hosterm" && aiPanel.focused === "ai-input" && aiPanel.tag === "mock" &&
-  aiPanel.tagTitle.includes("no AI backend") && !JSON.stringify(aiPanel).includes("on-device"),
+const aiSend = async (text) => {
+  await page.locator("#ai-input").fill(text);
+  await page.locator("#ai-send").click();
+};
+const aiWaitForCards = (count) => page.waitForFunction((n) => document.querySelectorAll("#ai-thread .cmd-card").length === n, count);
+
+// --- not configured: empty state + Set up AI, honest label, disabled input ---
+aiSettingsStore = { version: 1, endpoint: "", model: "", remote_allowed: false, has_key: false };
+aiKeyStored = false;
+aiChatMode = "ok";
+await page.reload();
+await page.waitForTimeout(400);
+const callsBeforeAiOpen = aiCounts();
+await openAi();
+const aiPanel = await aiDrawer();
+check("U-D7 FR-AI1/12: 340px assistant drawer boots with an empty thread and an honest 'not configured' head-tag",
+  aiPanel.width === 340 && aiPanel.label === "AI assistant" && aiPanel.userMsgs === 0 && aiPanel.cards === 0 &&
+  aiPanel.placeholder === "Ask hosterm" && aiPanel.tag === "not configured" &&
+  aiPanel.tagTitle === "No endpoint and model are set yet." &&
+  !JSON.stringify(aiPanel).includes("on-device") && !JSON.stringify(aiPanel).includes("mock"),
   JSON.stringify(aiPanel));
-check("U-D7 FR-AI9: opening the mock never runs or persists a command implicitly",
+check("AI-4 §3.3/D-AI12: the not-configured drawer shows 'Set up AI', disables input+send, and renders no fake card",
+  aiPanel.emptyVisible && aiPanel.setupVisible && aiPanel.setupText === "Set up AI" &&
+  aiPanel.inputDisabled && aiPanel.sendDisabled && aiPanel.samples === 0 && aiPanel.threadHidden,
+  JSON.stringify(aiPanel));
+check("U-D7 FR-AI9: opening the drawer never runs or persists a command implicitly",
   JSON.stringify(aiCounts()) === JSON.stringify(callsBeforeAiOpen), JSON.stringify({ before: callsBeforeAiOpen, after: aiCounts() }));
+
+await page.locator("#ai-setup").click();
+await page.waitForFunction(() => {
+  const section = document.getElementById("settings-ai");
+  return section && !section.classList.contains("hidden");
+});
+const aiSetupNav = await page.evaluate(() => ({
+  settingsOpen: !document.getElementById("settings-panel").classList.contains("hidden"),
+  sectionVisible: !document.getElementById("settings-ai").classList.contains("hidden"),
+  drawerHidden: document.getElementById("ai-drawer").hidden,
+  endpoint: document.getElementById("ai-endpoint").value,
+  model: document.getElementById("ai-model").value,
+}));
+check("AI-4 §3.3: 'Set up AI' opens Settings > AI Assistant on empty fields and closes the drawer",
+  aiSetupNav.settingsOpen && aiSetupNav.sectionVisible && aiSetupNav.drawerHidden &&
+  aiSetupNav.endpoint === "" && aiSetupNav.model === "", JSON.stringify(aiSetupNav));
+await page.locator("#settings-done").click();
+await page.waitForTimeout(150);
+
+// --- configured loopback: sample prompts, then a real response ---
+aiSettingsStore = { version: 1, endpoint: "http://127.0.0.1:11434/v1", model: "llama3.2", remote_allowed: false, has_key: false };
+storedSettings = { ...storedSettings, allowlist: [] };
+await page.reload();
+await page.waitForTimeout(400);
+await openAi();
+const aiReadyPanel = await aiDrawer();
+check("AI-4 FR-AI12: a configured loopback endpoint previews 'local endpoint' before any response",
+  aiReadyPanel.tag === "local endpoint" &&
+  aiReadyPanel.tagTitle === "Connected to a local endpoint you configured." &&
+  aiReadyPanel.userMsgs === 0 && aiReadyPanel.cards === 0,
+  JSON.stringify(aiReadyPanel));
+check("AI-4 D-AI12: a configured empty thread shows sample prompts, a live input, and no card",
+  aiReadyPanel.emptyVisible && aiReadyPanel.samples > 0 && !aiReadyPanel.setupVisible &&
+  !aiReadyPanel.inputDisabled && !aiReadyPanel.sendDisabled && aiReadyPanel.threadHidden,
+  JSON.stringify(aiReadyPanel));
+const sampleOffset = calls.length;
+await page.locator("#ai-samples .ai-sample").first().click();
+const sampleFill = await page.evaluate(() => ({
+  value: document.getElementById("ai-input").value,
+  cards: document.querySelectorAll("#ai-thread .cmd-card").length,
+}));
+check("AI-4 D-AI12: a sample prompt only fills the input (no card, no backend call)",
+  sampleFill.value.length > 0 && sampleFill.cards === 0 && calls.length === sampleOffset,
+  JSON.stringify({ sampleFill, backendCalls: calls.length - sampleOffset }));
+
+// D-AI5 honesty: a non-loopback URL must never preview as a live backend.
+aiSettingsStore = { version: 1, endpoint: "http://10.20.30.40:11434/v1", model: "llama3.2", remote_allowed: false, has_key: false };
+await page.reload();
+await page.waitForTimeout(400);
+await openAi();
+const aiRemotePanel = await aiDrawer();
+check("AI-4 FR-AI12/D-AI5: a configured non-loopback endpoint previews as v1-unusable, never as a live backend",
+  aiRemotePanel.tag === "remote endpoint (v1: loopback only)" &&
+  aiRemotePanel.tagTitle === "Remote endpoints are disabled in v1; use a loopback endpoint." &&
+  aiRemotePanel.userMsgs === 0 && aiRemotePanel.cards === 0,
+  JSON.stringify(aiRemotePanel));
+aiSettingsStore = { version: 1, endpoint: "http://127.0.0.1:11434/v1", model: "llama3.2", remote_allowed: false, has_key: false };
+await page.reload();
+await page.waitForTimeout(400);
+await openAi();
+
 const approvalRendererSource = u3src.slice(
   u3src.indexOf("function renderApprovals"),
   u3src.indexOf("async function refreshApprovals"),
@@ -3516,168 +3682,276 @@ check("U-D7 SEC-01: approval and thread renderers clone static templates without
   !/\.innerHTML\s*=/.test(approvalRendererSource) && !/\.innerHTML\s*=/.test(threadRendererSource) &&
   approvalRendererSource.includes("APPROVAL_ITEM_TEMPLATE.content.cloneNode(true)") &&
   approvalRendererSource.includes("list.replaceChildren(rendered)") &&
-  threadRendererSource.includes("AI_PROPOSAL_TEMPLATE.content.cloneNode(true)") &&
+  threadRendererSource.includes("AI_TURN_TEMPLATE.content.cloneNode(true)") &&
   threadRendererSource.includes("thread.replaceChildren(rendered)"));
 
-const allowedCard = page.locator('.cmd-card[data-ai-id="restart-netdata"]');
-const awaitingCard = page.locator('.cmd-card[data-ai-id="prune-docker"]');
-const allowedMeta = await allowedCard.evaluate((card) => ({
-  host: card.querySelector(".cmd-scope")?.textContent,
-  command: card.querySelector(".cmd-line")?.textContent,
-  description: card.querySelector(".cmd-desc")?.textContent,
-  state: card.querySelector(".cmd-state")?.textContent,
-  stateClass: card.querySelector(".cmd-state")?.className,
-  awaiting: card.classList.contains("awaiting"),
-  actions: card.querySelectorAll(".cmd-actions button").length,
+aiChatMode = "proposal";
+aiChatHost = "prod-web";
+aiChatCommand = "sudo systemctl restart netdata";
+aiChatDescription = "Restarts the Netdata service on prod-web. Monitoring briefly pauses while the service restarts.";
+const effectBefore = aiCounts();
+const sendOffset = calls.length;
+await aiSend("restart the metrics agent on prod-web");
+await aiWaitForCards(1);
+const chatCall = calls.slice(sendOffset).find((c) => c.cmd === "ai_chat");
+const sentPanel = await page.evaluate(() => {
+  const reply = document.querySelector("#ai-thread .ai-reply");
+  return {
+    userText: document.querySelector("#ai-thread .msg-user")?.textContent,
+    replyText: reply?.textContent,
+    replyKids: reply?.childElementCount,
+    cardIds: [...document.querySelectorAll("#ai-thread .cmd-card")].map((card) => card.getAttribute("data-ai-id")),
+    inputValue: document.getElementById("ai-input").value,
+    emptyVisible: !document.getElementById("ai-empty").hidden,
+  };
+});
+check("AI-4 §2.6: send appends the user turn, calls ai_chat, and renders the escaped reply",
+  !!chatCall && chatCall.args.req.prompt === "restart the metrics agent on prod-web" &&
+  Array.isArray(chatCall.args.req.history) && chatCall.args.req.history.length === 0 &&
+  chatCall.args.req.host === null &&
+  sentPanel.userText === "restart the metrics agent on prod-web" &&
+  sentPanel.replyText === "This host-scoped command follows the exact-match approval contract." &&
+  sentPanel.replyKids === 0 && sentPanel.cardIds.length === 1 && sentPanel.inputValue === "",
+  JSON.stringify({ call: chatCall, panel: sentPanel }));
+const sentTag = await page.evaluate(() => ({
+  tag: document.getElementById("ai-head-tag").textContent,
+  title: document.getElementById("ai-head-tag").getAttribute("title"),
+  emptyVisible: !document.getElementById("ai-empty").hidden,
 }));
-check("U-D7 FR-AI2/7: exact host+command allowlist match renders directly ALWAYS ALLOWED",
-  allowedMeta.host === "prod-web" && allowedMeta.command === "sudo systemctl restart netdata" &&
-  allowedMeta.description.length > 0 && allowedMeta.state === "ALWAYS ALLOWED" &&
-  allowedMeta.stateClass.includes("ok") && !allowedMeta.awaiting && allowedMeta.actions === 0,
-  JSON.stringify(allowedMeta));
+check("AI-4 FR-AI12: a loopback response sets the drawer head-tag to 'local endpoint'",
+  sentTag.tag === "local endpoint" && sentTag.title === "Connected to a local endpoint you configured." &&
+  !sentTag.emptyVisible, JSON.stringify(sentTag));
 
-const awaitingMeta = await awaitingCard.evaluate((card) => ({
-  host: card.querySelector(".cmd-scope")?.textContent,
-  command: card.querySelector(".cmd-line")?.textContent,
-  description: card.querySelector(".cmd-desc")?.textContent,
-  state: card.querySelector(".cmd-state")?.textContent,
-  stateClass: card.querySelector(".cmd-state")?.className,
-  awaiting: card.classList.contains("awaiting"),
-  labels: [...card.querySelectorAll(".cmd-actions button")].map((button) => button.textContent),
-  classes: [...card.querySelectorAll(".cmd-actions button")].map((button) => button.className),
-}));
-check("U-D7 FR-AI2/3: proposed card has exact scope, mono command, impact, warn state, and three actions",
-  awaitingMeta.host === "prod-web" && awaitingMeta.command === "docker system prune -af" &&
-  awaitingMeta.description.includes("Running containers are not touched") && awaitingMeta.state === "AWAITING APPROVAL" &&
-  awaitingMeta.stateClass.includes("warn") && awaitingMeta.awaiting &&
-  JSON.stringify(awaitingMeta.labels) === JSON.stringify(["Run once", "Always allow", "Reject"]),
-  JSON.stringify(awaitingMeta));
+const netdataCard = aiCardByCommand("sudo systemctl restart netdata");
+const netMeta = await aiCardMeta(netdataCard);
+check("AI-4 FR-AI2/3: the real proposal card renders exact scope, mono command, impact, warn state, and three actions",
+  netMeta.host === "prod-web" && netMeta.command === "sudo systemctl restart netdata" &&
+  netMeta.description.includes("Monitoring briefly pauses") && netMeta.state === "AWAITING APPROVAL" &&
+  netMeta.stateClass.includes("warn") && netMeta.awaiting && netMeta.actions === 3 &&
+  JSON.stringify(netMeta.labels) === JSON.stringify(["Run once", "Always allow", "Reject"]),
+  JSON.stringify(netMeta));
 check("U-D7 INV-25: Run once is primary; permission-widening Always allow is secondary; Reject is ghost",
-  awaitingMeta.classes[0].split(/\s+/).includes("btn-primary") && awaitingMeta.classes[0].split(/\s+/).includes("approval-run") &&
-  awaitingMeta.classes[1].split(/\s+/).includes("btn-secondary") && awaitingMeta.classes[1].split(/\s+/).includes("approval-always") &&
-  !awaitingMeta.classes[1].split(/\s+/).includes("btn-primary") &&
-  awaitingMeta.classes[2].split(/\s+/).includes("btn-ghost") && awaitingMeta.classes[2].split(/\s+/).includes("approval-reject"),
-  JSON.stringify(awaitingMeta.classes));
+  netMeta.classes[0].split(/\s+/).includes("btn-primary") && netMeta.classes[0].split(/\s+/).includes("approval-run") &&
+  netMeta.classes[1].split(/\s+/).includes("btn-secondary") && netMeta.classes[1].split(/\s+/).includes("approval-always") &&
+  !netMeta.classes[1].split(/\s+/).includes("btn-primary") &&
+  netMeta.classes[2].split(/\s+/).includes("btn-ghost") && netMeta.classes[2].split(/\s+/).includes("approval-reject"),
+  JSON.stringify(netMeta.classes));
+const awaitingMeta = netMeta; // U-D8 (g) INV-25 reads this awaiting-approval card meta
+check("AI-4 INV-38: the card id is client-generated, and no card exists before a real response",
+  typeof netMeta.id === "string" && netMeta.id.startsWith("ai-") && !netMeta.id.includes("restart-netdata") &&
+  aiReadyPanel.cards === 0,
+  JSON.stringify({ id: netMeta.id, beforeResponse: aiReadyPanel.cards }));
+check("AI-4 FR-AI11: proposal host/command render as inert text (0 child nodes)",
+  netMeta.hostKids === 0 && netMeta.commandKids === 0, JSON.stringify(netMeta));
 
-const hostileStubBefore = { calls: calls.length, requests: requestLog.length };
-await page.locator("#ai-input").fill(HOSTILE);
-await page.locator("#ai-send").click();
-const hostileThread = await page.locator("#ai-thread .msg-user").last().evaluate((message) => ({
-  text: message.textContent,
-  children: message.childElementCount,
-  pwn: typeof window.__pwn,
-  csp: (window.__cspViolations || []).length,
-}));
-check("U-D7 FR-AI11: hostile thread text stays raw inert text with CSP 0",
-  hostileThread.text === HOSTILE && hostileThread.children === 0 && hostileThread.pwn === "undefined" && hostileThread.csp === 0,
-  JSON.stringify(hostileThread));
-check("U-D7 ADR-22: Ask hosterm stub performs zero invoke and zero network request",
-  calls.length === hostileStubBefore.calls && requestLog.length === hostileStubBefore.requests &&
-  (await page.locator("#ai-thread .msg-ai p").last().textContent()).includes("AI backend is not connected"),
-  JSON.stringify({ before: hostileStubBefore, after: { calls: calls.length, requests: requestLog.length } }));
+// --- hostile model output (FR-AI11) ---
+aiChatMode = "echo";
+await aiSend(HOSTILE);
+await page.waitForFunction((hostile) => [...document.querySelectorAll("#ai-thread .msg-user")].some((m) => m.textContent === hostile), HOSTILE);
+const hostileThread = await aiHostileFrame();
+const hostileReply = await page.evaluate((hostile) => {
+  const replies = [...document.querySelectorAll("#ai-thread .ai-reply")].filter((r) => r.textContent === hostile);
+  const el = replies.at(-1);
+  return {
+    text: el?.textContent ?? null,
+    children: el?.childElementCount ?? -1,
+    pwn: typeof window.__pwn,
+    csp: (window.__cspViolations || []).length,
+  };
+}, HOSTILE);
+check("U-D7 FR-AI11: hostile user text stays raw inert text with CSP 0",
+  hostileThread.text === HOSTILE && hostileThread.children === 0 &&
+  hostileThread.pwn === "undefined" && hostileThread.csp === 0, JSON.stringify(hostileThread));
+check("AI-4 FR-AI11: a hostile model reply renders as inert text (0 child nodes, no __pwn, CSP 0)",
+  hostileReply.text === HOSTILE && hostileReply.children === 0 &&
+  hostileReply.pwn === "undefined" && hostileReply.csp === 0, JSON.stringify(hostileReply));
+check("U-D7 FR-AI9: sending performs zero execute/allowlist side effects (only ai_chat)",
+  aiCounts().spawn === effectBefore.spawn && aiCounts().write === effectBefore.write &&
+  aiCounts().settings === effectBefore.settings && aiCounts().chat === effectBefore.chat + 2,
+  JSON.stringify({ before: effectBefore, after: aiCounts() }));
 
-const runBefore = aiCounts();
+// --- Run once (FR-AI5) ---
+aiChatMode = "proposal";
 const runAllowlistBefore = JSON.stringify(storedSettings.allowlist);
-const runCallOffset = calls.length;
-await awaitingCard.locator(".approval-run").click();
-await page.waitForFunction(() => document.querySelector('.cmd-card[data-ai-id="prune-docker"] .cmd-state')?.textContent === "RAN ONCE");
-const runCalls = calls.slice(runCallOffset);
+const runBefore = aiCounts();
+const runOffset = calls.length;
+await netdataCard.locator(".approval-run").click();
+await aiCardStateIs("sudo systemctl restart netdata", "RAN ONCE");
+const runCalls = calls.slice(runOffset);
 const runWrites = runCalls.filter((c) => c.cmd === "pty_write");
+const runMeta = await aiCardMeta(netdataCard);
 check("U-D7 FR-AI5: Run once writes the exact command plus Enter exactly once through the real-ssh PTY",
-  aiCounts().spawn === runBefore.spawn + 1 && aiCounts().write === runBefore.write + 1 && runWrites.length === 1 &&
-  runWrites[0]?.args?.data === "docker system prune -af\r" &&
-  (await awaitingCard.locator(".cmd-output").textContent()) === "Command sent once to the real-ssh terminal.",
+  aiCounts().spawn === runBefore.spawn + 1 && aiCounts().write === runBefore.write + 1 &&
+  runWrites.length === 1 && runWrites[0]?.args?.data === "sudo systemctl restart netdata\r" &&
+  runMeta.state === "RAN ONCE" && runMeta.actions === 0 &&
+  runMeta.result === "Command sent once to the real-ssh terminal.",
   JSON.stringify(runCalls.filter((c) => ["pty_spawn", "pty_write"].includes(c.cmd))));
 check("U-D7 FR-AI5: Run once leaves the persisted allowlist byte-for-byte unchanged",
   aiCounts().settings === runBefore.settings && JSON.stringify(storedSettings.allowlist) === runAllowlistBefore,
   JSON.stringify(storedSettings.allowlist));
-const hostileAfterRun = await page.locator("#ai-thread .msg-user").last().evaluate((message) => ({
-  text: message.textContent,
-  children: message.childElementCount,
-  pwn: typeof window.__pwn,
-  csp: (window.__cspViolations || []).length,
-}));
-check("U-D7 SEC-01: hostile thread text stays inert after Run-once template re-render",
+const hostileAfterRun = await aiHostileFrame();
+check("U-D7 SEC-01: hostile thread text stays inert after the Run-once template re-render",
   hostileAfterRun.text === HOSTILE && hostileAfterRun.children === 0 &&
   hostileAfterRun.pwn === "undefined" && hostileAfterRun.csp === 0,
   JSON.stringify(hostileAfterRun));
 
-await page.reload();
-await page.waitForTimeout(400);
-await openAi();
-const alwaysCard = page.locator('.cmd-card[data-ai-id="prune-docker"]');
-await page.locator("#ai-input").fill(HOSTILE);
-await page.locator("#ai-send").click();
+// --- Always allow (FR-AI6/ADR-21) ---
+aiChatCommand = "docker system prune -af";
+aiChatDescription = "Removes stopped containers, unused networks, dangling images, and build cache. Running containers are not touched.";
+await aiSend("free up disk space on prod-web");
+await aiWaitForCards(2);
+const pruneCard = aiCardByCommand("docker system prune -af");
+const pruneMeta = await aiCardMeta(pruneCard);
+check("AI-4 FR-AI2/3: a second real response renders its own card with the exact scope and impact",
+  pruneMeta.host === "prod-web" && pruneMeta.command === "docker system prune -af" &&
+  pruneMeta.description.includes("Running containers are not touched") &&
+  pruneMeta.state === "AWAITING APPROVAL" && pruneMeta.awaiting,
+  JSON.stringify(pruneMeta));
 const alwaysBefore = aiCounts();
 const alwaysOffset = calls.length;
-await alwaysCard.locator(".approval-always").click();
-await page.waitForFunction(() => document.querySelector('.cmd-card[data-ai-id="prune-docker"] .cmd-state')?.textContent === "ALWAYS ALLOWED");
+await pruneCard.locator(".approval-always").click();
+await aiCardStateIs("docker system prune -af", "ALWAYS ALLOWED");
 const alwaysCalls = calls.slice(alwaysOffset);
 const alwaysWrite = alwaysCalls.find((c) => c.cmd === "write_settings");
 const alwaysPty = alwaysCalls.find((c) => c.cmd === "pty_write");
 const savedPrune = alwaysWrite?.args?.settings?.allowlist?.find((entry) =>
   entry.host === "prod-web" && entry.command === "docker system prune -af");
 check("U-D7 FR-AI6/ADR-21: Always allow persists the exact tuple before one PTY execution",
-  aiCounts().settings === alwaysBefore.settings + 1 && aiCounts().spawn === alwaysBefore.spawn + 1 &&
-  aiCounts().write === alwaysBefore.write + 1 && savedPrune?.added_at === "" &&
+  aiCounts().settings === alwaysBefore.settings + 1 && aiCounts().write === alwaysBefore.write + 1 &&
+  savedPrune?.added_at === "" &&
   alwaysCalls.findIndex((c) => c.cmd === "write_settings") < alwaysCalls.findIndex((c) => c.cmd === "pty_write") &&
   alwaysPty?.args?.data === "docker system prune -af\r",
   JSON.stringify(alwaysCalls.filter((c) => ["write_settings", "pty_spawn", "pty_write"].includes(c.cmd))));
 check("U-D7 FR-AI6/7: Always allow transitions to ok state with no approval actions",
-  await alwaysCard.evaluate((card) => card.querySelector(".cmd-state")?.classList.contains("ok") &&
-    card.querySelector(".cmd-state")?.textContent === "ALWAYS ALLOWED" && card.querySelectorAll(".cmd-actions").length === 0));
-const hostileAfterAlways = await page.locator("#ai-thread .msg-user").last().evaluate((message) => ({
-  text: message.textContent,
-  children: message.childElementCount,
-  pwn: typeof window.__pwn,
-  csp: (window.__cspViolations || []).length,
-}));
-check("U-D7 SEC-01: hostile thread text stays inert after Always-allow template re-render",
+  await pruneCard.evaluate((card) => card.querySelector(".cmd-state")?.classList.contains("ok") &&
+    card.querySelector(".cmd-state")?.textContent === "ALWAYS ALLOWED" &&
+    card.querySelectorAll(".cmd-actions").length === 0));
+const hostileAfterAlways = await aiHostileFrame();
+check("U-D7 SEC-01: hostile thread text stays inert after the Always-allow template re-render",
   hostileAfterAlways.text === HOSTILE && hostileAfterAlways.children === 0 &&
   hostileAfterAlways.pwn === "undefined" && hostileAfterAlways.csp === 0,
   JSON.stringify(hostileAfterAlways));
 
-await openSettingsFromAccount();
-const approvalsReadBefore = aiCounts().readSettings;
-await page.locator('.set-nav[data-section="ai"]').click();
-await page.waitForFunction(() => document.querySelectorAll("#approvals-list .approval-item").length === 2);
-const approvalsMeta = await page.evaluate(() => ({
-  hidden: document.getElementById("settings-approvals").classList.contains("hidden"),
-  hosts: [...document.querySelectorAll(".approval-host")].map((el) => el.textContent),
-  commands: [...document.querySelectorAll(".approval-command")].map((el) => el.textContent),
-  revokes: document.querySelectorAll(".approval-revoke").length,
-  patternInputs: document.querySelectorAll('#settings-approvals input, #settings-approvals [contenteditable="true"]').length,
-  rows: [...document.querySelectorAll("#approvals-list .approval-item")].map((row) => ({
-    host: row.querySelector(".approval-host")?.textContent,
-    hostChildren: row.querySelector(".approval-host")?.childElementCount,
-    command: row.querySelector(".approval-command")?.textContent,
-    commandChildren: row.querySelector(".approval-command")?.childElementCount,
-    index: row.querySelector(".approval-revoke")?.getAttribute("data-index"),
-  })),
-}));
-check("U-D7 FR-AI10: Settings > AI Assistant reads an exact command+host revoke list, not a pattern editor",
-  aiCounts().readSettings === approvalsReadBefore + 1 && !approvalsMeta.hidden && approvalsMeta.revokes === 2 &&
-  approvalsMeta.patternInputs === 0 && approvalsMeta.hosts.every((host) => host === "prod-web") &&
-  approvalsMeta.commands.includes("sudo systemctl restart netdata") && approvalsMeta.commands.includes("docker system prune -af"),
-  JSON.stringify(approvalsMeta));
-check("U-D7 SEC-01: approval template preserves exact inert text and data-index values",
-  JSON.stringify(approvalsMeta.rows) === JSON.stringify([
-    { host: "prod-web", hostChildren: 0, command: "sudo systemctl restart netdata", commandChildren: 0, index: "0" },
-    { host: "prod-web", hostChildren: 0, command: "docker system prune -af", commandChildren: 0, index: "1" },
-  ]), JSON.stringify(approvalsMeta.rows));
-const revokeBefore = aiCounts();
-const pruneApproval = page.locator("#approvals-list .approval-item", { hasText: "docker system prune -af" });
-await pruneApproval.locator(".approval-revoke").click();
-await page.waitForFunction(() => document.querySelectorAll("#approvals-list .approval-item").length === 1);
-const revokeWrite = calls.filter((c) => c.cmd === "write_settings").at(-1);
-check("U-D7 FR-AI10: Revoke removes one exact tuple through write_settings",
-  aiCounts().settings === revokeBefore.settings + 1 &&
-  revokeWrite?.args?.settings?.allowlist?.length === 1 &&
-  !revokeWrite.args.settings.allowlist.some((entry) => entry.host === "prod-web" && entry.command === "docker system prune -af") &&
-  (await page.locator("#approvals-status").textContent()) === "Approval revoked.",
-  JSON.stringify(revokeWrite?.args?.settings?.allowlist));
-await page.locator("#settings-done").click();
-await page.waitForTimeout(100);
+// --- Reject (FR-AI8) ---
+aiChatCommand = "sudo systemctl restart netdata";
+aiChatDescription = "Restarts the Netdata service on prod-web. Monitoring briefly pauses while the service restarts.";
+await aiSend("restart the metrics agent on prod-web");
+await aiWaitForCards(3);
+const rejectCard = page.locator(".cmd-card").last();
+const rejectBefore = aiCounts();
+await rejectCard.locator(".approval-reject").click();
+const rejectedMeta = await aiCardMeta(rejectCard);
+check("U-D7 FR-AI8: Reject changes state with no execution and no allowlist write",
+  JSON.stringify(aiCounts()) === JSON.stringify(rejectBefore) && rejectedMeta.state === "REJECTED" &&
+  rejectedMeta.stateClass.includes("danger") && rejectedMeta.actions === 0 &&
+  rejectedMeta.result === "Rejected. Nothing was executed or saved.",
+  JSON.stringify(rejectedMeta));
+
+// --- INV-26: hostile host aliases are refused before write or execution ---
+for (const unsafe of [
+  { name: "leading dash", host: "-prod-web", action: ".approval-always" },
+  { name: "CR", host: "prod\rweb", action: ".approval-run" },
+  { name: "LF", host: "prod\nweb", action: ".approval-run" },
+]) {
+  aiChatMode = "proposal";
+  aiChatHost = unsafe.host;
+  await page.reload();
+  await page.waitForTimeout(400);
+  await openAi();
+  await aiSend("restart the metrics agent on prod-web");
+  await aiWaitForCards(1);
+  const card = page.locator(".cmd-card").last();
+  const before = aiCounts();
+  await card.locator(unsafe.action).click();
+  await aiCardStateIs("sudo systemctl restart netdata", "REFUSED");
+  const blocked = await aiCardMeta(card);
+  check(`U-D7 INV-26: ${unsafe.name} host alias is refused before write or execution`,
+    JSON.stringify(aiCounts()) === JSON.stringify(before) && blocked.state === "REFUSED" &&
+    blocked.result.includes("Nothing was executed or saved"),
+    JSON.stringify({ before, after: aiCounts(), card: blocked }));
+}
+
+// --- FR-AI7 exact allowlist match + ADR-21 near match ---
+const canonicalApproval = { host: "prod-web", command: "sudo systemctl restart netdata", added_at: "2026-10-30T12:00:00Z" };
+aiChatMode = "proposal";
+aiChatHost = "prod-web";
+storedSettings = { ...storedSettings, allowlist: [canonicalApproval] };
+await page.reload();
+await page.waitForTimeout(400);
+await openAi();
+await aiSend("restart the metrics agent on prod-web");
+await aiWaitForCards(1);
+const allowedMeta = await aiCardMeta(aiCardByCommand("sudo systemctl restart netdata"));
+check("U-D7 FR-AI2/7: exact host+command allowlist match renders directly ALWAYS ALLOWED",
+  allowedMeta.host === "prod-web" && allowedMeta.command === "sudo systemctl restart netdata" &&
+  allowedMeta.description.length > 0 && allowedMeta.state === "ALWAYS ALLOWED" &&
+  allowedMeta.stateClass.includes("ok") && !allowedMeta.awaiting && allowedMeta.actions === 0,
+  JSON.stringify(allowedMeta));
+
+storedSettings = { ...storedSettings, allowlist: [{ ...canonicalApproval, command: `${canonicalApproval.command} ` }] };
+await page.reload();
+await page.waitForTimeout(400);
+await openAi();
+await aiSend("restart the metrics agent on prod-web");
+await aiWaitForCards(1);
+const nearMatch = await aiCardMeta(aiCardByCommand("sudo systemctl restart netdata"));
+check("U-D7 ADR-21: a trailing-space command is not an exact byte match",
+  nearMatch.state === "AWAITING APPROVAL" && nearMatch.awaiting && nearMatch.actions === 3,
+  JSON.stringify(nearMatch));
+
+// --- hostile fixture survives reload + Enter submit ---
+aiChatMode = "echo";
+storedSettings = { ...storedSettings, allowlist: [canonicalApproval] };
+await page.reload();
+await page.waitForTimeout(400);
+await openAi();
+await page.locator("#ai-input").fill(HOSTILE);
+await page.keyboard.press("Enter");
+await page.waitForFunction((hostile) => [...document.querySelectorAll("#ai-thread .msg-user")].some((m) => m.textContent === hostile), HOSTILE);
+const hostileFinal = await aiHostileFrame();
+check("U-D7 FR-AI11: Enter-submit hostile fixture remains inert after reload",
+  hostileFinal.text === HOSTILE && hostileFinal.children === 0 &&
+  hostileFinal.pwn === "undefined" && hostileFinal.csp === 0,
+  JSON.stringify(hostileFinal));
+
+// --- SEC-03: startup allowlist fallback re-check ---
+aiChatMode = "proposal";
+storedSettings = { ...storedSettings, allowlist: [canonicalApproval] };
+readSettingsFailures = 1;
+await page.reload();
+await page.waitForTimeout(400);
+await openAi();
+await aiSend("restart the metrics agent on prod-web");
+await aiWaitForCards(1);
+const duplicateCard = aiCardByCommand("sudo systemctl restart netdata");
+const duplicateFallback = await aiCardMeta(duplicateCard);
+const duplicateBefore = aiCounts();
+const duplicateOffset = calls.length;
+const duplicateAllowlistBefore = JSON.stringify(storedSettings.allowlist);
+await duplicateCard.locator(".approval-always").click();
+await aiCardStateIs("sudo systemctl restart netdata", "ALWAYS ALLOWED");
+const duplicateCalls = calls.slice(duplicateOffset);
+check("U-D7 SEC-03: startup fallback re-check skips duplicate write and still executes exactly once",
+  duplicateFallback.state === "AWAITING APPROVAL" && duplicateFallback.awaiting && duplicateFallback.actions === 3 &&
+  duplicateCalls.filter((c) => c.cmd === "read_settings").length === 1 &&
+  duplicateCalls.filter((c) => c.cmd === "write_settings").length === 0 &&
+  duplicateCalls.filter((c) => c.cmd === "pty_write").length === 1 &&
+  aiCounts().settings === duplicateBefore.settings && aiCounts().write === duplicateBefore.write + 1 &&
+  JSON.stringify(storedSettings.allowlist) === duplicateAllowlistBefore &&
+  storedSettings.allowlist.filter((entry) => entry.host === canonicalApproval.host && entry.command === canonicalApproval.command).length === 1,
+  JSON.stringify({ fallback: duplicateFallback, calls: duplicateCalls, allowlist: storedSettings.allowlist }));
+readSettingsFailures = 0;
+await page.locator("#ai-close").click();
+check("U-D7 a11y: drawer close restores the AI trigger and Terminal mode",
+  await page.evaluate(() => document.getElementById("ai-drawer").hidden &&
+    document.getElementById("mode-terminal").getAttribute("aria-pressed") === "true" &&
+    document.activeElement?.id === "mode-ai"));
+
+// Restore the store the AI-3 block expects (fresh profile) before it runs.
+aiSettingsStore = { version: 1, endpoint: "", model: "", remote_allowed: false, has_key: false };
+aiKeyStored = false;
+aiChatMode = "ok";
+storedSettings = { ...storedSettings, allowlist: [{ host: "prod-web", command: "sudo systemctl restart netdata", added_at: "2026-10-30T12:00:00Z" }] };
 
 // ---- AI-3: Settings → AI Assistant surface (empty state, save, test, copy) ----
 await openSettingsFromAccount();
@@ -3821,104 +4095,52 @@ check("AI-3: re-entering the section keeps unsaved edits instead of reloading th
 await page.locator("#settings-done").click();
 await page.waitForTimeout(100);
 
-const rejectCard = page.locator('.cmd-card[data-ai-id="prune-docker"]');
-const rejectBefore = aiCounts();
-await rejectCard.locator(".approval-reject").click();
-const rejectedMeta = await rejectCard.evaluate((card) => ({
-  state: card.querySelector(".cmd-state")?.textContent,
-  danger: card.querySelector(".cmd-state")?.classList.contains("danger"),
-  result: card.querySelector(".cmd-output")?.textContent,
-}));
-check("U-D7 FR-AI8: Reject changes state with no execution and no allowlist write",
-  JSON.stringify(aiCounts()) === JSON.stringify(rejectBefore) && rejectedMeta.state === "REJECTED" &&
-  rejectedMeta.danger && rejectedMeta.result === "Rejected. Nothing was executed or saved.",
-  JSON.stringify(rejectedMeta));
-
-const unsafeAiHost = async (host, action) => {
-  await page.reload();
-  await page.waitForTimeout(400);
-  await openAi();
-  const card = page.locator('.cmd-card[data-ai-id="prune-docker"]');
-  await card.locator(".cmd-scope").evaluate((scope, value) => { scope.textContent = value; }, host);
-  const before = aiCounts();
-  await card.locator(action).click();
-  await page.waitForFunction(() => document.querySelector('.cmd-card[data-ai-id="prune-docker"] .cmd-state')?.textContent === "REFUSED");
-  return { before, after: aiCounts(), output: await card.locator(".cmd-output").textContent() };
-};
-for (const unsafe of [
-  { name: "leading dash", host: "-prod-web", action: ".approval-always" },
-  { name: "CR", host: "prod\rweb", action: ".approval-run" },
-  { name: "LF", host: "prod\nweb", action: ".approval-run" },
-]) {
-  const blocked = await unsafeAiHost(unsafe.host, unsafe.action);
-  check(`U-D7 INV-26: ${unsafe.name} host alias is refused before write or execution`,
-    JSON.stringify(blocked.before) === JSON.stringify(blocked.after) && blocked.output.includes("Nothing was executed or saved"),
-    JSON.stringify(blocked));
-}
-
-const canonicalApproval = { host: "prod-web", command: "sudo systemctl restart netdata", added_at: "2026-10-30T12:00:00Z" };
-storedSettings = { ...storedSettings, allowlist: [{ ...canonicalApproval, command: `${canonicalApproval.command} ` }] };
+// --- FR-AI10: Settings > AI Assistant reads + revokes the exact approval list ---
+const pruneApproval = { host: "prod-web", command: "docker system prune -af", added_at: "2026-10-30T12:00:00Z" };
+storedSettings = { ...storedSettings, allowlist: [{ ...canonicalApproval }, { ...pruneApproval }] };
 await page.reload();
 await page.waitForTimeout(400);
-await openAi();
-const nearMatch = await page.locator('.cmd-card[data-ai-id="restart-netdata"]').evaluate((card) => ({
-  state: card.querySelector(".cmd-state")?.textContent,
-  awaiting: card.classList.contains("awaiting"),
-  actions: card.querySelectorAll(".cmd-actions button").length,
+await openSettingsFromAccount();
+const approvalsReadBefore = aiCounts().readSettings;
+await page.locator('.set-nav[data-section="ai"]').click();
+await page.waitForFunction(() => document.querySelectorAll("#approvals-list .approval-item").length === 2);
+const approvalsMeta = await page.evaluate(() => ({
+  hidden: document.getElementById("settings-approvals").classList.contains("hidden"),
+  hosts: [...document.querySelectorAll(".approval-host")].map((el) => el.textContent),
+  commands: [...document.querySelectorAll(".approval-command")].map((el) => el.textContent),
+  revokes: document.querySelectorAll(".approval-revoke").length,
+  patternInputs: document.querySelectorAll('#settings-approvals input, #settings-approvals [contenteditable="true"]').length,
+  rows: [...document.querySelectorAll("#approvals-list .approval-item")].map((row) => ({
+    host: row.querySelector(".approval-host")?.textContent,
+    hostChildren: row.querySelector(".approval-host")?.childElementCount,
+    command: row.querySelector(".approval-command")?.textContent,
+    commandChildren: row.querySelector(".approval-command")?.childElementCount,
+    index: row.querySelector(".approval-revoke")?.getAttribute("data-index"),
+  })),
 }));
-check("U-D7 ADR-21: trailing-space command is not an exact byte match",
-  nearMatch.state === "AWAITING APPROVAL" && nearMatch.awaiting && nearMatch.actions === 3,
-  JSON.stringify(nearMatch));
-
-storedSettings = { ...storedSettings, allowlist: [canonicalApproval] };
-await page.reload();
-await page.waitForTimeout(400);
-await openAi();
-const hostileFinalBefore = { calls: calls.length, requests: requestLog.length };
-await page.locator("#ai-input").fill(HOSTILE);
-await page.keyboard.press("Enter");
-const hostileFinal = await page.locator("#ai-thread .msg-user").last().evaluate((message) => ({
-  text: message.textContent,
-  children: message.childElementCount,
-  pwn: typeof window.__pwn,
-  csp: (window.__cspViolations || []).length,
-}));
-check("U-D7 FR-AI11: Enter-submit hostile fixture remains inert after reload",
-  hostileFinal.text === HOSTILE && hostileFinal.children === 0 && hostileFinal.pwn === "undefined" && hostileFinal.csp === 0 &&
-  calls.length === hostileFinalBefore.calls && requestLog.length === hostileFinalBefore.requests,
-  JSON.stringify(hostileFinal));
-
-storedSettings = { ...storedSettings, allowlist: [canonicalApproval] };
-readSettingsFailures = 1;
-await page.reload();
-await page.waitForTimeout(400);
-await openAi();
-const duplicateCard = page.locator('.cmd-card[data-ai-id="restart-netdata"]');
-const duplicateFallback = await duplicateCard.evaluate((card) => ({
-  state: card.querySelector(".cmd-state")?.textContent,
-  awaiting: card.classList.contains("awaiting"),
-  actions: card.querySelectorAll(".cmd-actions button").length,
-}));
-const duplicateBefore = aiCounts();
-const duplicateOffset = calls.length;
-const duplicateAllowlistBefore = JSON.stringify(storedSettings.allowlist);
-await duplicateCard.locator(".approval-always").click();
-await page.waitForFunction(() => document.querySelector('.cmd-card[data-ai-id="restart-netdata"] .cmd-state')?.textContent === "ALWAYS ALLOWED");
-const duplicateCalls = calls.slice(duplicateOffset);
-check("U-D7 SEC-03: startup fallback re-check skips duplicate write and still executes exactly once",
-  duplicateFallback.state === "AWAITING APPROVAL" && duplicateFallback.awaiting && duplicateFallback.actions === 3 &&
-  duplicateCalls.filter((c) => c.cmd === "read_settings").length === 1 &&
-  duplicateCalls.filter((c) => c.cmd === "write_settings").length === 0 &&
-  duplicateCalls.filter((c) => c.cmd === "pty_write").length === 1 &&
-  aiCounts().settings === duplicateBefore.settings && aiCounts().write === duplicateBefore.write + 1 &&
-  JSON.stringify(storedSettings.allowlist) === duplicateAllowlistBefore &&
-  storedSettings.allowlist.filter((entry) => entry.host === canonicalApproval.host && entry.command === canonicalApproval.command).length === 1,
-  JSON.stringify({ fallback: duplicateFallback, calls: duplicateCalls, allowlist: storedSettings.allowlist }));
-await page.locator("#ai-close").click();
-check("U-D7 a11y: drawer close restores the AI trigger and Terminal mode",
-  await page.evaluate(() => document.getElementById("ai-drawer").hidden &&
-    document.getElementById("mode-terminal").getAttribute("aria-pressed") === "true" &&
-    document.activeElement?.id === "mode-ai"));
+check("U-D7 FR-AI10: Settings > AI Assistant reads an exact command+host revoke list, not a pattern editor",
+  aiCounts().readSettings === approvalsReadBefore + 1 && !approvalsMeta.hidden && approvalsMeta.revokes === 2 &&
+  approvalsMeta.patternInputs === 0 && approvalsMeta.hosts.every((host) => host === "prod-web") &&
+  approvalsMeta.commands.includes("sudo systemctl restart netdata") && approvalsMeta.commands.includes("docker system prune -af"),
+  JSON.stringify(approvalsMeta));
+check("U-D7 SEC-01: approval template preserves exact inert text and data-index values",
+  JSON.stringify(approvalsMeta.rows) === JSON.stringify([
+    { host: "prod-web", hostChildren: 0, command: "sudo systemctl restart netdata", commandChildren: 0, index: "0" },
+    { host: "prod-web", hostChildren: 0, command: "docker system prune -af", commandChildren: 0, index: "1" },
+  ]), JSON.stringify(approvalsMeta.rows));
+const revokeBefore = aiCounts();
+const pruneRow = page.locator("#approvals-list .approval-item", { hasText: "docker system prune -af" });
+await pruneRow.locator(".approval-revoke").click();
+await page.waitForFunction(() => document.querySelectorAll("#approvals-list .approval-item").length === 1);
+const revokeWrite = calls.filter((c) => c.cmd === "write_settings").at(-1);
+check("U-D7 FR-AI10: Revoke removes one exact tuple through write_settings",
+  aiCounts().settings === revokeBefore.settings + 1 &&
+  revokeWrite?.args?.settings?.allowlist?.length === 1 &&
+  !revokeWrite.args.settings.allowlist.some((entry) => entry.host === "prod-web" && entry.command === "docker system prune -af") &&
+  (await page.locator("#approvals-status").textContent()) === "Approval revoked.",
+  JSON.stringify(revokeWrite?.args?.settings?.allowlist));
+await page.locator("#settings-done").click();
+await page.waitForTimeout(100);
 // End U-D7 checks.
 
 // (b) sidebar narrative copy byte-identical (empty / error / no-match) + empty CTA formalized
@@ -4836,6 +5058,194 @@ await page.setViewportSize({ width: 1280, height: 720 });
 if (await page.evaluate(() => document.body.classList.contains("panel-collapsed"))) {
   await page.locator('.rail-item[data-view="host"]').click();
 }
+
+// ===== AI-5: §8.1 #5–#8 assertions + §8.3 grep gates =====
+// AI-3/AI-4 added ~20 AI checks; this block adds the four §8.1 items that were
+// still missing plus the four §8.3 grep gates. Nothing above is modified.
+//
+// #5/#6 are `Ok` + `proposal: null` + a frozen warning (§2.2): the backend
+// validates the proposal host before it ever becomes a card, so the mock mirrors
+// that post-validation response. A card here would mean validation was skipped.
+// #7 is an `Err` rejection. The mock `ai_chat` IS the network seam — the
+// assertion is the rejection + mapped copy + zero card/execute/side-effect IPC.
+
+// ---- §8.3 grep gates (real commands; a non-zero match fails check()) ----
+const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
+const gateRun = (command) => {
+  try {
+    const stdout = execSync(command, { cwd: REPO_ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    return { command, output: stdout.trim(), matches: stdout.split("\n").filter(Boolean).length };
+  } catch (e) {
+    // grep exits 1 on "no match" — a clean zero, not a command failure.
+    const stdout = String(e.stdout || "");
+    const stderr = String(e.stderr || "");
+    return { command, output: `${stdout}${stderr}`.trim(), matches: stdout.split("\n").filter(Boolean).length, exit: e.status };
+  }
+};
+const gateCheck = (name, gate, ok, note = "") => {
+  check(`AI-5 §8.3 gate: ${name}`, ok,
+    `${ok ? "GATE-OK" : "GATE-FAIL"}: $ ${gate.command} → ${gate.matches} match` +
+    `${note ? ` (${note})` : ""}${gate.output ? ` — ${gate.output.split("\n").slice(0, 3).join(" | ")}` : ""}`);
+};
+
+const gate1 = gateRun("grep -rn 'on-device' src/");
+gateCheck("`on-device` di src/ = 0", gate1, gate1.matches === 0);
+
+// The settings.json schema lives in lib.rs (`Settings` + `settings_path`); the
+// keyring account `ai-api-key` must never appear there or in ~/.ssh/config.
+const gate2schema = gateRun("grep -n 'ai-api-key' src-tauri/src/lib.rs");
+const sshConfig = join(homedir(), ".ssh", "config");
+let gate2ssh;
+let gate2note;
+if (existsSync(sshConfig)) {
+  gate2ssh = gateRun(`grep -n 'ai-api-key' ${sshConfig}`);
+  gate2note = "~/.ssh/config present";
+} else {
+  gate2ssh = { command: `grep -n 'ai-api-key' ${sshConfig}`, output: "(file absent)", matches: 0 };
+  gate2note = "~/.ssh/config absent → GATE-OK by rule (missing OR clean)";
+}
+const gate2 = {
+  command: `grep -n 'ai-api-key' src-tauri/src/lib.rs; grep -n 'ai-api-key' ${sshConfig}`,
+  output: [gate2schema.output, gate2ssh.output].filter(Boolean).join(" | ") || "(no match)",
+  matches: gate2schema.matches + gate2ssh.matches,
+};
+gateCheck("`ai-api-key` tidak di schema settings.json (lib.rs) / ~/.ssh/config",
+  gate2, gate2.matches === 0, gate2note);
+
+const gate3 = gateRun("grep -nE 'sh -c|bash -c|cmd /C' src-tauri/src/ai.rs");
+gateCheck("`sh -c|bash -c|cmd /C` = 0 di jalur AI (src-tauri/src/ai.rs)", gate3, gate3.matches === 0);
+
+const aiRsSource = readFileSync(new URL("../src-tauri/src/ai.rs", import.meta.url), "utf8");
+const aiLogMacroLines = aiRsSource.split("\n")
+  .filter((line) => /log::|println!|eprintln!|tracing::|warn!|info!|debug!|error!/.test(line));
+const gate4 = gateRun("grep -nE 'log::|println!|eprintln!|tracing::|warn!|info!|debug!|error!' src-tauri/src/ai.rs");
+const gate4keyPrompt = aiLogMacroLines.filter((line) => /key|prompt/i.test(line));
+const gate4composite = {
+  command: "grep -nE 'log::|println!|eprintln!|tracing::|warn!|info!|debug!|error!' src-tauri/src/ai.rs",
+  output: gate4.output || "(no match)",
+  matches: gate4.matches,
+};
+gateCheck("nol log key/prompt di jalur AI (src-tauri/src/ai.rs)",
+  gate4composite, gate4.matches === 0 && gate4keyPrompt.length === 0,
+  `log-macro lines=${aiLogMacroLines.length}; log lines naming key/prompt=${gate4keyPrompt.length}`);
+
+// ---- §8.1 #5–#7: mock ai_chat returns the problematic proposal outcome ----
+const aiResetSession = async (endpoint) => {
+  aiSettingsStore = { version: 1, endpoint, model: "llama3.2", remote_allowed: false, has_key: false };
+  aiKeyStored = false;
+  aiKeyringFail = false;
+  storedSettings = { ...storedSettings, allowlist: [] };
+  await page.reload();
+  await page.waitForTimeout(400);
+  await openAi();
+};
+const aiArmFrame = () => page.evaluate(() => {
+  const visible = [...document.querySelectorAll("#ai-thread .ai-warning")].filter((w) => !w.hidden);
+  const reply = document.querySelector("#ai-thread .ai-reply");
+  return {
+    warning: visible.at(-1)?.textContent ?? null,
+    warningKids: visible.at(-1)?.childElementCount ?? -1,
+    replyText: reply?.textContent ?? null,
+    replyKids: reply?.childElementCount ?? -1,
+    cards: document.querySelectorAll("#ai-thread .cmd-card").length,
+    csp: (window.__cspViolations || []).length,
+    pwn: typeof window.__pwn,
+  };
+});
+const aiWaitWarning = (token) => page.waitForFunction((t) => [...document.querySelectorAll("#ai-thread .ai-warning")]
+  .some((w) => !w.hidden && w.textContent === t), token);
+
+// #5 leading `-` / CR / LF → ai:unsafe-host, nol card, nol execute
+await aiResetSession("http://127.0.0.1:11434/v1");
+aiChatMode = "unsafe-host";
+for (const variant of [
+  { name: "leading dash", host: "-prod-web" },
+  { name: "CR", host: "prod\rweb" },
+  { name: "LF", host: "prod\nweb" },
+]) {
+  aiChatHost = variant.host;
+  const before = aiCounts();
+  const offset = calls.length;
+  await aiSend("restart the metrics agent on prod-web");
+  await aiWaitWarning("ai:unsafe-host");
+  const frame = await aiArmFrame();
+  const after = aiCounts();
+  const sideEffects = calls.slice(offset).filter((c) => c.cmd !== "ai_chat");
+  check(`AI-5 §8.1 #5: proposal host ${variant.name} → ai:unsafe-host, nol card, nol execute`,
+    frame.warning === "ai:unsafe-host" && frame.warningKids === 0 && frame.cards === 0 &&
+    frame.csp === 0 && frame.pwn === "undefined" &&
+    after.spawn === before.spawn && after.write === before.write && after.settings === before.settings &&
+    sideEffects.length === 0,
+    JSON.stringify({ frame, sideEffects, before, after }));
+}
+
+// #6 unknown host → ai:unknown-host, nol card, nol execute
+await aiResetSession("http://127.0.0.1:11434/v1");
+aiChatMode = "unknown-host";
+aiChatHost = "ghost-host";
+{
+  const before = aiCounts();
+  const offset = calls.length;
+  await aiSend("restart the metrics agent on prod-web");
+  await aiWaitWarning("ai:unknown-host");
+  const frame = await aiArmFrame();
+  const after = aiCounts();
+  const sideEffects = calls.slice(offset).filter((c) => c.cmd !== "ai_chat");
+  check("AI-5 §8.1 #6: proposal host absent from the config snapshot → ai:unknown-host, nol card, nol execute",
+    frame.warning === "ai:unknown-host" && frame.warningKids === 0 && frame.cards === 0 &&
+    frame.csp === 0 && frame.pwn === "undefined" &&
+    after.spawn === before.spawn && after.write === before.write && after.settings === before.settings &&
+    sideEffects.length === 0,
+    JSON.stringify({ frame, sideEffects, before, after }));
+}
+
+// #7 non-loopback endpoint + remote_allowed=false → ai:remote-endpoint-disabled
+await aiResetSession("http://10.20.30.40:11434/v1");
+aiChatMode = "remote-disabled";
+aiChatHost = "prod-web";
+{
+  const before = aiCounts();
+  const offset = calls.length;
+  await aiSend("restart the metrics agent on prod-web");
+  await page.waitForFunction(() => {
+    const reply = document.querySelector("#ai-thread .ai-reply");
+    return !!reply && reply.classList.contains("ai-error");
+  });
+  const frame = await aiArmFrame();
+  const after = aiCounts();
+  const networkSeam = calls.slice(offset);
+  check("AI-5 §8.1 #7: non-loopback + remote_allowed=false → ai:remote-endpoint-disabled (mapped copy), 0 network, nol card, nol execute",
+    frame.replyText === "Remote endpoints are disabled in v1; use a loopback endpoint." &&
+    frame.replyKids === 0 && frame.warning === null && frame.cards === 0 &&
+    frame.csp === 0 && frame.pwn === "undefined" &&
+    networkSeam.length === 1 && networkSeam[0].cmd === "ai_chat" &&
+    after.spawn === before.spawn && after.write === before.write && after.settings === before.settings,
+    JSON.stringify({ frame, networkSeam: networkSeam.map((c) => c.cmd), before, after }));
+}
+
+// ---- §8.1 #8: key custody (assertion + real greps) ----
+const AI_CUSTODY_KEY = "sk-live-custody-AI5-7f3c9a";
+const custodyOffset = calls.length;
+await invoke("write_ai_settings", {
+  req: { endpoint: "http://127.0.0.1:11434/v1", model: "llama3.2", remote_allowed: false, key: AI_CUSTODY_KEY },
+});
+const custodyRead = await invoke("read_ai_settings");
+const custodyCalls = calls.slice(custodyOffset);
+const custodyFile = readFileSync(AI_SETTINGS_FILE, "utf8");
+check("AI-5 §8.1 #8: write_ai_settings(key) → read_ai_settings has_key=true and the payload carries no key byte",
+  custodyRead.has_key === true && !("key" in custodyRead) &&
+  !JSON.stringify(custodyRead).includes(AI_CUSTODY_KEY) &&
+  custodyRead.endpoint === "http://127.0.0.1:11434/v1" && custodyRead.model === "llama3.2" &&
+  custodyCalls.filter((c) => c.cmd === "pty_spawn" || c.cmd === "pty_write").length === 0,
+  JSON.stringify({ read: custodyRead, key: "<redacted>" }));
+check("AI-5 §8.1 #8: the ai-settings.json written by the mock carries no key byte (grep file contents)",
+  custodyFile.includes("http://127.0.0.1:11434/v1") && custodyFile.includes("llama3.2") &&
+  !custodyFile.includes(AI_CUSTODY_KEY) && !custodyFile.includes("ai-api-key") && !/"key"/.test(custodyFile),
+  custodyFile);
+check("AI-5 §8.1 #8: no AI log line or AI path carries the key byte (grep ai.rs + store path)",
+  aiLogMacroLines.length === 0 && !aiRsSource.includes(AI_CUSTODY_KEY) &&
+  !custodyFile.includes(AI_CUSTODY_KEY) && !AI_SETTINGS_FILE.includes(AI_CUSTODY_KEY),
+  `log-macro lines=${aiLogMacroLines.length}; store=${AI_SETTINGS_FILE}`);
 
 console.log(results.join("\n"));
 const fails = results.filter((r) => r.startsWith("FAIL")).length;
