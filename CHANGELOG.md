@@ -8,13 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Windows releases are currently **unsigned** (Authenticode signing postponed —
 see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
-## [Unreleased]
-
-### Fixed
-- Settings no longer traps on an unsaved remote AI draft: X / scrim / Escape discard it (zero `write_ai_settings`), Done still saves, and "Send test request" is enabled only for the saved store.
+## [0.17.1] - 2026-11-18
 
 ### Changed
 - The whole sidebar (rail + panel) now collapses into the hamburger; focus moves to `#panel-toggle` when the collapsing sidebar held focus.
+
+### Fixed
+- Settings > AI Assistant no longer traps the panel on a rejected remote endpoint draft: **Done** saves, while **X / Escape / scrim** discards the draft with zero `write_ai_settings`. "Send test request" is now enabled only for the saved store (an unsaved draft shows "Save AI settings before testing.").
 
 ## [0.17.0] - 2026-11-15
 
