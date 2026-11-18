@@ -135,6 +135,14 @@ let aiChatCommand = "sudo systemctl restart netdata";
 let aiChatDescription = "";
 let aiKeyringFail = false;                  // write_ai_settings rejects keyring-unavailable
 const aiReads = [];                         // every read_ai_settings payload (key-custody)
+// Mirror the backend's loopback-only rule (§16.4 #4) so a remote write rejects
+// like production instead of silently persisting a draft the UI calls unusable.
+const aiIsLoopback = (endpoint) => {
+  try {
+    const host = new URL(String(endpoint)).hostname.toLowerCase();
+    return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+  } catch { return false; }
+};
 // AI-5 §8.1 #8: the mock mirrors the backend's on-disk store (no key field,
 // INV-37) so the key-custody grep is a real file read, not an in-memory string.
 const AI_SETTINGS_FILE = join(tmpdir(), `hosterm-smoke-ai-settings-${process.pid}.json`);
@@ -298,6 +306,8 @@ const invoke = (cmd, args = {}) => {
     case "write_ai_settings": {
       if (aiKeyringFail) return Promise.reject("ai-settings:keyring-unavailable");
       const req = args.req || {};
+      const endpoint = String(req.endpoint || "");
+      if (endpoint.trim() !== "" && !aiIsLoopback(endpoint)) return Promise.reject("ai-settings:remote-disabled");
       aiSettingsStore = {
         version: 1,
         endpoint: String(req.endpoint || ""),
@@ -4042,8 +4052,9 @@ const aiReady = await page.evaluate(() => ({
   label: document.getElementById("ai-backend-label").textContent,
   title: document.getElementById("ai-backend-label").getAttribute("title"),
 }));
-check("AI-3: filling endpoint+model enables the test and previews 'local endpoint'",
-  aiReady.status === "" && !aiReady.testDisabled && aiReady.label === "local endpoint" &&
+check("AI-3: filling endpoint+model previews 'local endpoint' but keeps the test disabled until Save",
+  aiReady.testDisabled === true && aiReady.status === "Save AI settings before testing." &&
+  aiReady.label === "local endpoint" &&
   aiReady.title === "Connected to a local endpoint you configured.", JSON.stringify(aiReady));
 
 await page.locator("#ai-endpoint").fill("http://example.com/v1");
@@ -4134,6 +4145,60 @@ check("AI-3: re-entering the section keeps unsaved edits instead of reloading th
 
 await page.locator("#settings-done").click();
 await page.waitForTimeout(100);
+
+// ---- AI-3 close-trap regression (t_0405cebb) ----
+// Done = save (a rejected remote draft keeps the panel open + mapped copy);
+// X / scrim / Escape = discard (no write_ai_settings; the draft is gone on reopen).
+aiSettingsStore = { version: 1, endpoint: "", model: "", remote_allowed: false, has_key: false };
+aiKeyStored = false;
+await openSettingsFromAccount();
+await page.locator('.set-nav[data-section="ai"]').click();
+await page.waitForFunction(() => {
+  const section = document.getElementById("settings-ai");
+  return section && !section.classList.contains("hidden");
+});
+const closeTrapOffset = calls.length;
+await page.locator("#ai-endpoint").fill("https://api.example.com/v1");
+await page.locator("#ai-model").fill("llama3.2");
+const closeDraft = await page.evaluate(() => ({
+  testDisabled: document.getElementById("ai-test").disabled,
+  status: document.getElementById("ai-status").textContent,
+}));
+check("AI-3 close-trap: a remote draft disables the test and says Save first",
+  closeDraft.testDisabled === true && closeDraft.status === "Save AI settings before testing.",
+  JSON.stringify(closeDraft));
+
+await page.locator("#settings-done").click();
+await page.waitForFunction(() =>
+  document.getElementById("ai-status").textContent === "Remote endpoints are disabled in v1; use a loopback endpoint.");
+const afterDone = await page.evaluate(() => ({
+  open: !document.getElementById("settings-scrim").classList.contains("hidden"),
+  status: document.getElementById("ai-status").textContent,
+}));
+const doneWrites = calls.slice(closeTrapOffset).filter((c) => c.cmd === "write_ai_settings").length;
+check("AI-3 close-trap: Done rejects the remote draft, keeps the panel open, shows mapped copy",
+  afterDone.open && afterDone.status === "Remote endpoints are disabled in v1; use a loopback endpoint." &&
+  doneWrites === 1, JSON.stringify({ afterDone, doneWrites }));
+
+await page.locator("#settings-close").click();
+await page.waitForFunction(() => document.getElementById("settings-scrim").classList.contains("hidden"));
+const xWrites = calls.slice(closeTrapOffset).filter((c) => c.cmd === "write_ai_settings").length;
+check("AI-3 close-trap: X discards the draft, closes, and adds no write_ai_settings",
+  xWrites === 1, `write_ai_settings total=${xWrites}`);
+
+await openSettingsFromAccount();
+await page.locator('.set-nav[data-section="ai"]').click();
+await page.waitForFunction(() =>
+  document.getElementById("ai-endpoint").value === "" && document.getElementById("ai-model").value === "");
+const reopened = await page.evaluate(() => ({
+  endpoint: document.getElementById("ai-endpoint").value,
+  model: document.getElementById("ai-model").value,
+  status: document.getElementById("ai-status").textContent,
+}));
+check("AI-3 close-trap: reopening shows the saved store (discarded draft is gone)",
+  reopened.endpoint === "" && reopened.model === "" &&
+  reopened.status === "Not configured — AI requests are disabled until a model is set.",
+  JSON.stringify(reopened));
 
 // --- FR-AI10: Settings > AI Assistant reads + revokes the exact approval list ---
 const pruneApproval = { host: "prod-web", command: "docker system prune -af", added_at: "2026-10-30T12:00:00Z" };

@@ -255,7 +255,7 @@ interface AiProposal {
 | Endpoint URL | `#ai-endpoint` (text) | **nol default**; field **kosong** saat pertama; placeholder `http://127.0.0.1:11434/v1` (contoh loopback, bukan nilai); validasi di backend |
 | Model | `#ai-model` (text) | **nol default**; field **kosong** saat pertama; placeholder `llama3.2`; kosong = not configured |
 | API key | `#ai-key` (password) | **opsional**; hint *"Stored in the OS keyring. Leave blank to keep the saved key."*; indikator `#ai-key-state` = `Saved` / `Not saved` / `Keyring unavailable` |
-| Test | `#ai-test` (button) + `#ai-status` | "Send test request" → `ai_chat` dengan prompt tetap (bukan user prompt); **tidak** menyimpan apa pun; disabled saat not configured |
+| Test | `#ai-test` (button) + `#ai-status` | "Send test request" → `ai_chat` dengan prompt tetap (bukan user prompt); **tidak** menyimpan apa pun; disabled saat not configured **atau ada draft belum disimpan**; status menyuruh Save dulu |
 | Label | `#ai-backend-label` | preview head-tag jujur (§4) |
 
 **Toggle "Allow remote endpoints" dihapus** dari UI (D-AI5) — v1 loopback-only; endpoint non-loopback ditolak backend.
@@ -277,6 +277,12 @@ interface AiProposal {
 ### 3.4 Yang TIDAK disimpan
 
 - Key (keyring saja) · prompt/response/history (stateless, nol persistensi) · token OAuth (entri keyring lain) · isi `~/.ssh/config`/sidecar (INV-22).
+
+### 3.5 Penutupan Settings
+
+- `#settings-done` (**Done**) = **simpan**: settings umum (`write_settings`) + draft AI lewat jalur `#ai-save` (`persistAiSettings()`). Bila backend menolak `write_ai_settings` (mis. `ai-settings:remote-disabled`), panel **tetap terbuka** + `#ai-status` menampilkan copy mapped (fail-closed §3.2).
+- `#settings-close` (**X**), klik scrim, dan Escape = **buang draft AI**: **JANGAN** memanggil `write_ai_settings`; `aiSettingsDirty = false` (field tidak diubah sampai panel dibuka lagi); settings umum tetap dipersist bila `settingsDirty` (FR-SET12/13). Kegagalan `write_settings` menampilkan error existing + panel tetap terbuka + draft **tidak** dibuang.
+- Alasan: tombol `#ai-save` sudah eksplisit; menutup panel tidak boleh bergantung pada validitas draft AI.
 
 ---
 
@@ -380,6 +386,9 @@ terpisah** (pm, doc-only, menunggu persetujuan MEKL): jangan dicampur ke epic in
 9. WHEN Run once / Always allow / Reject THE SYSTEM SHALL berperilaku identik §13.6 AC4–7 (FROZEN).
 10. WHEN `(host,command)` exact match allowlist THE SYSTEM SHALL render `ALWAYS ALLOWED` tanpa approval ulang (FR-AI7).
 11. WHEN head-tag di-render THE SYSTEM SHALL memakai label state-nya (§4) — `on-device` = 0 di `src/`.
+12. WHEN Done diklik dengan endpoint non-loopback THE SYSTEM SHALL menolak `write_ai_settings` (`ai-settings:remote-disabled`), panel tetap terbuka + `#ai-status` copy mapped (fail-closed §3.2).
+13. WHEN X / scrim / Escape diklik THE SYSTEM SHALL menutup panel + **TIDAK** memanggil `write_ai_settings`; reopen Settings > AI menampilkan store tersimpan (draft hilang) (§3.5).
+14. WHEN draft AI belum disimpan (field terisi, `aiSettingsDirty`) THE SYSTEM SHALL men-disable `#ai-test` + `#ai-status` = *"Save AI settings before testing."* (§3.1).
 
 ### 8.2 Cargo (`cargo test --lib`)
 

@@ -10,6 +10,9 @@ see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
 ## [Unreleased]
 
+### Fixed
+- Settings no longer traps on an unsaved remote AI draft: X / scrim / Escape discard it (zero `write_ai_settings`), Done still saves, and "Send test request" is enabled only for the saved store.
+
 ### Changed
 - The whole sidebar (rail + panel) now collapses into the hamburger; focus moves to `#panel-toggle` when the collapsing sidebar held focus.
 

@@ -946,7 +946,7 @@ function onOverlayEscape() {
   else if (top.el.id === "key-modal") closeKey();
   else if (top.el.id === "key-edit-modal") closeEditKey();
   else if (top.el.id === "ssh-modal") closeOverlay("#ssh-modal"); // Escape = Continue anyway
-  else if (top.el.id === "settings-scrim") void closeSettings();
+  else if (top.el.id === "settings-scrim") void closeSettings("discard");
 }
 
 function openOverlay(sel: string, focusTarget?: HTMLElement) {
@@ -1219,8 +1219,18 @@ async function readAndApplySettings() {
   settingsDirty = false;
 }
 
-async function persistSettings(): Promise<boolean> {
+// `mode` separates the two exit paths: "save" (Done) persists the AI draft via
+// the #ai-save path; "discard" (X / scrim / Escape) never writes the frozen AI
+// store, so a rejected draft cannot trap the panel. General settings persist in
+// both modes, but only after write_settings succeeds for "discard".
+async function persistSettings(mode: "save" | "discard"): Promise<boolean> {
+  const saveAi = mode === "save";
   if (!settingsDirty && !aiSettingsDirty) return true;
+  // Discard with no general edits: drop the AI draft without touching IPC.
+  if (!settingsDirty && !saveAi) {
+    aiSettingsDirty = false;
+    return true;
+  }
   const status = $("#settings-status");
   const panel = $("#settings-panel");
   const controls = [...panel.querySelectorAll<HTMLButtonElement | HTMLInputElement>("button, input")];
@@ -1242,7 +1252,8 @@ async function persistSettings(): Promise<boolean> {
     // AI settings live in a separate frozen store (ai-settings.json + OS
     // keyring). A rejected write keeps the panel open so the mapped copy and
     // the key indicator stay visible (fail-closed, §3.2).
-    if (aiSettingsDirty && !(await persistAiSettings())) return false;
+    if (saveAi && aiSettingsDirty && !(await persistAiSettings())) return false;
+    if (!saveAi) aiSettingsDirty = false;
     return true;
   } catch (e) {
     status.textContent = `Could not save settings: ${msg(e)}. Try again.`;
@@ -1525,7 +1536,9 @@ function updateAiPreview(clearStatus = false): void {
     test.disabled = true;
   } else {
     if (clearStatus) setAiStatus("");
-    test.disabled = false;
+    // The test reads the SAVED store (ai_chat), so filling the fields alone must
+    // not enable it: disabled while the store is empty or a draft is unsaved.
+    test.disabled = !aiConfigured() || aiSettingsDirty;
   }
 }
 
@@ -1553,7 +1566,7 @@ async function renderAiSettings(): Promise<void> {
 // user saves first (Save / Done) and the test proves the live endpoint.
 async function testAiBackend(): Promise<void> {
   const button = $("#ai-test") as HTMLButtonElement;
-  if (button.disabled) return;
+  if (button.disabled || aiSettingsDirty) return;
   button.disabled = true;
   setAiStatus("Sending test request…");
   try {
@@ -1575,7 +1588,7 @@ async function testAiBackend(): Promise<void> {
   } catch (e) {
     setAiStatus(aiErrText(msg(e)), "err");
   } finally {
-    button.disabled = !aiConfigured();
+    button.disabled = !aiConfigured() || aiSettingsDirty;
   }
 }
 
@@ -1618,19 +1631,19 @@ async function openSettings() {
   openOverlay("#settings-scrim", $("#settings-panel"));
 }
 
-async function closeSettings() {
+async function closeSettings(mode: "save" | "discard") {
   if (settingsClosing) return;
   settingsClosing = true;
-  const saved = await persistSettings();
+  const saved = await persistSettings(mode);
   settingsClosing = false;
   if (saved) closeOverlay("#settings-scrim");
 }
 
 function initSettings() {
-  $("#settings-close").addEventListener("click", () => void closeSettings());
-  $("#settings-done").addEventListener("click", () => void closeSettings());
+  $("#settings-close").addEventListener("click", () => void closeSettings("discard"));
+  $("#settings-done").addEventListener("click", () => void closeSettings("save"));
   $("#settings-scrim").addEventListener("click", (event) => {
-    if (event.target === event.currentTarget) void closeSettings();
+    if (event.target === event.currentTarget) void closeSettings("discard");
   });
   document.querySelectorAll<HTMLButtonElement>(".set-nav").forEach((button) => {
     button.addEventListener("click", () => selectSettingsSection(button.dataset.section || "appearance"));
@@ -1659,6 +1672,9 @@ function initSettings() {
     ($(selector) as HTMLInputElement).addEventListener("input", () => {
       aiSettingsDirty = true;
       updateAiPreview(true);
+      const endpoint = ($("#ai-endpoint") as HTMLInputElement).value;
+      const model = ($("#ai-model") as HTMLInputElement).value;
+      if (endpoint.trim() !== "" && model.trim() !== "") setAiStatus("Save AI settings before testing.");
     });
   });
   settingsReady = readAndApplySettings();
