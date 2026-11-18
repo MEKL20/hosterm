@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Windows releases are currently **unsigned** (Authenticode signing postponed —
 see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
+## [Unreleased]
+
+### Changed
+- The whole sidebar (rail + panel) now collapses into the hamburger; focus moves to `#panel-toggle` when the collapsing sidebar held focus.
+
 ## [0.17.0] - 2026-11-15
 
 ### Added

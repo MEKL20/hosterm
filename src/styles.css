@@ -238,6 +238,7 @@ select {
 #sb-keys-err { margin: 0 12px 8px; }
 .sb-view-cta { margin: 0 12px; }
 
+body.panel-collapsed #nav-rail,
 body.panel-collapsed #section-panel,
 body.panel-collapsed #sb-resize { display: none; }
 #host-list { flex: 1; min-height: 0; overflow-y: auto; padding: 8px; }

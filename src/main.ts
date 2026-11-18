@@ -4889,18 +4889,26 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   setPanelCollapsed = (c: boolean) => {
     panelCollapsed = c;
+    // Collapsing hides rail + panel (ADR-NAV-3 Rev. 2): if focus was inside
+    // them it would drop to BODY, so hand it to the visible toggle first.
+    if (c) {
+      const a = document.activeElement as HTMLElement | null;
+      if (a && (a.closest("#nav-rail") || a.closest("#section-panel"))) {
+        $("#panel-toggle").focus();
+      }
+    }
     document.body.classList.toggle("panel-collapsed", c);
     // Visible toggle in the tab bar: aria-expanded mirrors the panel state and
     // the hamburger morphs into an X via #panel-toggle[aria-expanded] in styles.css.
     const toggle = $("#panel-toggle");
     toggle.setAttribute("aria-expanded", String(!c));
-    toggle.title = c ? "Expand sidebar panel" : "Collapse sidebar panel";
+    toggle.title = c ? "Expand sidebar" : "Collapse sidebar";
     syncRailExpanded();
     try { localStorage.setItem("hosterm.panel-collapsed", c ? "1" : ""); } catch { /* private mode */ }
     setTimeout(fitActiveSessions, 0);
   };
-  // Default collapsed: a fresh profile gets the rail-only shell so the terminal
-  // is full width; the persisted flag only overrides when the user chose else.
+  // Default collapsed: a fresh profile gets the whole sidebar hidden (rail + panel)
+  // so the terminal is full width; the persisted flag only overrides when the user chose else.
   const storedPanel = localStorage.getItem("hosterm.panel-collapsed");
   const initialPanelCollapsed = storedPanel === null ? true : storedPanel === "1";
   setPanelCollapsed(initialPanelCollapsed);

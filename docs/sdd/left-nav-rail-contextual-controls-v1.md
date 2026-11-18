@@ -176,9 +176,9 @@ All geometry uses Dusk `:root` tokens and the existing spacing instinct (4/8/12 
 | Panel min width | `160px` | current `#sidebar` min (L184) | keep host rows legible; existing floor. |
 | Panel max width | `504px` | `560 − 56` (old max minus rail) | keep total left region ≤ old max so workspace never starves. |
 | Resizer | `#sb-resize` 5px, between panel and `#main` | existing L191 | reuse the proven manual-mouse resizer; no new component. |
-| Panel collapsed width | `0` (hidden, `display:none`), rail stays | ADR-NAV-3 | reclaim full width for the workspace; rail remains the anchor. |
+| Panel collapsed width | `0` (hidden, `display:none`), rail + panel hidden | ADR-NAV-3 Rev. 2 | reclaim full width for the workspace; the hamburger is the single control that opens the whole sidebar. |
 | Account control | `.rail-foot`, `margin-top:auto` | flexbox | pins account to rail bottom (AC-M1) without absolute positioning. |
-| Narrow-window policy | below ~520px total, panel auto-collapses; rail persists | ADR-NAV-4 | three columns never break; rail + workspace are the irreducible minimum. |
+| Narrow-window policy | below ~520px total, panel auto-collapses; rail + panel hidden | ADR-NAV-4 Rev. 2 | three columns never break; the hamburger + workspace are the irreducible minimum. |
 
 Radius uses existing `--r-md`/`--r-sm`; motion stays MOTION 1 (120ms color-only; reduced-motion kill
 already universal in styles.css). No gradient, no glow, no shadow except the already-permitted drawer/
@@ -328,15 +328,20 @@ Semantics:
 ### 8.1 Collapse model migration (ADR-NAV-3 — explicit per IA-9)
 
 **Today:** `body.sb-collapsed` narrows the whole `#sidebar` to 36px and hides everything but
-`#btn-expand` (styles.css L252-253; `setCollapsed` main.ts L3959). **New model:** the **rail is
-never collapsed** (it is the persistent anchor); the **section panel** is what collapses. This is a
-deliberate migration (IA-9 authorizes it). Concretely:
+`#btn-expand` (styles.css L252-253; `setCollapsed` main.ts L3959). **New model (Rev. 1):** the
+**rail is never collapsed** (it is the persistent anchor); the **section panel** is what collapses.
+**Rev. 2 (18 Nov 2026, MEKL opsi 1):** the whole sidebar collapses — rail + panel are hidden and the
+hamburger (`#panel-toggle`) is the single control that opens it. Rev. 1 history is retained below.
+Concretely:
 - `body.sb-collapsed` → renamed concept `body.panel-collapsed` (§9 migration). When set,
-  `#section-panel { display:none }` and `#sb-resize` is inactive; `#nav-rail` and `#main` remain.
+  `#section-panel { display:none }` and `#sb-resize` is inactive; `#nav-rail` and `#main` remain
+  (Rev. 1). Rev. 2 also hides `#nav-rail`, so the terminal is full width and the hamburger is the
+  only way back.
 - The collapse/expand affordance moves from the old sidebar head chevrons to a control on the rail
   (a rail-foot or panel-edge toggle); `#btn-collapse`/`#btn-expand` ids may be reused in their new
   position. The exact placement is a lead/implementation call within this contract; the invariant is
-  "rail stays, panel toggles."
+  "rail stays, panel toggles" (Rev. 1) → Rev. 2: "whole sidebar toggles; the hamburger is the single
+  control."
 
 ### 8.2 Terminal re-fit (R4 / AC-S3 — the proven contract, preserved)
 
@@ -377,7 +382,7 @@ Old → new, so QA can diff coverage and the horizontal `#sidebar-nav` behavior 
 | `#sidebar-nav` horizontal strip (`display:flex` row, L209-214) + `.sb-nav` (flex row items) | `.rail-nav` vertical (`flex-direction:column`) + `.rail-item` (icon-first, 44×44) | horizontal nav behavior is **retired**; the three destinations move to the vertical rail. `data-view` attribute kept so `selectSection` keeps its 1:1 mapping. |
 | `.sidebar-head` (brand + `#btn-add` + `#btn-collapse`) | `.panel-head` (brand + `#btn-add`) | `#btn-add` moves into the panel head; collapse chevron moves to the rail (§8.1). |
 | `.sidebar-footer` / `.sidebar-foot` (`#btn-raw`/`#btn-local`/`#btn-reload`/`#open-settings` + `#user-chip`) | `.panel-host-controls` (raw/local/reload, inside `#view-host`) + `.rail-foot` (`#user-chip`) | footer is **dissolved**: host controls become Hosts-scoped panel controls; `#open-settings` is **deleted** (→ account menu); `#user-chip`/popover move to rail bottom. |
-| `body.sb-collapsed` (whole sidebar → 36px) | `body.panel-collapsed` (panel → hidden, rail stays) | migrate the localStorage key `hosterm.sb-collapsed` → `hosterm.panel-collapsed`; read old key once for backward-compat, then write new (one-time migration, no data loss). |
+| `body.sb-collapsed` (whole sidebar → 36px) | `body.panel-collapsed` (rail + panel → hidden; ADR-NAV-3 Rev. 2) | migrate the localStorage key `hosterm.sb-collapsed` → `hosterm.panel-collapsed`; read old key once for backward-compat, then write new (one-time migration, no data loss). |
 | `.sb-nav:focus-visible { outline:none }` | global `:focus-visible` ring | remove the local outline-kill so rail items get the proven ring (R-32). |
 
 Rendered Dusk `:root` stays byte-exact (INV-21); the migration adds only layout/positioning rules
@@ -484,13 +489,16 @@ Settings) — no new harness. The migration rewrites old checks that asserted th
   Hosts, which removes them from the tab order by spec. `visibility:hidden`/`opacity:0`/off-screen
   are forbidden for these controls (they stay tabbable → R1). Rationale: close the no-hidden-but-
   tabbable risk structurally (§5.2).
-- **ADR-NAV-3 — Collapse collapses the panel, not the rail.** The rail is the persistent anchor and
-  is never collapsed; `body.panel-collapsed` hides `#section-panel` and leaves `#nav-rail` + `#main`.
-  Rationale: a collapsible rail would remove the one stable navigation anchor the PRD requires
-  (IA-9); the workspace reclaims the panel's width (§8.1).
-- **ADR-NAV-4 — Narrow-window auto-collapse, rail persists.** Below ~520px total left+workspace
-  budget, the panel auto-collapses (rail + workspace remain). Rationale: three columns never break
-  layout at minimum width (AC-S3); rail + workspace are the irreducible shell (§4).
+- **ADR-NAV-3 Rev. 2 — Collapse hides the whole sidebar (rail + panel).** Rev. 1 kept the rail as
+  the persistent anchor; Rev. 2 (18 Nov 2026, MEKL opsi 1) hides `#nav-rail` + `#section-panel` +
+  `#sb-resize`, so the hamburger (`#panel-toggle`) is the single control that opens the whole
+  sidebar. Rationale: the always-visible hamburger replaces the rail as the stable navigation
+  anchor; the workspace reclaims the full left-region width (§8.1). Rev. 1 context: a collapsible
+  rail would remove the anchor the PRD required (IA-9).
+- **ADR-NAV-4 Rev. 2 — Narrow-window auto-collapse hides rail + panel.** Below ~520px total
+  left+workspace budget, the whole sidebar auto-collapses (hamburger + workspace remain).
+  Rationale: three columns never break layout at minimum width (AC-S3); the hamburger + workspace
+  are the irreducible shell (§4). Rev. 1 context: rail + workspace were the irreducible minimum.
 - **ADR-NAV-5 — Backend is forbidden for this feature.** No `src-tauri/**`, no new IPC, IPC gate
   stays 42; CSP frozen. Rationale: this is an IA/visibility change (PRD IA-11); any backend edit is
   out of scope and a review-blocker (§1.4).

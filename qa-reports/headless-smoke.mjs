@@ -470,27 +470,36 @@ const firstResp = await page.goto("http://localhost:4199/");
 const servedCsp = (firstResp.headers()["content-security-policy"] || "").trim();
 await page.waitForTimeout(400);
 
-// -- v0.15.7 (FE): a fresh profile boots rail-only (context panel collapsed) --
-// The visible #panel-toggle in the tab bar is the discoverable collapse/expand
-// control (v0.14.7 removed the old arrow buttons). This smoke uses a fresh
-// browser context with no storageState, so localStorage starts empty and the
-// default is deterministic. Expand here so the rest of the suite keeps its
-// panel-visible preconditions (host list, sidebar actions, rail checks).
+// -- v0.15.7 (FE): a fresh profile boots with the whole sidebar collapsed --
+// The visible #panel-toggle in the tab bar is the single discoverable
+// collapse/expand control (v0.14.7 removed the old arrow buttons; the rail
+// collapses together with the panel). This smoke uses a fresh browser context
+// with no storageState, so localStorage starts empty and the default is
+// deterministic. Expand here so the rest of the suite keeps its panel-visible
+// preconditions (host list, sidebar actions, rail checks).
 const freshPanel = await page.evaluate(() => ({
   collapsed: document.body.classList.contains("panel-collapsed"),
+  railVisible: document.getElementById("nav-rail").getClientRects().length > 0,
   panelVisible: document.getElementById("section-panel").getClientRects().length > 0,
 }));
-check("v0.15.7: fresh profile boots with the context panel collapsed (rail only)",
-  freshPanel.collapsed && !freshPanel.panelVisible, JSON.stringify(freshPanel));
+check("v0.15.7: fresh profile boots with the whole sidebar collapsed (rail + panel hidden)",
+  freshPanel.collapsed && !freshPanel.railVisible && !freshPanel.panelVisible, JSON.stringify(freshPanel));
 check("v0.15.7: #panel-toggle exists and is visible in the tab bar",
   await page.locator("#panel-toggle").isVisible());
 await page.locator("#panel-toggle").click();
 await page.waitForTimeout(60);
-check("v0.15.7: #panel-toggle expands the panel",
+check("v0.15.7: #panel-toggle expands rail + panel",
   await page.evaluate(() => !document.body.classList.contains("panel-collapsed") &&
+    document.getElementById("nav-rail").getClientRects().length > 0 &&
     document.getElementById("section-panel").getClientRects().length > 0));
 
 const openSettingsFromAccount = async () => {
+  // A reload with no stored flag boots collapsed (rail included), and the
+  // account chip lives in the rail; expand via the tab-bar toggle first.
+  if (await page.evaluate(() => document.body.classList.contains("panel-collapsed"))) {
+    await page.locator("#panel-toggle").click();
+    await page.waitForTimeout(40);
+  }
   if (await page.locator("#signin-popover").isHidden()) await page.locator("#user-chip").click();
   await page.locator("#acct-settings-btn").click();
 };
@@ -561,15 +570,23 @@ const spawns1 = calls.filter((c) => c.cmd === "pty_spawn").length;
 await winPage.locator("#ssh-recheck").click();
 await winPage.waitForTimeout(300);
 check("re-check fixed: guide closes", await winPage.locator("#ssh-modal").evaluate((el) => el.classList.contains("hidden")));
-// v0.15.7: winPage is its own fresh browser context, so the rail-only default
-// applies here too. Expand via the visible #panel-toggle (the blocking guide is
-// gone by now) before the first host-row interaction.
-if (await winPage.evaluate(() => document.body.classList.contains("panel-collapsed"))) {
+// v0.15.7: winPage is its own fresh browser context, so the collapsed-sidebar
+// default applies here too. Expand via the visible #panel-toggle (the blocking
+// guide is gone by now) before the first host-row interaction.
+const winFresh = await winPage.evaluate(() => ({
+  collapsed: document.body.classList.contains("panel-collapsed"),
+  railVisible: document.getElementById("nav-rail").getClientRects().length > 0,
+  panelVisible: document.getElementById("section-panel").getClientRects().length > 0,
+}));
+check("v0.15.7: winPage (fresh context) boots with rail + panel hidden",
+  winFresh.collapsed && !winFresh.railVisible && !winFresh.panelVisible, JSON.stringify(winFresh));
+if (winFresh.collapsed) {
   await winPage.locator("#panel-toggle").click();
   await winPage.waitForTimeout(60);
 }
-check("v0.15.7: winPage (fresh context) expands via #panel-toggle before host interactions",
+check("v0.15.7: winPage (fresh context) expands rail + panel via #panel-toggle before host interactions",
   await winPage.evaluate(() => !document.body.classList.contains("panel-collapsed") &&
+    document.getElementById("nav-rail").getClientRects().length > 0 &&
     document.getElementById("section-panel").getClientRects().length > 0));
 await winPage.locator(".host-item .h-name").first().click();
 await winPage.waitForTimeout(300);
@@ -720,11 +737,16 @@ await page.waitForTimeout(150);
 
 // 9c. contextual panel collapse/expand via the active rail item (arrow buttons
 // removed v0.14.7 — clicking the already-active rail item toggles the panel).
+// Collapsing hides the whole sidebar, so the rail item is gone; re-expand via
+// the tab-bar #panel-toggle.
 await page.locator('.rail-item[data-view="host"]').click();
 check("collapse: body class set", await page.evaluate(() => document.body.classList.contains("panel-collapsed")));
 const stored = await page.evaluate(() => localStorage.getItem("hosterm.panel-collapsed"));
 check("collapse: persisted", stored === "1");
-await page.locator('.rail-item[data-view="host"]').click();
+check("collapse: rail + panel both hidden",
+  await page.evaluate(() => document.getElementById("nav-rail").getClientRects().length === 0 &&
+    document.getElementById("section-panel").getClientRects().length === 0));
+await page.locator("#panel-toggle").click();
 check("expand: class removed", await page.evaluate(() => !document.body.classList.contains("panel-collapsed")));
 // The toggle's hamburger→X morph is a .15s CSS transition; settle before the
 // state reads below so they sample the end state, not a mid-flight frame.
@@ -754,29 +776,33 @@ const panelToggleState = () => page.evaluate(() => {
     hiddenLines: lines.filter((l) => !l.shown).length,
     rotatedLines: lines.filter((l) => l.rotated).length,
     collapsed: document.body.classList.contains("panel-collapsed"),
+    railVisible: document.getElementById("nav-rail").getClientRects().length > 0,
     panelVisible: document.getElementById("section-panel").getClientRects().length > 0,
   };
 });
 const toggleOpen = await panelToggleState();
-check("v0.15.7 §9c: #panel-toggle is visible, aria-expanded=true, title=Collapse, hamburger morphed to X (3 lines, middle hidden, outer two rotated)",
+check("v0.15.7 §9c: #panel-toggle is visible, aria-expanded=true, title=Collapse, rail + panel shown, hamburger morphed to X (3 lines, middle hidden, outer two rotated)",
   toggleOpen.exists && toggleOpen.visible && toggleOpen.expanded === "true" &&
-  toggleOpen.title === "Collapse sidebar panel" && !toggleOpen.collapsed && toggleOpen.panelVisible &&
+  toggleOpen.title === "Collapse sidebar" && !toggleOpen.collapsed &&
+  toggleOpen.railVisible && toggleOpen.panelVisible &&
   toggleOpen.lines === 3 && toggleOpen.hiddenLines === 1 && toggleOpen.rotatedLines === 2,
   JSON.stringify(toggleOpen));
 await page.locator("#panel-toggle").click();
 await page.waitForTimeout(250);
 const toggleShut = await panelToggleState();
-check("v0.15.7 §9c: #panel-toggle collapses the panel, aria-expanded=false, title=Expand, hamburger restored (3 lines shown, none rotated)",
-  toggleShut.collapsed && !toggleShut.panelVisible && toggleShut.expanded === "false" &&
-  toggleShut.title === "Expand sidebar panel" &&
+check("v0.15.7 §9c: #panel-toggle collapses the sidebar, aria-expanded=false, title=Expand, rail + panel hidden, hamburger restored (3 lines shown, none rotated)",
+  toggleShut.collapsed && !toggleShut.railVisible && !toggleShut.panelVisible &&
+  toggleShut.expanded === "false" &&
+  toggleShut.title === "Expand sidebar" &&
   toggleShut.lines === 3 && toggleShut.hiddenLines === 0 && toggleShut.rotatedLines === 0,
   JSON.stringify(toggleShut));
 await page.locator("#panel-toggle").click();
 await page.waitForTimeout(250);
 const toggleReopen = await panelToggleState();
-check("v0.15.7 §9c: #panel-toggle expands again, aria-expanded=true, title flips back to Collapse, X restored",
+check("v0.15.7 §9c: #panel-toggle expands again, aria-expanded=true, title flips back to Collapse, rail + panel shown, X restored",
   !toggleReopen.collapsed && toggleReopen.expanded === "true" &&
-  toggleReopen.title === "Collapse sidebar panel" &&
+  toggleReopen.title === "Collapse sidebar" &&
+  toggleReopen.railVisible && toggleReopen.panelVisible &&
   toggleReopen.lines === 3 && toggleReopen.hiddenLines === 1 && toggleReopen.rotatedLines === 2,
   JSON.stringify(toggleReopen));
 
@@ -2929,6 +2955,10 @@ await rmPage.addInitScript(cspCollector);
 await rmPage.exposeFunction("__invokeImpl", invoke);
 await rmPage.goto("http://localhost:4199/");
 await rmPage.waitForTimeout(300);
+// Fresh context boots with the whole sidebar collapsed; expand via the tab-bar
+// toggle so the account chip (inside the rail) is reachable.
+await rmPage.locator("#panel-toggle").click();
+await rmPage.waitForTimeout(60);
 await rmPage.locator("#user-chip").click();
 await rmPage.locator("#signin-btn").click();
 await rmPage.waitForTimeout(120);
@@ -3360,6 +3390,9 @@ await clockPage.addInitScript(cspCollector);
 await clockPage.exposeFunction("__invokeImpl", invoke);
 await clockPage.goto("http://localhost:4199/");
 await clockPage.clock.runFor(400); // let boot settle under the fake clock
+// Fresh context boots with the whole sidebar collapsed; expand via the tab-bar
+// toggle so the account chip (inside the rail) is reachable.
+await clockPage.locator("#panel-toggle").click();
 await clockPage.locator("#user-chip").click();
 await clockPage.locator("#signin-btn").click();
 await clockPage.clock.runFor(150);
@@ -3448,8 +3481,10 @@ await clockPage.close();
 // -- FE-FIX 6b: narrow window — passphrase box + toast stack never overflow --
 await page.setViewportSize({ width: 360, height: 640 });
 await page.waitForTimeout(80);
-await ensureDrive();
-await page.locator("#drive-backup-btn").click();
+// The 520px auto-collapse hides the whole sidebar, and the account chip lives
+// in the rail. Drive the Backup action programmatically so the dialog/toast are
+// measured in the collapsed shell (an expanded 304px sidebar cannot fit 360px).
+await page.evaluate(() => document.getElementById("drive-backup-btn").click());
 await page.locator("#pass-dialog:not(.hidden)").waitFor({ timeout: 2000 });
 await page.waitForTimeout(80);
 const narrowPass = await page.evaluate(() => {
@@ -3463,8 +3498,7 @@ await page.keyboard.press("Escape");
 await page.waitForTimeout(200);
 // Raise a toast in the narrow window and confirm it stays inside the viewport.
 driveBackupFail = true;
-await ensureDrive();
-await page.locator("#drive-backup-btn").click();
+await page.evaluate(() => document.getElementById("drive-backup-btn").click());
 await page.locator("#pass-input").fill("n1"); await page.locator("#pass-confirm").fill("n1");
 await page.locator("#pass-ok").click();
 await page.waitForTimeout(120);
@@ -3484,6 +3518,12 @@ await page.setViewportSize({ width: 1280, height: 720 });
 await page.waitForTimeout(80);
 
 // -- FE-FIX 7: existing sign-in/out + account flow still green (re-assert the invariants). --
+// The 360px auto-collapse above hid the whole sidebar (rail included); expand
+// via the tab-bar toggle before the account flow below.
+if (await page.evaluate(() => document.body.classList.contains("panel-collapsed"))) {
+  await page.locator("#panel-toggle").click();
+  await page.waitForTimeout(60);
+}
 const feFixSignedIn = await page.locator("#user-chip").evaluate((chip) => chip.dataset.state);
 check("FE-FIX regression: account remains signed-in after the toast/overlay cycle",
   feFixSignedIn === "signed-in");
@@ -3504,7 +3544,7 @@ check("FE-FIX regression: sign out returns the chip to signed-out",
 // visible — do not leak narrow-window state downstream.
 await page.evaluate(() => { try { localStorage.removeItem("hosterm.panel-collapsed"); localStorage.removeItem("hosterm.sb-collapsed"); } catch { /* private mode */ } });
 if (await page.evaluate(() => document.body.classList.contains("panel-collapsed"))) {
-  await page.locator('.rail-item[data-view="host"]').click();
+  await page.locator("#panel-toggle").click();
   await page.waitForTimeout(40);
 }
 // End FE-FIX checks.
@@ -4749,14 +4789,15 @@ await page.keyboard.press("Control+k");
 check("NAV RAIL: Ctrl+K focuses search on Hosts", await page.evaluate(() => document.activeElement?.id === "host-search"));
 
 // -- v0.14.6 (3) SIDEBAR TOGGLE VIA RAIL MENU --
-// We are on Hosts with the panel expanded. Clicking the ALREADY-ACTIVE Hosts
-// rail item collapses the panel; clicking it again expands it. aria-expanded on
-// the rail items stays in sync and the collapsed state persists.
+// We are on Hosts with the sidebar expanded. Clicking the ALREADY-ACTIVE Hosts
+// rail item collapses the whole sidebar; the rail is then hidden, so the
+// tab-bar #panel-toggle is the way back. aria-expanded on the rail items stays
+// in sync and the collapsed state persists.
 const railToggleStart = await page.evaluate(() => ({
   collapsed: document.body.classList.contains("panel-collapsed"),
   hostExpanded: document.querySelector('.rail-item[data-view="host"]').getAttribute("aria-expanded"),
 }));
-check("v0.14.6 §3: start on Hosts with the panel expanded and aria-expanded=true",
+check("v0.14.6 §3: start on Hosts with the sidebar expanded and aria-expanded=true",
   !railToggleStart.collapsed && railToggleStart.hostExpanded === "true",
   JSON.stringify(railToggleStart));
 await page.locator('.rail-item[data-view="host"]').click();
@@ -4765,24 +4806,28 @@ const railCollapse = await page.evaluate(() => ({
   collapsed: document.body.classList.contains("panel-collapsed"),
   hostExpanded: document.querySelector('.rail-item[data-view="host"]').getAttribute("aria-expanded"),
   persisted: localStorage.getItem("hosterm.panel-collapsed"),
+  railVisible: document.getElementById("nav-rail").getClientRects().length > 0,
+  panelVisible: document.getElementById("section-panel").getClientRects().length > 0,
 }));
-check("v0.14.6 §3: clicking the ACTIVE rail item collapses the panel, syncs aria-expanded=false, persists",
-  railCollapse.collapsed && railCollapse.hostExpanded === "false" && railCollapse.persisted === "1",
+check("v0.14.6 §3: clicking the ACTIVE rail item collapses the whole sidebar, syncs aria-expanded=false, persists",
+  railCollapse.collapsed && railCollapse.hostExpanded === "false" && railCollapse.persisted === "1" &&
+  !railCollapse.railVisible && !railCollapse.panelVisible,
   JSON.stringify(railCollapse));
-await page.locator('.rail-item[data-view="host"]').click();
+await page.locator("#panel-toggle").click();
 await page.waitForTimeout(60);
 const railReexpand = await page.evaluate(() => ({
   collapsed: document.body.classList.contains("panel-collapsed"),
   hostExpanded: document.querySelector('.rail-item[data-view="host"]').getAttribute("aria-expanded"),
+  railVisible: document.getElementById("nav-rail").getClientRects().length > 0,
+  panelVisible: document.getElementById("section-panel").getClientRects().length > 0,
 }));
-check("v0.14.6 §3: clicking the ACTIVE rail item again expands the panel (toggle), aria-expanded=true",
-  !railReexpand.collapsed && railReexpand.hostExpanded === "true",
+check("v0.14.6 §3: #panel-toggle re-expands the sidebar (rail + panel), aria-expanded=true",
+  !railReexpand.collapsed && railReexpand.hostExpanded === "true" &&
+  railReexpand.railVisible && railReexpand.panelVisible,
   JSON.stringify(railReexpand));
-// Collapse again, then click a DIFFERENT rail item: it switches section AND
-// ensures the panel is expanded (collapsed persistence is overridden by a switch).
-await page.locator('.rail-item[data-view="host"]').click(); // collapse
-await page.waitForTimeout(60);
-await page.locator('.rail-item[data-view="keys"]').click();  // switch while collapsed
+// While expanded, clicking a DIFFERENT rail item switches section and keeps
+// the sidebar expanded.
+await page.locator('.rail-item[data-view="keys"]').click();
 await page.waitForTimeout(60);
 const railSwitch = await page.evaluate(() => ({
   collapsed: document.body.classList.contains("panel-collapsed"),
@@ -4791,7 +4836,7 @@ const railSwitch = await page.evaluate(() => ({
   hostExpanded: document.querySelector('.rail-item[data-view="host"]').getAttribute("aria-expanded"),
   keysVisible: !document.querySelector("#view-keys").classList.contains("hidden"),
 }));
-check("v0.14.6 §3: clicking a DIFFERENT rail item while collapsed switches section AND expands the panel",
+check("v0.14.6 §3: clicking a DIFFERENT rail item switches section and keeps the sidebar expanded",
   !railSwitch.collapsed && railSwitch.keysCurrent === "page" && railSwitch.keysExpanded === "true" &&
   railSwitch.hostExpanded === "false" && railSwitch.keysVisible,
   JSON.stringify(railSwitch));
@@ -4799,12 +4844,18 @@ check("v0.14.6 §3: clicking a DIFFERENT rail item while collapsed switches sect
 await page.locator('.rail-item[data-view="keys"]').focus();
 await page.keyboard.press("Enter");
 await page.waitForTimeout(60);
-const railKeyboard = await page.evaluate(() => document.body.classList.contains("panel-collapsed"));
-check("v0.14.6 §3: the active rail item is keyboard operable (Enter toggles collapse)", railKeyboard);
+const railKeyboard = await page.evaluate(() => ({
+  collapsed: document.body.classList.contains("panel-collapsed"),
+  railVisible: document.getElementById("nav-rail").getClientRects().length > 0,
+  focusId: document.activeElement?.id || null,
+}));
+check("v0.14.6 §3: the active rail item is keyboard operable (Enter collapses, rail hidden, focus → #panel-toggle)",
+  railKeyboard.collapsed && !railKeyboard.railVisible && railKeyboard.focusId === "panel-toggle",
+  JSON.stringify(railKeyboard));
 // Restore to Hosts expanded for the downstream Ansible checks.
-await page.locator('.rail-item[data-view="keys"]').click(); // active+collapsed -> expand
+await page.locator("#panel-toggle").click(); // expand (collapsed by Enter)
 await page.waitForTimeout(60);
-await page.locator('.rail-item[data-view="host"]').click(); // switch back to Hosts (expands)
+await page.locator('.rail-item[data-view="host"]').click(); // switch back to Hosts
 await page.waitForTimeout(60);
 
 ansibleCheckState = { missing: false };
@@ -5042,9 +5093,12 @@ const narrowShell = await page.evaluate(() => ({
   panelVisible: document.getElementById("section-panel").getClientRects().length > 0,
   overflow: document.documentElement.scrollWidth > window.innerWidth,
 }));
-check("NAV RAIL: 520px breakpoint collapses only the contextual panel without overflow",
-  narrowShell.collapsed && narrowShell.railVisible && !narrowShell.panelVisible && !narrowShell.overflow,
+check("NAV RAIL: 520px breakpoint collapses the whole sidebar without overflow",
+  narrowShell.collapsed && !narrowShell.railVisible && !narrowShell.panelVisible && !narrowShell.overflow,
   JSON.stringify(narrowShell));
+// The account chip lives in the rail, so expand the sidebar before opening it.
+await page.locator("#panel-toggle").click();
+await page.waitForTimeout(60);
 await page.locator("#user-chip").click();
 const narrowPopover = await page.locator("#signin-popover").evaluate((el) => {
   const box = el.getBoundingClientRect();
@@ -5056,7 +5110,7 @@ check("NAV RAIL: account menu stays inside the narrow viewport",
 await page.keyboard.press("Escape");
 await page.setViewportSize({ width: 1280, height: 720 });
 if (await page.evaluate(() => document.body.classList.contains("panel-collapsed"))) {
-  await page.locator('.rail-item[data-view="host"]').click();
+  await page.locator("#panel-toggle").click();
 }
 
 // ===== AI-5: §8.1 #5–#8 assertions + §8.3 grep gates =====
