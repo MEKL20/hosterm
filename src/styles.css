@@ -535,14 +535,15 @@ body.panel-collapsed #sb-resize { display: none; }
    open so the button still shows state. Lives at the far left of #app, OUTSIDE
    #nav-rail/#section-panel, so it is the single control when collapsed AND
    stays flush against the rail when expanded (a toggle inside #tabbar would sit
-   ~304px right of the opened sidebar). Behaviour is unchanged — the click
-   handler and aria-expanded are the source of truth. */
+   ~304px right of the opened sidebar). Pinned to the TOP row, not centered:
+   #app is 100vh tall, so align-self:center floated it mid-window (v0.17.2 bug).
+   margin-top 7px = (42px tabbar - 28px button) / 2, keeping it on the tabbar line. */
 #panel-toggle {
   flex: 0 0 auto;
-  align-self: center;
+  align-self: flex-start;
   width: 28px;
   height: 28px;
-  margin: 0 4px 0 6px;
+  margin: 7px 4px 0 6px;
 }
 #panel-toggle .pt-line {
   transform-box: fill-box;

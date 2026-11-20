@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Windows releases are currently **unsigned** (Authenticode signing postponed —
 see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
+## [0.17.3] - 2026-11-20
+
+### Fixed
+- Sidebar hamburger (`#panel-toggle`) no longer floats mid-window: as a child of the
+  100vh-tall `#app` its `align-self: center` centred it vertically. It is now pinned to
+  the top row (`y=7`, aligned with the tab bar), left of the rail.
+
 ## [0.17.2] - 2026-11-20
 
 ### Fixed

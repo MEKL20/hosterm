@@ -4539,12 +4539,16 @@ const shellGeometry = await page.evaluate(() => {
   const rail = document.getElementById("nav-rail").getBoundingClientRect();
   const panel = document.getElementById("section-panel").getBoundingClientRect();
   const main = document.getElementById("main").getBoundingClientRect();
-  return { toggleX: toggle.x, toggleRight: toggle.right, railX: rail.x, railW: rail.width, panelX: panel.x, panelRight: panel.right, mainX: main.x };
+  const tabbar = document.getElementById("tabbar").getBoundingClientRect();
+  return { toggleX: toggle.x, toggleY: toggle.y, toggleRight: toggle.right, railX: rail.x, railW: rail.width, panelX: panel.x, panelRight: panel.right, mainX: main.x, tabbarH: tabbar.height };
 });
-// Unreleased: the toggle is the far-left child of #app (flush against the rail),
+// v0.17.1: the toggle is the far-left child of #app (flush against the rail),
 // so the rail no longer starts at x=0 while the sidebar is expanded.
-check("NAV RAIL: visual order is toggle, 56px rail, contextual panel, workspace; toggle flush against rail (4px gap)",
-  Math.round(shellGeometry.toggleX) === 6 && Math.round(shellGeometry.railX) === 38 &&
+// v0.17.3: pinned to the TOP row (y=7 = (42-28)/2), not vertically centered —
+// #app is 100vh so a centered toggle floated mid-window.
+check("NAV RAIL: visual order is toggle, 56px rail, contextual panel, workspace; toggle flush against rail (4px gap) and top-aligned",
+  Math.round(shellGeometry.toggleX) === 6 && Math.round(shellGeometry.toggleY) === 7 &&
+  Math.round(shellGeometry.railX) === 38 &&
   Math.round(shellGeometry.railW) === 56 && Math.round(shellGeometry.panelX) === 94 &&
   Math.round(shellGeometry.railX - shellGeometry.toggleRight) === 4 &&
   shellGeometry.mainX > shellGeometry.panelRight,
