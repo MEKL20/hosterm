@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Windows releases are currently **unsigned** (Authenticode signing postponed —
 see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
+## [Unreleased]
+
+### Fixed
+- The sidebar hamburger (`#panel-toggle`) now lives at the far left of `#app`, outside the rail/panel, so expanding the sidebar no longer strands it ~304px to the right of the opened menu — it stays flush against the rail's left edge (4px gap). Collapsed, it is the single control on the left edge (vertically centered).
+
 ## [0.17.1] - 2026-11-18
 
 ### Changed

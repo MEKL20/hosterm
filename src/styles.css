@@ -532,14 +532,17 @@ body.panel-collapsed #sb-resize { display: none; }
   border-bottom: 1px solid var(--border);
 }
 /* Visible panel toggle (v0.17.0): hamburger, morphs to an X while the panel is
-   open so the button still shows state. Behaviour is unchanged — the click
+   open so the button still shows state. Lives at the far left of #app, OUTSIDE
+   #nav-rail/#section-panel, so it is the single control when collapsed AND
+   stays flush against the rail when expanded (a toggle inside #tabbar would sit
+   ~304px right of the opened sidebar). Behaviour is unchanged — the click
    handler and aria-expanded are the source of truth. */
 #panel-toggle {
   flex: 0 0 auto;
   align-self: center;
   width: 28px;
   height: 28px;
-  margin: 0 0 0 6px;
+  margin: 0 4px 0 6px;
 }
 #panel-toggle .pt-line {
   transform-box: fill-box;

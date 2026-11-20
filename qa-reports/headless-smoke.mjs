@@ -481,7 +481,7 @@ const servedCsp = (firstResp.headers()["content-security-policy"] || "").trim();
 await page.waitForTimeout(400);
 
 // -- v0.15.7 (FE): a fresh profile boots with the whole sidebar collapsed --
-// The visible #panel-toggle in the tab bar is the single discoverable
+// The visible #panel-toggle at the far left of #app is the single discoverable
 // collapse/expand control (v0.14.7 removed the old arrow buttons; the rail
 // collapses together with the panel). This smoke uses a fresh browser context
 // with no storageState, so localStorage starts empty and the default is
@@ -494,7 +494,7 @@ const freshPanel = await page.evaluate(() => ({
 }));
 check("v0.15.7: fresh profile boots with the whole sidebar collapsed (rail + panel hidden)",
   freshPanel.collapsed && !freshPanel.railVisible && !freshPanel.panelVisible, JSON.stringify(freshPanel));
-check("v0.15.7: #panel-toggle exists and is visible in the tab bar",
+check("v0.15.7: #panel-toggle exists and is visible at the far left of #app",
   await page.locator("#panel-toggle").isVisible());
 await page.locator("#panel-toggle").click();
 await page.waitForTimeout(60);
@@ -748,7 +748,7 @@ await page.waitForTimeout(150);
 // 9c. contextual panel collapse/expand via the active rail item (arrow buttons
 // removed v0.14.7 — clicking the already-active rail item toggles the panel).
 // Collapsing hides the whole sidebar, so the rail item is gone; re-expand via
-// the tab-bar #panel-toggle.
+// the #panel-toggle at the far left of #app.
 await page.locator('.rail-item[data-view="host"]').click();
 check("collapse: body class set", await page.evaluate(() => document.body.classList.contains("panel-collapsed")));
 const stored = await page.evaluate(() => localStorage.getItem("hosterm.panel-collapsed"));
@@ -4535,14 +4535,19 @@ check("v0.14.10 (5): Host view title is 'Host' (consistent with 'SSH keys'), add
   panelHeaders.hostAddInHead,
   JSON.stringify(panelHeaders));
 const shellGeometry = await page.evaluate(() => {
+  const toggle = document.getElementById("panel-toggle").getBoundingClientRect();
   const rail = document.getElementById("nav-rail").getBoundingClientRect();
   const panel = document.getElementById("section-panel").getBoundingClientRect();
   const main = document.getElementById("main").getBoundingClientRect();
-  return { railX: rail.x, railW: rail.width, panelX: panel.x, panelRight: panel.right, mainX: main.x };
+  return { toggleX: toggle.x, toggleRight: toggle.right, railX: rail.x, railW: rail.width, panelX: panel.x, panelRight: panel.right, mainX: main.x };
 });
-check("NAV RAIL: visual order is 56px rail, contextual panel, workspace",
-  Math.round(shellGeometry.railX) === 0 && Math.round(shellGeometry.railW) === 56 &&
-  Math.round(shellGeometry.panelX) === 56 && shellGeometry.mainX > shellGeometry.panelRight,
+// Unreleased: the toggle is the far-left child of #app (flush against the rail),
+// so the rail no longer starts at x=0 while the sidebar is expanded.
+check("NAV RAIL: visual order is toggle, 56px rail, contextual panel, workspace; toggle flush against rail (4px gap)",
+  Math.round(shellGeometry.toggleX) === 6 && Math.round(shellGeometry.railX) === 38 &&
+  Math.round(shellGeometry.railW) === 56 && Math.round(shellGeometry.panelX) === 94 &&
+  Math.round(shellGeometry.railX - shellGeometry.toggleRight) === 4 &&
+  shellGeometry.mainX > shellGeometry.panelRight,
   JSON.stringify(shellGeometry));
 check("NAV RAIL: Hosts-only controls are rendered on Hosts",
   await page.evaluate(() => ["btn-add", "btn-raw", "btn-local", "btn-reload"].every((id) => document.getElementById(id).getClientRects().length > 0)));
@@ -4856,7 +4861,7 @@ check("NAV RAIL: Ctrl+K focuses search on Hosts", await page.evaluate(() => docu
 // -- v0.14.6 (3) SIDEBAR TOGGLE VIA RAIL MENU --
 // We are on Hosts with the sidebar expanded. Clicking the ALREADY-ACTIVE Hosts
 // rail item collapses the whole sidebar; the rail is then hidden, so the
-// tab-bar #panel-toggle is the way back. aria-expanded on the rail items stays
+// far-left #panel-toggle is the way back. aria-expanded on the rail items stays
 // in sync and the collapsed state persists.
 const railToggleStart = await page.evaluate(() => ({
   collapsed: document.body.classList.contains("panel-collapsed"),

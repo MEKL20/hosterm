@@ -4914,7 +4914,7 @@ window.addEventListener("DOMContentLoaded", () => {
       }
     }
     document.body.classList.toggle("panel-collapsed", c);
-    // Visible toggle in the tab bar: aria-expanded mirrors the panel state and
+    // Visible shell toggle: aria-expanded mirrors the panel state and
     // the hamburger morphs into an X via #panel-toggle[aria-expanded] in styles.css.
     const toggle = $("#panel-toggle");
     toggle.setAttribute("aria-expanded", String(!c));
