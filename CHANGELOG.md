@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Windows releases are currently **unsigned** (Authenticode signing postponed —
 see [docs/STATE.md](docs/STATE.md)), so SmartScreen may warn on first run.
 
+## [0.18.0] - 2026-11-22
+
+### Added
+- **AI backend OQ-4 Rev.2 — remote custom providers.** Settings -> AI Assistant now has
+  an **Allow remote endpoints** toggle (default OFF): a non-loopback endpoint is accepted
+  when the toggle is ON **and** the URL is `https` (loopback may stay `http`). URL userinfo
+  is rejected and redirects are disabled (`Policy::none`), so a remote host cannot bounce
+  the request elsewhere or receive credentials via userinfo.
+- **Protocol dropdown** `openai` | `anthropic` (default `openai`, no auto-detect):
+  OpenAI-compatible sends `POST <endpoint>/chat/completions` with `Authorization: Bearer`;
+  Anthropic-compatible sends `POST <endpoint>/messages` with `x-api-key` +
+  `anthropic-version: 2023-06-01`. The API key is optional and, when saved in the OS keyring,
+  is now sent for loopback endpoints too — a missing/failing keyring on loopback is not
+  fatal (the endpoint simply answers 401), while a remote request fails closed
+  (`ai:keyring-unavailable`).
+
 ## [0.17.3] - 2026-11-20
 
 ### Fixed
