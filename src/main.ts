@@ -1346,12 +1346,13 @@ async function revokeApproval(index: number, button: HTMLButtonElement) {
 // Frozen wire contract §16.3: `read_ai_settings` never throws (missing/corrupt
 // store → defaults); `write_ai_settings` and `ai_chat` both take a single `req`
 // object (Tauri camelCases the boundary key). The key byte never crosses IPC —
-// only the boolean `has_key` does. v1 is loopback-only (D-AI5): the UI has no
-// remote-endpoint toggle and always submits `remote_allowed: false`.
+// only the boolean `has_key` does. Rev.2: loopback or remote HTTPS, chosen by
+// `#ai-remote`; protocol (`openai`/`anthropic`) is explicit, never auto-detected.
 interface AiSettingsDto {
   version: number;
   endpoint: string;
   model: string;
+  protocol: AiProtocol;
   remote_allowed: boolean;
   has_key: boolean;
 }
@@ -1370,9 +1371,15 @@ interface AiChatRespDto {
 }
 interface WriteAiSettingsReqDto {
   endpoint: string;
+  protocol: AiProtocol;
   model: string;
   remote_allowed: boolean;
   key?: string | null;
+}
+
+type AiProtocol = "openai" | "anthropic";
+function normalizeAiProtocol(value: string): AiProtocol {
+  return value === "anthropic" ? "anthropic" : "openai";
 }
 
 const AI_TEST_PROMPT = "Reply with the single word: ok";
@@ -1381,6 +1388,7 @@ const DEFAULT_AI_SETTINGS: AiSettingsDto = {
   version: 1,
   endpoint: "",
   model: "",
+  protocol: "openai",
   remote_allowed: false,
   has_key: false,
 };
@@ -1398,7 +1406,11 @@ let aiPending = false;
 async function readAiSettingsStore(): Promise<AiSettingsDto> {
   try {
     const loaded = await invoke<AiSettingsDto>("read_ai_settings");
-    return { ...DEFAULT_AI_SETTINGS, ...loaded, remote_allowed: false };
+    return {
+      ...DEFAULT_AI_SETTINGS,
+      ...loaded,
+      protocol: normalizeAiProtocol(loaded.protocol ?? "openai"),
+    };
   } catch {
     return { ...DEFAULT_AI_SETTINGS };
   }
@@ -1407,7 +1419,12 @@ async function readAiSettingsStore(): Promise<AiSettingsDto> {
 // LQ-16.7 copy table; the reason prefix set is frozen (§16.8). Every caller
 // assigns the result through `textContent` / `value` (never innerHTML), so the
 // mapped copy is inert. Unknown tokens fall back to the code itself — never to
-// a raw backend string that was not mapped.
+// a raw backend string that was not mapped. Rev.2 replaces the v1
+// loopback-only wording with the toggle + HTTPS instruction.
+const AI_REMOTE_DISABLED_COPY =
+  "Remote endpoints are disabled. Turn on 'Allow remote endpoints' and use HTTPS.";
+const AI_BAD_PROTOCOL_COPY =
+  "That AI protocol is not supported. Choose OpenAI-compatible or Anthropic-compatible.";
 function aiErrText(token: string): string {
   switch (token) {
     case "ai:not-configured":
@@ -1422,8 +1439,10 @@ function aiErrText(token: string): string {
       return "Timeout must be between 5 and 120 seconds.";
     case "ai:bad-endpoint":
       return "That endpoint URL is not valid (http/https only, no credentials).";
+    case "ai:bad-protocol":
+      return AI_BAD_PROTOCOL_COPY;
     case "ai:remote-endpoint-disabled":
-      return "Remote endpoints are disabled in v1; use a loopback endpoint.";
+      return AI_REMOTE_DISABLED_COPY;
     case "ai:endpoint-unreachable":
       return "Could not reach the endpoint.";
     case "ai:timeout":
@@ -1436,8 +1455,10 @@ function aiErrText(token: string): string {
       return "The OS keyring is unavailable; the API key could not be read.";
     case "ai-settings:invalid-endpoint":
       return "That endpoint URL is not valid (http/https only, no credentials).";
+    case "ai-settings:invalid-protocol":
+      return AI_BAD_PROTOCOL_COPY;
     case "ai-settings:remote-disabled":
-      return "Remote endpoints are disabled in v1; use a loopback endpoint.";
+      return AI_REMOTE_DISABLED_COPY;
     case "ai-settings:invalid-model":
       return "That model name is not valid (max 256 bytes).";
     case "ai-settings:keyring-unavailable":
@@ -1467,22 +1488,22 @@ function aiConfigured(): boolean {
 // Head-tag preview derived from the actual endpoint/model (FR-AI12 honesty:
 // never a static string, never a claim the configured endpoint cannot back).
 const AI_LABEL_LOCAL = "local endpoint";
-// v1 is loopback-only (D-AI5): a non-loopback URL is previewed as unusable
-// rather than as a live backend.
-const AI_LABEL_REMOTE = "remote endpoint (v1: loopback only)";
 // Drawer head-tag vocabulary (spec §4): exactly these three labels are allowed.
 const AI_LABEL_NOT_CONFIGURED = "not configured";
 const AI_LABEL_REMOTE_ENDPOINT = "remote endpoint";
 
 function aiBackendLabel(endpoint: string, model: string): string {
   if (endpoint.trim() === "" || model.trim() === "") return AI_LABEL_NOT_CONFIGURED;
-  return isLoopbackEndpoint(endpoint) ? AI_LABEL_LOCAL : AI_LABEL_REMOTE;
+  return isLoopbackEndpoint(endpoint) ? AI_LABEL_LOCAL : AI_LABEL_REMOTE_ENDPOINT;
 }
 
-function aiBackendTitle(label: string): string {
+function aiBackendTitle(label: string, remoteAllowed = true): string {
   if (label === AI_LABEL_LOCAL) return "Connected to a local endpoint you configured.";
-  if (label === AI_LABEL_REMOTE) return "Remote endpoints are disabled in v1; use a loopback endpoint.";
-  if (label === AI_LABEL_REMOTE_ENDPOINT) return "Connected to a remote endpoint you configured.";
+  if (label === AI_LABEL_REMOTE_ENDPOINT) {
+    return remoteAllowed
+      ? "Connected to a remote endpoint you configured."
+      : AI_REMOTE_DISABLED_COPY;
+  }
   return "No endpoint and model are set yet.";
 }
 
@@ -1495,13 +1516,14 @@ function aiBackendLabelFor(backend: "loopback" | "remote"): string {
 function setAiHeadTag(label: string): void {
   const tag = $("#ai-head-tag");
   tag.textContent = label;
-  tag.setAttribute("title", aiBackendTitle(label));
+  tag.setAttribute("title", aiBackendTitle(label, aiSettings.remote_allowed));
 }
 
 function setAiSettingsLabel(label: string): void {
   const tag = $("#ai-backend-label");
+  const remoteAllowed = ($("#ai-remote") as HTMLInputElement).checked;
   tag.textContent = label;
-  tag.setAttribute("title", aiBackendTitle(label));
+  tag.setAttribute("title", aiBackendTitle(label, remoteAllowed));
 }
 
 function setAiKeyState(state: "saved" | "not-saved" | "keyring-unavailable"): void {
@@ -1551,6 +1573,8 @@ async function renderAiSettings(): Promise<void> {
     aiSettings = await readAiSettingsStore();
     ($("#ai-endpoint") as HTMLInputElement).value = aiSettings.endpoint;
     ($("#ai-model") as HTMLInputElement).value = aiSettings.model;
+    ($("#ai-remote") as HTMLInputElement).checked = aiSettings.remote_allowed;
+    ($("#ai-protocol") as HTMLSelectElement).value = aiSettings.protocol;
     ($("#ai-key") as HTMLInputElement).value = "";
     setAiKeyState(aiSettings.has_key ? "saved" : "not-saved");
     aiSettingsDirty = false;
@@ -1596,12 +1620,15 @@ async function persistAiSettings(): Promise<boolean> {
   const endpoint = ($("#ai-endpoint") as HTMLInputElement).value;
   const model = ($("#ai-model") as HTMLInputElement).value;
   const key = ($("#ai-key") as HTMLInputElement).value;
+  const protocol = normalizeAiProtocol(($("#ai-protocol") as HTMLSelectElement).value);
+  const remoteAllowed = ($("#ai-remote") as HTMLInputElement).checked;
   setAiStatus("");
   try {
     const req: WriteAiSettingsReqDto = {
       endpoint,
+      protocol,
       model,
-      remote_allowed: false,
+      remote_allowed: remoteAllowed,
       // Blank = keep whatever the keyring already holds (§3.2).
       key: key === "" ? null : key,
     };
@@ -1676,6 +1703,15 @@ function initSettings() {
       const model = ($("#ai-model") as HTMLInputElement).value;
       if (endpoint.trim() !== "" && model.trim() !== "") setAiStatus("Save AI settings before testing.");
     });
+  });
+  // Rev.2: the remote toggle changes the honest remote title immediately;
+  // the protocol dropdown is explicit, never auto-detected.
+  $("#ai-remote").addEventListener("change", () => {
+    aiSettingsDirty = true;
+    updateAiPreview(false);
+  });
+  $("#ai-protocol").addEventListener("change", () => {
+    aiSettingsDirty = true;
   });
   settingsReady = readAndApplySettings();
 }

@@ -127,8 +127,17 @@ const ansibleRuns = [];                        // every ansible_run req payload
 let ansibleHistory = [];                       // ansible_history store (newest-last)
 // AI-3 Settings → AI Assistant mock state (frozen contract §16.3). The key byte
 // never crosses IPC — only `has_key` does. aiChatMode steers the test arm.
-let aiSettingsStore = { version: 1, endpoint: "", model: "", remote_allowed: false, has_key: false };
+let aiSettingsStore = {
+  version: 1,
+  endpoint: "",
+  model: "",
+  protocol: "openai",
+  remote_allowed: false,
+  has_key: false,
+};
 let aiKeyStored = false;
+let aiKeyValue = null;                      // in-memory key mirror (never written)
+const aiRequests = [];                      // last ai_chat wire view (path/headers/body)
 let aiChatMode = "ok";                      // ok | proposal | echo | not-configured | timeout
 let aiChatHost = "prod-web";
 let aiChatCommand = "sudo systemctl restart netdata";
@@ -307,21 +316,35 @@ const invoke = (cmd, args = {}) => {
       if (aiKeyringFail) return Promise.reject("ai-settings:keyring-unavailable");
       const req = args.req || {};
       const endpoint = String(req.endpoint || "");
-      if (endpoint.trim() !== "" && !aiIsLoopback(endpoint)) return Promise.reject("ai-settings:remote-disabled");
+      const protocol = String(req.protocol || "openai");
+      if (protocol !== "openai" && protocol !== "anthropic") {
+        return Promise.reject("ai-settings:invalid-protocol");
+      }
+      if (endpoint.trim() !== "" && !aiIsLoopback(endpoint)) {
+        if (!req.remote_allowed) return Promise.reject("ai-settings:remote-disabled");
+        if (!/^https:\/\//i.test(endpoint.trim())) {
+          return Promise.reject("ai-settings:invalid-endpoint");
+        }
+      }
       aiSettingsStore = {
         version: 1,
         endpoint: String(req.endpoint || ""),
         model: String(req.model || ""),
+        protocol,
         remote_allowed: !!req.remote_allowed,
         has_key: aiKeyStored,
       };
-      if (req.key === "") aiKeyStored = false;
-      else if (typeof req.key === "string" && req.key !== "") aiKeyStored = true;
+      if (req.key === "") { aiKeyStored = false; aiKeyValue = null; }
+      else if (typeof req.key === "string" && req.key !== "") {
+        aiKeyStored = true;
+        aiKeyValue = req.key;
+      }
       // Mirror ai-settings.json (§16.3): the key never enters the file.
       writeFileSync(AI_SETTINGS_FILE, JSON.stringify({
         version: 1,
         endpoint: aiSettingsStore.endpoint,
         model: aiSettingsStore.model,
+        protocol: aiSettingsStore.protocol,
         remote_allowed: aiSettingsStore.remote_allowed,
       }));
       return Promise.resolve(null);
@@ -329,6 +352,23 @@ const invoke = (cmd, args = {}) => {
     case "ai_chat": {
       if (aiChatMode === "not-configured") return Promise.reject("ai:not-configured");
       if (aiChatMode === "timeout") return Promise.reject("ai:timeout");
+      // Rev.2 wire view mirror: the backend reads `protocol` from the store,
+      // builds the per-protocol path, and sends protocol auth headers.
+      const protocol = aiSettingsStore.protocol === "anthropic" ? "anthropic" : "openai";
+      const base = String(aiSettingsStore.endpoint || "").replace(/\/+$/, "");
+      const headers = {};
+      if (protocol === "anthropic") {
+        headers["anthropic-version"] = "2023-06-01";
+        if (aiKeyValue) headers["x-api-key"] = aiKeyValue;
+      } else if (aiKeyValue) {
+        headers.authorization = `Bearer ${aiKeyValue}`;
+      }
+      aiRequests.push({
+        protocol,
+        path: protocol === "anthropic" ? `${base}/messages` : `${base}/chat/completions`,
+        headers,
+        body: { model: aiSettingsStore.model, max_tokens: 16384 },
+      });
       // §8.1 #5/#6: the backend validates the proposal host BEFORE it becomes a
       // card (§2.2 warnings). Mirror that: a bad host never yields a proposal.
       if (aiChatMode === "unsafe-host" || aiChatMode === "unknown-host") {
@@ -3637,7 +3677,7 @@ const aiSend = async (text) => {
 const aiWaitForCards = (count) => page.waitForFunction((n) => document.querySelectorAll("#ai-thread .cmd-card").length === n, count);
 
 // --- not configured: empty state + Set up AI, honest label, disabled input ---
-aiSettingsStore = { version: 1, endpoint: "", model: "", remote_allowed: false, has_key: false };
+aiSettingsStore = { version: 1, endpoint: "", model: "", protocol: "openai", remote_allowed: false, has_key: false };
 aiKeyStored = false;
 aiChatMode = "ok";
 await page.reload();
@@ -3677,7 +3717,7 @@ await page.locator("#settings-done").click();
 await page.waitForTimeout(150);
 
 // --- configured loopback: sample prompts, then a real response ---
-aiSettingsStore = { version: 1, endpoint: "http://127.0.0.1:11434/v1", model: "llama3.2", remote_allowed: false, has_key: false };
+aiSettingsStore = { version: 1, endpoint: "http://127.0.0.1:11434/v1", model: "llama3.2", protocol: "openai", remote_allowed: false, has_key: false };
 storedSettings = { ...storedSettings, allowlist: [] };
 await page.reload();
 await page.waitForTimeout(400);
@@ -3703,17 +3743,17 @@ check("AI-4 D-AI12: a sample prompt only fills the input (no card, no backend ca
   JSON.stringify({ sampleFill, backendCalls: calls.length - sampleOffset }));
 
 // D-AI5 honesty: a non-loopback URL must never preview as a live backend.
-aiSettingsStore = { version: 1, endpoint: "http://10.20.30.40:11434/v1", model: "llama3.2", remote_allowed: false, has_key: false };
+aiSettingsStore = { version: 1, endpoint: "http://10.20.30.40:11434/v1", model: "llama3.2", protocol: "openai", remote_allowed: false, has_key: false };
 await page.reload();
 await page.waitForTimeout(400);
 await openAi();
 const aiRemotePanel = await aiDrawer();
-check("AI-4 FR-AI12/D-AI5: a configured non-loopback endpoint previews as v1-unusable, never as a live backend",
-  aiRemotePanel.tag === "remote endpoint (v1: loopback only)" &&
-  aiRemotePanel.tagTitle === "Remote endpoints are disabled in v1; use a loopback endpoint." &&
+check("AI-4 FR-AI12/D-AI5 Rev.2: a configured non-loopback endpoint previews as remote with the toggle-OFF instruction",
+  aiRemotePanel.tag === "remote endpoint" &&
+  aiRemotePanel.tagTitle === "Remote endpoints are disabled. Turn on 'Allow remote endpoints' and use HTTPS." &&
   aiRemotePanel.userMsgs === 0 && aiRemotePanel.cards === 0,
   JSON.stringify(aiRemotePanel));
-aiSettingsStore = { version: 1, endpoint: "http://127.0.0.1:11434/v1", model: "llama3.2", remote_allowed: false, has_key: false };
+aiSettingsStore = { version: 1, endpoint: "http://127.0.0.1:11434/v1", model: "llama3.2", protocol: "openai", remote_allowed: false, has_key: false };
 await page.reload();
 await page.waitForTimeout(400);
 await openAi();
@@ -3998,7 +4038,7 @@ check("U-D7 a11y: drawer close restores the AI trigger and Terminal mode",
     document.activeElement?.id === "mode-ai"));
 
 // Restore the store the AI-3 block expects (fresh profile) before it runs.
-aiSettingsStore = { version: 1, endpoint: "", model: "", remote_allowed: false, has_key: false };
+aiSettingsStore = { version: 1, endpoint: "", model: "", protocol: "openai", remote_allowed: false, has_key: false };
 aiKeyStored = false;
 aiChatMode = "ok";
 storedSettings = { ...storedSettings, allowlist: [{ host: "prod-web", command: "sudo systemctl restart netdata", added_at: "2026-10-30T12:00:00Z" }] };
@@ -4037,9 +4077,9 @@ check("AI-3 FR-AI: Settings > AI Assistant renders empty endpoint/model/key with
   aiEmpty.endpointPlaceholder === "http://127.0.0.1:11434/v1" && aiEmpty.modelPlaceholder === "llama3.2" &&
   aiEmpty.keyType === "password" && aiEmpty.keyState === "Not saved" && aiEmpty.testDisabled,
   JSON.stringify(aiEmpty));
-check("AI-3 empty state: exact not-configured copy + 'not configured' label + no remote toggle (D-AI5)",
+check("AI-3 empty state: exact not-configured copy + 'not configured' label + remote toggle OFF + protocol dropdown",
   aiEmpty.status === "Not configured — AI requests are disabled until a model is set." &&
-  aiEmpty.label === "not configured" && aiEmpty.checkboxes === 0 && !aiEmpty.remoteCopy &&
+  aiEmpty.label === "not configured" && aiEmpty.checkboxes === 1 && aiEmpty.remoteCopy &&
   aiEmpty.keyHint === "Stored in the OS keyring. Leave blank to keep the saved key.",
   JSON.stringify(aiEmpty));
 
@@ -4062,9 +4102,9 @@ const aiRemote = await page.evaluate(() => ({
   label: document.getElementById("ai-backend-label").textContent,
   title: document.getElementById("ai-backend-label").getAttribute("title"),
 }));
-check("AI-3 D-AI5: a non-loopback URL previews as unusable instead of a live backend",
-  aiRemote.label === "remote endpoint (v1: loopback only)" &&
-  aiRemote.title === "Remote endpoints are disabled in v1; use a loopback endpoint.",
+check("AI-3 D-AI5 Rev.2: a non-loopback URL previews as remote with the toggle-OFF HTTPS instruction",
+  aiRemote.label === "remote endpoint" &&
+  aiRemote.title === "Remote endpoints are disabled. Turn on 'Allow remote endpoints' and use HTTPS.",
   JSON.stringify(aiRemote));
 await page.locator("#ai-endpoint").fill("http://127.0.0.1:11434/v1");
 
@@ -4072,9 +4112,9 @@ const aiSaveOffset = calls.length;
 await page.locator("#ai-save").click();
 await page.waitForFunction(() => document.getElementById("ai-status").textContent === "AI settings saved.");
 const aiWrite = calls.slice(aiSaveOffset).find((c) => c.cmd === "write_ai_settings");
-check("AI-3: Save persists endpoint/model with remote_allowed=false and a blank key kept",
+check("AI-3: Save persists endpoint/model/protocol with remote_allowed=false and a blank key kept",
   !!aiWrite && aiWrite.args.req.endpoint === "http://127.0.0.1:11434/v1" && aiWrite.args.req.model === "llama3.2" &&
-  aiWrite.args.req.remote_allowed === false && aiWrite.args.req.key === null,
+  aiWrite.args.req.protocol === "openai" && aiWrite.args.req.remote_allowed === false && aiWrite.args.req.key === null,
   JSON.stringify(aiWrite));
 
 const aiTestOffset = calls.length;
@@ -4149,7 +4189,7 @@ await page.waitForTimeout(100);
 // ---- AI-3 close-trap regression (t_0405cebb) ----
 // Done = save (a rejected remote draft keeps the panel open + mapped copy);
 // X / scrim / Escape = discard (no write_ai_settings; the draft is gone on reopen).
-aiSettingsStore = { version: 1, endpoint: "", model: "", remote_allowed: false, has_key: false };
+aiSettingsStore = { version: 1, endpoint: "", model: "", protocol: "openai", remote_allowed: false, has_key: false };
 aiKeyStored = false;
 await openSettingsFromAccount();
 await page.locator('.set-nav[data-section="ai"]').click();
@@ -4170,14 +4210,14 @@ check("AI-3 close-trap: a remote draft disables the test and says Save first",
 
 await page.locator("#settings-done").click();
 await page.waitForFunction(() =>
-  document.getElementById("ai-status").textContent === "Remote endpoints are disabled in v1; use a loopback endpoint.");
+  document.getElementById("ai-status").textContent === "Remote endpoints are disabled. Turn on 'Allow remote endpoints' and use HTTPS.");
 const afterDone = await page.evaluate(() => ({
   open: !document.getElementById("settings-scrim").classList.contains("hidden"),
   status: document.getElementById("ai-status").textContent,
 }));
 const doneWrites = calls.slice(closeTrapOffset).filter((c) => c.cmd === "write_ai_settings").length;
 check("AI-3 close-trap: Done rejects the remote draft, keeps the panel open, shows mapped copy",
-  afterDone.open && afterDone.status === "Remote endpoints are disabled in v1; use a loopback endpoint." &&
+  afterDone.open && afterDone.status === "Remote endpoints are disabled. Turn on 'Allow remote endpoints' and use HTTPS." &&
   doneWrites === 1, JSON.stringify({ afterDone, doneWrites }));
 
 await page.locator("#settings-close").click();
@@ -5259,8 +5299,9 @@ gateCheck("nol log key/prompt di jalur AI (src-tauri/src/ai.rs)",
 
 // ---- §8.1 #5–#7: mock ai_chat returns the problematic proposal outcome ----
 const aiResetSession = async (endpoint) => {
-  aiSettingsStore = { version: 1, endpoint, model: "llama3.2", remote_allowed: false, has_key: false };
+  aiSettingsStore = { version: 1, endpoint, model: "llama3.2", protocol: "openai", remote_allowed: false, has_key: false };
   aiKeyStored = false;
+  aiKeyValue = null;
   aiKeyringFail = false;
   storedSettings = { ...storedSettings, allowlist: [] };
   await page.reload();
@@ -5343,7 +5384,7 @@ aiChatHost = "prod-web";
   const after = aiCounts();
   const networkSeam = calls.slice(offset);
   check("AI-5 §8.1 #7: non-loopback + remote_allowed=false → ai:remote-endpoint-disabled (mapped copy), 0 network, nol card, nol execute",
-    frame.replyText === "Remote endpoints are disabled in v1; use a loopback endpoint." &&
+    frame.replyText === "Remote endpoints are disabled. Turn on 'Allow remote endpoints' and use HTTPS." &&
     frame.replyKids === 0 && frame.warning === null && frame.cards === 0 &&
     frame.csp === 0 && frame.pwn === "undefined" &&
     networkSeam.length === 1 && networkSeam[0].cmd === "ai_chat" &&
@@ -5355,7 +5396,7 @@ aiChatHost = "prod-web";
 const AI_CUSTODY_KEY = "sk-live-custody-AI5-7f3c9a";
 const custodyOffset = calls.length;
 await invoke("write_ai_settings", {
-  req: { endpoint: "http://127.0.0.1:11434/v1", model: "llama3.2", remote_allowed: false, key: AI_CUSTODY_KEY },
+  req: { endpoint: "http://127.0.0.1:11434/v1", model: "llama3.2", protocol: "openai", remote_allowed: false, key: AI_CUSTODY_KEY },
 });
 const custodyRead = await invoke("read_ai_settings");
 const custodyCalls = calls.slice(custodyOffset);
@@ -5374,6 +5415,113 @@ check("AI-5 §8.1 #8: no AI log line or AI path carries the key byte (grep ai.rs
   aiLogMacroLines.length === 0 && !aiRsSource.includes(AI_CUSTODY_KEY) &&
   !custodyFile.includes(AI_CUSTODY_KEY) && !AI_SETTINGS_FILE.includes(AI_CUSTODY_KEY),
   `log-macro lines=${aiLogMacroLines.length}; store=${AI_SETTINGS_FILE}`);
+
+// ---- OQ-4 Rev.2: remote toggle + dual-protocol arms ----
+const openAiSettingsSection = async () => {
+  await openSettingsFromAccount();
+  await page.locator('.set-nav[data-section="ai"]').click();
+  await page.waitForFunction(() => {
+    const section = document.getElementById("settings-ai");
+    return section && !section.classList.contains("hidden");
+  });
+};
+
+// Arm 1: toggle OFF + non-loopback endpoint → ai-settings:remote-disabled.
+aiSettingsStore = { version: 1, endpoint: "", model: "", protocol: "openai", remote_allowed: false, has_key: false };
+aiKeyStored = false;
+aiKeyValue = null;
+aiKeyringFail = false;
+await openAiSettingsSection();
+await page.locator("#ai-endpoint").fill("https://api.example.com/v1");
+await page.locator("#ai-model").fill("claude");
+await page.locator("#ai-protocol").selectOption("anthropic");
+const rev2Arm1Offset = calls.length;
+await page.locator("#settings-done").click();
+await page.waitForFunction(() =>
+  document.getElementById("ai-status").textContent === "Remote endpoints are disabled. Turn on 'Allow remote endpoints' and use HTTPS.");
+{
+  const arm = await page.evaluate(() => ({
+    open: !document.getElementById("settings-scrim").classList.contains("hidden"),
+    status: document.getElementById("ai-status").textContent,
+  }));
+  const writes = calls.slice(rev2Arm1Offset).filter((c) => c.cmd === "write_ai_settings").length;
+  check("OQ-4 Rev.2 BE: toggle OFF + non-loopback endpoint → ai-settings:remote-disabled (panel stays open)",
+    arm.open && arm.status === "Remote endpoints are disabled. Turn on 'Allow remote endpoints' and use HTTPS." &&
+    writes === 1, JSON.stringify({ arm, writes }));
+}
+await page.locator("#settings-close").click();
+await page.waitForFunction(() => document.getElementById("settings-scrim").classList.contains("hidden"));
+
+// Arm 2: toggle ON + plain-http non-loopback → ai-settings:invalid-endpoint.
+await openAiSettingsSection();
+await page.locator("#ai-endpoint").fill("http://example.com/v1");
+await page.locator("#ai-model").fill("llama3.2");
+await page.locator("#ai-protocol").selectOption("openai");
+await page.locator("#ai-remote").check();
+const rev2Arm2Offset = calls.length;
+await page.locator("#settings-done").click();
+await page.waitForFunction(() =>
+  document.getElementById("ai-status").textContent === "That endpoint URL is not valid (http/https only, no credentials).");
+{
+  const arm = await page.evaluate(() => ({
+    open: !document.getElementById("settings-scrim").classList.contains("hidden"),
+    status: document.getElementById("ai-status").textContent,
+    remoteChecked: document.getElementById("ai-remote").checked,
+  }));
+  const writes = calls.slice(rev2Arm2Offset).filter((c) => c.cmd === "write_ai_settings").length;
+  check("OQ-4 Rev.2 BE: toggle ON + http non-loopback → ai-settings:invalid-endpoint",
+    arm.open && arm.remoteChecked && arm.status === "That endpoint URL is not valid (http/https only, no credentials)." &&
+    writes === 1, JSON.stringify({ arm, writes }));
+}
+await page.locator("#settings-close").click();
+await page.waitForFunction(() => document.getElementById("settings-scrim").classList.contains("hidden"));
+
+// Arm 3: protocol selection drives path + auth headers (mock wire view).
+aiRequests.length = 0;
+aiChatMode = "ok";
+await openAiSettingsSection();
+await page.locator("#ai-endpoint").fill("http://127.0.0.1:11434/v1");
+await page.locator("#ai-model").fill("claude");
+await page.locator("#ai-protocol").selectOption("anthropic");
+await page.locator("#ai-save").click();
+await page.waitForFunction(() => document.getElementById("ai-status").textContent === "AI settings saved.");
+await page.locator("#ai-test").click();
+await page.waitForFunction(() => document.getElementById("ai-status").textContent === "Test request succeeded.");
+{
+  const req = aiRequests.at(-1);
+  check("OQ-4 Rev.2 BE: protocol=anthropic → POST /messages with x-api-key slot + anthropic-version",
+    req.protocol === "anthropic" && req.path === "http://127.0.0.1:11434/v1/messages" &&
+    req.headers["anthropic-version"] === "2023-06-01" && !("authorization" in req.headers) &&
+    !("x-api-key" in req.headers), JSON.stringify(req));
+}
+await page.locator("#ai-protocol").selectOption("openai");
+await page.locator("#ai-save").click();
+await page.waitForFunction(() => document.getElementById("ai-status").textContent === "AI settings saved.");
+await page.locator("#ai-test").click();
+await page.waitForFunction(() => document.getElementById("ai-status").textContent === "Test request succeeded.");
+{
+  const req = aiRequests.at(-1);
+  check("OQ-4 Rev.2 BE: protocol=openai → POST /chat/completions, no anthropic headers",
+    req.protocol === "openai" && req.path === "http://127.0.0.1:11434/v1/chat/completions" &&
+    !("x-api-key" in req.headers) && !("anthropic-version" in req.headers),
+    JSON.stringify(req));
+}
+
+// Arm 4: a saved key on a LOOPBACK endpoint still sends the protocol auth header.
+await page.locator("#ai-key").fill("sk-loopback-header");
+await page.locator("#ai-save").click();
+await page.waitForFunction(() => document.getElementById("ai-key-state").textContent === "Saved");
+await page.locator("#ai-test").click();
+await page.waitForFunction(() => document.getElementById("ai-status").textContent === "Test request succeeded.");
+{
+  const req = aiRequests.at(-1);
+  const storeBytes = readFileSync(AI_SETTINGS_FILE, "utf8");
+  check("OQ-4 Rev.2 BE: saved key + loopback → Authorization header sent, key never enters the store",
+    req.headers.authorization === "Bearer sk-loopback-header" && !storeBytes.includes("sk-loopback-header"),
+    JSON.stringify({ headers: req.headers, storeHasKey: storeBytes.includes("sk-loopback-header") }));
+}
+await page.locator("#settings-close").click();
+await page.waitForFunction(() => document.getElementById("settings-scrim").classList.contains("hidden"));
 
 console.log(results.join("\n"));
 const fails = results.filter((r) => r.startsWith("FAIL")).length;

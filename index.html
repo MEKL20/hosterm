@@ -297,11 +297,11 @@
 
             <section id="settings-ai" class="hidden" aria-labelledby="ai-title">
               <h3 class="set-h" id="ai-title">AI Assistant</h3>
-              <p class="set-sub">Connect a local AI endpoint, then review the standing command approvals stored on this device.</p>
+              <p class="set-sub">Connect a local or remote AI endpoint, then review the standing command approvals stored on this device.</p>
 
               <div class="set-block">
                 <div class="set-label">AI backend</div>
-                <p class="set-note ai-note">Loopback only in v1. Endpoint and model have no defaults — enter both to enable AI requests.</p>
+                <p class="set-note ai-note">Loopback or remote HTTPS. Endpoint and model have no defaults — enter both to enable AI requests. Prompts leave this device when you use a remote endpoint.</p>
 
                 <div class="ai-field">
                   <label class="ai-k" for="ai-endpoint">Endpoint URL</label>
@@ -310,6 +310,20 @@
                 <div class="ai-field">
                   <label class="ai-k" for="ai-model">Model</label>
                   <input id="ai-model" type="text" placeholder="llama3.2" autocomplete="off" spellcheck="false" />
+                </div>
+                <div class="ai-field">
+                  <label class="ai-k" for="ai-protocol">Protocol</label>
+                  <select id="ai-protocol">
+                    <option value="openai" selected>OpenAI-compatible</option>
+                    <option value="anthropic">Anthropic-compatible</option>
+                  </select>
+                </div>
+                <div class="ai-field">
+                  <label class="ai-check-row" for="ai-remote">
+                    <input id="ai-remote" type="checkbox" />
+                    <span>Allow remote endpoints</span>
+                  </label>
+                  <p class="set-note">Required for non-loopback endpoints; remote endpoints must use HTTPS.</p>
                 </div>
                 <div class="ai-field">
                   <label class="ai-k" for="ai-key">API key</label>

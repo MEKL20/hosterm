@@ -29,6 +29,22 @@ pub(crate) const AI_DESC_MAX_BYTES: usize = 1024;
 pub(crate) const AI_ENDPOINT_MAX_BYTES: usize = 2048;
 pub(crate) const AI_MODEL_MAX_BYTES: usize = 256;
 
+// Rev.2 protocol identifiers (wire values, §16.3).
+pub(crate) const AI_PROTOCOL_OPENAI: &str = "openai";
+pub(crate) const AI_PROTOCOL_ANTHROPIC: &str = "anthropic";
+
+fn default_ai_protocol() -> String {
+    AI_PROTOCOL_OPENAI.to_string()
+}
+
+/// Pure core: only `openai`/`anthropic` are accepted; anything else rejects.
+fn validate_protocol(protocol: &str) -> Result<(), &'static str> {
+    match protocol.trim() {
+        AI_PROTOCOL_OPENAI | AI_PROTOCOL_ANTHROPIC => Ok(()),
+        _ => Err(AI_ERR_BAD_PROTOCOL),
+    }
+}
+
 /// Frozen reply-truncation marker (§16.4 #6 / LQ-16.3). The byte count is
 /// part of the frozen text; do not template it.
 const REPLY_TRUNCATED_MARKER: &str = "\n\n[truncated: exceeded 16384 bytes]";
@@ -55,6 +71,8 @@ pub(crate) struct AiSettings {
     pub(crate) version: u32,
     pub(crate) endpoint: String,
     pub(crate) model: String,
+    /// Rev.2 protocol selection (`openai`|`anthropic`).
+    pub(crate) protocol: String,
     pub(crate) remote_allowed: bool,
     pub(crate) has_key: bool,
 }
@@ -63,6 +81,8 @@ pub(crate) struct AiSettings {
 #[serde(rename_all = "snake_case")]
 pub(crate) struct WriteAiSettingsReq {
     pub(crate) endpoint: String,
+    #[serde(default = "default_ai_protocol")]
+    pub(crate) protocol: String,
     pub(crate) model: String,
     pub(crate) remote_allowed: bool,
     pub(crate) key: Option<String>,
@@ -248,9 +268,10 @@ pub(crate) fn truncate_reply(reply: &str) -> String {
 
 // ---------- frozen reason codes (§16.8, exact strings) ----------
 
-// `ai_chat` rejections (12).
+// `ai_chat` rejections (13).
 const AI_ERR_NOT_CONFIGURED: &str = "ai:not-configured";
 const AI_ERR_EMPTY_PROMPT: &str = "ai:empty-prompt";
+const AI_ERR_BAD_PROTOCOL: &str = "ai:bad-protocol";
 const AI_ERR_PROMPT_TOO_LARGE: &str = "ai:prompt-too-large";
 const AI_ERR_HISTORY_TOO_LARGE: &str = "ai:history-too-large";
 const AI_ERR_BAD_TIMEOUT: &str = "ai:bad-timeout";
@@ -268,8 +289,9 @@ const AI_WARN_UNKNOWN_HOST: &str = "ai:unknown-host";
 const AI_WARN_COMMAND_TOO_LARGE: &str = "ai:command-too-large";
 const AI_WARN_INVALID_PROPOSAL: &str = "ai:invalid-proposal";
 
-// `write_ai_settings` rejections (5).
+// `write_ai_settings` rejections (6).
 const AIS_ERR_INVALID_ENDPOINT: &str = "ai-settings:invalid-endpoint";
+const AIS_ERR_INVALID_PROTOCOL: &str = "ai-settings:invalid-protocol";
 const AIS_ERR_REMOTE_DISABLED: &str = "ai-settings:remote-disabled";
 const AIS_ERR_INVALID_MODEL: &str = "ai-settings:invalid-model";
 const AIS_ERR_KEYRING_UNAVAILABLE: &str = "ai-settings:keyring-unavailable";
@@ -291,6 +313,9 @@ struct AiSettingsFile {
     endpoint: String,
     #[serde(default)]
     model: String,
+    /// Rev.2 protocol selection; default `openai`, old files keep working.
+    #[serde(default = "default_ai_protocol")]
+    protocol: String,
     #[serde(default)]
     remote_allowed: bool,
 }
@@ -301,6 +326,7 @@ impl Default for AiSettingsFile {
             version: AI_SETTINGS_VERSION,
             endpoint: String::new(),
             model: String::new(),
+            protocol: default_ai_protocol(),
             remote_allowed: false,
         }
     }
@@ -406,6 +432,7 @@ pub(crate) fn read_ai_settings_inner(
         version: AI_SETTINGS_VERSION,
         endpoint: file.endpoint,
         model: file.model,
+        protocol: file.protocol,
         remote_allowed: file.remote_allowed,
         has_key: keyring.has_key().unwrap_or(false),
     }
@@ -430,6 +457,9 @@ pub(crate) fn write_ai_settings_inner(
         Err("ai:remote-endpoint-disabled") => return Err(AIS_ERR_REMOTE_DISABLED.into()),
         Err(_) => return Err(AIS_ERR_INVALID_ENDPOINT.into()),
     }
+    if validate_protocol(&req.protocol).is_err() {
+        return Err(AIS_ERR_INVALID_PROTOCOL.into());
+    }
     let model = req.model.trim().to_string();
     if model.is_empty() || req.model.len() > AI_MODEL_MAX_BYTES {
         return Err(AIS_ERR_INVALID_MODEL.into());
@@ -446,6 +476,7 @@ pub(crate) fn write_ai_settings_inner(
     let file = AiSettingsFile {
         version: AI_SETTINGS_VERSION,
         endpoint: req.endpoint.trim().to_string(),
+        protocol: req.protocol.trim().to_string(),
         model,
         remote_allowed: req.remote_allowed,
     };
@@ -487,10 +518,59 @@ fn role_wire(role: &AiRole) -> &'static str {
     }
 }
 
-/// Step 4: OpenAI-compatible request body — system prompt + history + prompt.
+/// Rev.2 pure core: POST path per protocol (§16.3).
+fn protocol_path(protocol: &str, endpoint: &str) -> String {
+    let suffix = if protocol == AI_PROTOCOL_ANTHROPIC {
+        "/messages"
+    } else {
+        "/chat/completions"
+    };
+    format!("{}{}", endpoint.trim().trim_end_matches('/'), suffix)
+}
+
+/// Rev.2 pure core: auth header pairs per protocol. The key itself is never
+/// logged or stored; the caller applies these to the request builder.
+fn auth_header_pairs(protocol: &str, key: &str) -> Vec<(&'static str, String)> {
+    if protocol == AI_PROTOCOL_ANTHROPIC {
+        vec![
+            ("x-api-key", key.to_string()),
+            ("anthropic-version", "2023-06-01".to_string()),
+        ]
+    } else {
+        vec![("authorization", format!("Bearer {}", key))]
+    }
+}
+
+/// Step 4: request body per protocol (Rev.2 §5.3). OpenAI-compatible:
+/// `{model, messages:[system,...history,user], max_tokens}`. Anthropic:
+/// `{model, system, messages:[{role,content:[{type:"text",text}]}], max_tokens}`.
 /// Never includes ~/.ssh/config contents, the key, sidecar bytes, or terminal
 /// output (§16.5 step 4 / §5.4).
-fn build_chat_body(model: &str, req: &AiChatReq) -> serde_json::Value {
+fn build_chat_body(protocol: &str, model: &str, req: &AiChatReq) -> serde_json::Value {
+    // Cap derived from the frozen reply cap; no new constant (§2.4).
+    let max_tokens = AI_REPLY_MAX_BYTES as u32;
+    if protocol == AI_PROTOCOL_ANTHROPIC {
+        let mut messages = Vec::with_capacity(req.history.len() + 1);
+        for m in &req.history {
+            if m.content.is_empty() {
+                continue;
+            }
+            messages.push(serde_json::json!({
+                "role": role_wire(&m.role),
+                "content": [{ "type": "text", "text": m.content }],
+            }));
+        }
+        messages.push(serde_json::json!({
+            "role": "user",
+            "content": [{ "type": "text", "text": req.prompt.trim() }],
+        }));
+        return serde_json::json!({
+            "model": model,
+            "system": AI_SYSTEM_PROMPT,
+            "messages": messages,
+            "max_tokens": max_tokens,
+        });
+    }
     let mut messages = Vec::with_capacity(req.history.len() + 2);
     messages.push(serde_json::json!({
         "role": "system",
@@ -506,18 +586,49 @@ fn build_chat_body(model: &str, req: &AiChatReq) -> serde_json::Value {
         "role": "user",
         "content": req.prompt.trim().to_string(),
     }));
-    serde_json::json!({ "model": model, "messages": messages })
+    serde_json::Value::Object(serde_json::Map::from_iter([
+        ("model".into(), serde_json::json!(model)),
+        ("messages".into(), serde_json::Value::Array(messages)),
+        ("max_tokens".into(), serde_json::json!(max_tokens)),
+    ]))
 }
 
-/// Step 7: extract `choices[0].message.content`. `None` ⇒ `ai:model-error`.
-fn extract_message_content(body: &str) -> Option<String> {
+/// Step 7: extract the reply text per protocol. OpenAI
+/// `choices[0].message.content` (string, or text blocks joined); Anthropic
+/// `content[*].text` joined. `None` ⇒ `ai:model-error`.
+fn extract_reply_text(protocol: &str, body: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(body).ok()?;
-    v.get("choices")?
-        .get(0)?
-        .get("message")?
-        .get("content")?
-        .as_str()
-        .map(|s| s.to_string())
+    if protocol == AI_PROTOCOL_ANTHROPIC {
+        let blocks = v.get("content")?.as_array()?;
+        let parts: Vec<&str> = blocks
+            .iter()
+            .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
+            .collect();
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.concat())
+        }
+    } else {
+        let content = v
+            .get("choices")?
+            .get(0)?
+            .get("message")?
+            .get("content")?;
+        if let Some(s) = content.as_str() {
+            return Some(s.to_string());
+        }
+        let blocks = content.as_array()?;
+        let parts: Vec<&str> = blocks
+            .iter()
+            .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
+            .collect();
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.concat())
+        }
+    }
 }
 
 /// Model reply JSON: `{reply, proposal{host,command,description}}`. A missing
@@ -574,7 +685,8 @@ fn ai_chat_inner(
     if settings.endpoint.trim().is_empty() || settings.model.trim().is_empty() {
         return Err(AI_ERR_NOT_CONFIGURED.into());
     }
-    // 2. Validate prompt/history/timeout (frozen cores).
+    // 2. Validate protocol/prompt/history/timeout (frozen cores).
+    validate_protocol(&settings.protocol)?;
     validate_prompt(&req.prompt)?;
     validate_history(&req.history)?;
     validate_timeout(req.timeout_secs)?;
@@ -586,12 +698,9 @@ fn ai_chat_inner(
     } else {
         AiBackend::Loopback
     };
-    // 4. Build POST <endpoint>/chat/completions.
-    let url = format!(
-        "{}/chat/completions",
-        settings.endpoint.trim().trim_end_matches('/')
-    );
-    let body = build_chat_body(&settings.model, &req);
+    // 4. Build POST <endpoint>/chat/completions or /messages per protocol.
+    let url = protocol_path(&settings.protocol, &settings.endpoint);
+    let body = build_chat_body(&settings.protocol, &settings.model, &req);
     // 6 (client): redirect policy none; timeout from the request.
     let client = reqwest::blocking::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -599,16 +708,18 @@ fn ai_chat_inner(
         .build()
         .map_err(|_| AI_ERR_ENDPOINT_UNREACHABLE.to_string())?;
     let mut builder = client.post(url.as_str()).json(&body);
-    // 5. Authorization only when the endpoint is remote AND a key exists.
-    //    A keyring failure on a remote call is fail-closed (INV-37).
-    if remote {
-        match keyring.read_key() {
-            Ok(Some(key)) => {
-                builder = builder.bearer_auth(key);
+    // 5. Authorization for loopback and remote when a key exists. A keyring
+    //    failure on a remote call is fail-closed (INV-37); on loopback it is
+    //    non-fatal (the endpoint answers 401 → ai:unauthorized).
+    match keyring.read_key() {
+        Ok(Some(key)) => {
+            for (name, value) in auth_header_pairs(&settings.protocol, &key) {
+                builder = builder.header(name, value);
             }
-            Ok(None) => {}
-            Err(_) => return Err(AI_ERR_KEYRING_UNAVAILABLE.into()),
         }
+        Ok(None) => {}
+        Err(_) if remote => return Err(AI_ERR_KEYRING_UNAVAILABLE.into()),
+        Err(_) => {}
     }
     // 6. Send; map transport errors to frozen codes (never the URL/key).
     let resp = builder.send().map_err(|e| {
@@ -626,8 +737,9 @@ fn ai_chat_inner(
         return Err(AI_ERR_MODEL_ERROR.into());
     }
     let text = resp.text().map_err(|_| AI_ERR_MODEL_ERROR.to_string())?;
-    // 7. Parse choices[0].message.content.
-    let content = extract_message_content(&text).ok_or_else(|| AI_ERR_MODEL_ERROR.to_string())?;
+    // 7. Parse the reply text per protocol.
+    let content = extract_reply_text(&settings.protocol, &text)
+        .ok_or_else(|| AI_ERR_MODEL_ERROR.to_string())?;
     // 8 + 9. Validate proposal, return. Nol execute.
     Ok(build_chat_resp(&content, backend, known_hosts))
 }
@@ -951,6 +1063,7 @@ mod tests {
             version: 1,
             endpoint: "http://127.0.0.1:11434/v1".to_string(),
             model: "llama3.2".to_string(),
+            protocol: AI_PROTOCOL_OPENAI.to_string(),
             remote_allowed: false,
             has_key: true,
         };
@@ -1093,6 +1206,7 @@ mod tests {
         write_ai_settings_inner(
             WriteAiSettingsReq {
                 endpoint: "http://127.0.0.1:11434/v1".into(),
+                protocol: "openai".into(),
                 model: "llama3.2".into(),
                 remote_allowed: false,
                 key: Some("sk-live-secret".into()),
@@ -1218,7 +1332,7 @@ mod tests {
     #[test]
     fn ai_chat_proposal_unsafe_host_warns() {
         let body = r#"{"choices":[{"message":{"content":"{\"reply\":\"ok\",\"proposal\":{\"host\":\"-evil\",\"command\":\"ls\",\"description\":\"d\"}}"}}]}"#;
-        let content = extract_message_content(body).expect("content");
+        let content = extract_reply_text(AI_PROTOCOL_OPENAI, body).expect("content");
         let resp = build_chat_resp(&content, AiBackend::Loopback, &["web-01".to_string()]);
         assert_eq!(resp.reply, "ok");
         assert!(resp.proposal.is_none());
@@ -1229,7 +1343,7 @@ mod tests {
     #[test]
     fn ai_chat_proposal_unknown_host_warns() {
         let body = r#"{"choices":[{"message":{"content":"{\"reply\":\"r\",\"proposal\":{\"host\":\"prod\",\"command\":\"ls\",\"description\":\"d\"}}"}}]}"#;
-        let content = extract_message_content(body).unwrap();
+        let content = extract_reply_text(AI_PROTOCOL_OPENAI, body).unwrap();
         let resp = build_chat_resp(&content, AiBackend::Loopback, &["web-01".to_string()]);
         assert_eq!(resp.warning.as_deref(), Some(AI_WARN_UNKNOWN_HOST));
         assert!(resp.proposal.is_none());
@@ -1238,7 +1352,7 @@ mod tests {
     #[test]
     fn ai_chat_proposal_valid_fixture_returns_proposal() {
         let body = r#"{"choices":[{"message":{"content":"{\"reply\":\"r\",\"proposal\":{\"host\":\"web-01\",\"command\":\"ls -la\",\"description\":\"list\"}}"}}]}"#;
-        let content = extract_message_content(body).unwrap();
+        let content = extract_reply_text(AI_PROTOCOL_OPENAI, body).unwrap();
         let resp = build_chat_resp(&content, AiBackend::Loopback, &["web-01".to_string()]);
         assert!(resp.warning.is_none());
         let p = resp.proposal.expect("proposal");
@@ -1250,11 +1364,169 @@ mod tests {
     #[test]
     fn ai_chat_non_json_content_becomes_raw_reply() {
         let body = r#"{"choices":[{"message":{"content":"plain text answer"}}]}"#;
-        let content = extract_message_content(body).unwrap();
+        let content = extract_reply_text(AI_PROTOCOL_OPENAI, body).unwrap();
         let resp = build_chat_resp(&content, AiBackend::Loopback, &[]);
         assert_eq!(resp.reply, "plain text answer");
         assert!(resp.proposal.is_none());
         assert!(resp.warning.is_none());
+    }
+
+    #[test]
+    fn ai_protocol_default_and_validation() {
+        assert_eq!(default_ai_protocol(), "openai");
+        assert_eq!(AI_PROTOCOL_OPENAI, "openai");
+        assert_eq!(AI_PROTOCOL_ANTHROPIC, "anthropic");
+        assert!(validate_protocol("openai").is_ok());
+        assert!(validate_protocol("anthropic").is_ok());
+        assert_eq!(validate_protocol("gemini"), Err(AI_ERR_BAD_PROTOCOL));
+        assert_eq!(validate_protocol(""), Err(AI_ERR_BAD_PROTOCOL));
+    }
+
+    #[test]
+    fn ai_protocol_paths_bodies_headers() {
+        assert_eq!(
+            protocol_path(AI_PROTOCOL_OPENAI, "http://127.0.0.1:11434/v1"),
+            "http://127.0.0.1:11434/v1/chat/completions"
+        );
+        assert_eq!(
+            protocol_path(AI_PROTOCOL_ANTHROPIC, "https://api.example.com/v1/"),
+            "https://api.example.com/v1/messages"
+        );
+
+        let mut req = chat_req("hi", 30);
+        req.history = vec![msg(AiRole::User, "u"), msg(AiRole::Assistant, "a")];
+        let openai = build_chat_body(AI_PROTOCOL_OPENAI, "llama3.2", &req);
+        assert_eq!(openai["model"], "llama3.2");
+        assert_eq!(openai["max_tokens"], AI_REPLY_MAX_BYTES as u32);
+        let msgs = openai["messages"].as_array().unwrap();
+        assert_eq!(msgs[0]["role"], "system");
+        assert_eq!(msgs[0]["content"], AI_SYSTEM_PROMPT);
+        assert_eq!(msgs[1]["role"], "user");
+        assert_eq!(msgs[1]["content"], "u");
+        assert_eq!(msgs.last().unwrap()["content"], "hi");
+
+        let anthropic = build_chat_body(AI_PROTOCOL_ANTHROPIC, "claude", &req);
+        assert_eq!(anthropic["model"], "claude");
+        assert_eq!(anthropic["system"], AI_SYSTEM_PROMPT);
+        assert_eq!(anthropic["max_tokens"], AI_REPLY_MAX_BYTES as u32);
+        assert!(anthropic.get("messages").unwrap().is_array());
+        assert!(anthropic.get("choices").is_none());
+
+        assert_eq!(
+            auth_header_pairs(AI_PROTOCOL_OPENAI, "sk-x"),
+            vec![("authorization", "Bearer sk-x".to_string())]
+        );
+        assert_eq!(
+            auth_header_pairs(AI_PROTOCOL_ANTHROPIC, "sk-x"),
+            vec![
+                ("x-api-key", "sk-x".to_string()),
+                ("anthropic-version", "2023-06-01".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn ai_extract_reply_text_per_protocol() {
+        let openai = r#"{"choices":[{"message":{"content":"hello"}}]}"#;
+        assert_eq!(
+            extract_reply_text(AI_PROTOCOL_OPENAI, openai).as_deref(),
+            Some("hello")
+        );
+        let openai_blocks = r#"{"choices":[{"message":{"content":[{"type":"text","text":"ab"},{"type":"text","text":"cd"}]}}]}"#;
+        assert_eq!(
+            extract_reply_text(AI_PROTOCOL_OPENAI, openai_blocks).as_deref(),
+            Some("abcd")
+        );
+        let anthropic = r#"{"content":[{"type":"text","text":"hello"}]}"#;
+        assert_eq!(
+            extract_reply_text(AI_PROTOCOL_ANTHROPIC, anthropic).as_deref(),
+            Some("hello")
+        );
+        let anthropic_multi = r#"{"content":[{"type":"text","text":"ab"},{"type":"tool_use","id":"x"},{"type":"text","text":"cd"}]}"#;
+        assert_eq!(
+            extract_reply_text(AI_PROTOCOL_ANTHROPIC, anthropic_multi).as_deref(),
+            Some("abcd")
+        );
+        assert_eq!(extract_reply_text(AI_PROTOCOL_ANTHROPIC, "{}"), None);
+    }
+
+    #[test]
+    fn ai_settings_roundtrip_protocol_and_invalid() {
+        let dir = temp_store("protocol");
+        let path = dir.join("ai-settings.json");
+        let kr = FakeKeyring::new();
+
+        // Old file without protocol still reads as openai.
+        write_store_raw(&path, "http://127.0.0.1:11434/v1", "llama3.2", false);
+        assert_eq!(
+            read_ai_settings_inner(&path, &kr).protocol,
+            AI_PROTOCOL_OPENAI
+        );
+
+        write_ai_settings_inner(
+            WriteAiSettingsReq {
+                endpoint: "https://api.example.com/v1".into(),
+                protocol: AI_PROTOCOL_ANTHROPIC.into(),
+                model: "claude".into(),
+                remote_allowed: true,
+                key: None,
+            },
+            &path,
+            &kr,
+        )
+        .unwrap();
+        let bytes = std::fs::read_to_string(&path).unwrap();
+        assert!(bytes.contains("\"protocol\": \"anthropic\""));
+        assert_eq!(
+            read_ai_settings_inner(&path, &kr).protocol,
+            AI_PROTOCOL_ANTHROPIC
+        );
+
+        let err = write_ai_settings_inner(
+            WriteAiSettingsReq {
+                endpoint: "http://127.0.0.1:11434/v1".into(),
+                protocol: "gemini".into(),
+                model: "m".into(),
+                remote_allowed: false,
+                key: None,
+            },
+            &path,
+            &kr,
+        )
+        .unwrap_err();
+        assert_eq!(err, AIS_ERR_INVALID_PROTOCOL);
+        assert_eq!(
+            read_ai_settings_inner(&path, &kr).protocol,
+            AI_PROTOCOL_ANTHROPIC
+        );
+    }
+
+    #[test]
+    fn ai_chat_bad_protocol_rejects_before_network() {
+        let dir = temp_store("badproto");
+        let path = dir.join("ai-settings.json");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"endpoint":"http://127.0.0.1:11434/v1","model":"llama3.2","protocol":"gemini","remote_allowed":false}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            ai_chat_inner(chat_req("hi", 30), &path, &FakeKeyring::new(), &[]).unwrap_err(),
+            AI_ERR_BAD_PROTOCOL
+        );
+    }
+
+    #[test]
+    fn ai_chat_loopback_keyring_error_is_not_fatal() {
+        let dir = temp_store("loopkey");
+        let path = dir.join("ai-settings.json");
+        // Port 1 refuses immediately; the point is that a loopback keyring
+        // error degrades to a normal send instead of fail-closed.
+        write_store_raw(&path, "http://127.0.0.1:1/v1", "llama3.2", false);
+        assert_eq!(
+            ai_chat_inner(chat_req("hi", 30), &path, &FakeKeyring::failing(), &[]).unwrap_err(),
+            AI_ERR_ENDPOINT_UNREACHABLE
+        );
     }
 
     #[test]
@@ -1282,6 +1554,7 @@ mod tests {
         write_ai_settings_inner(
             WriteAiSettingsReq {
                 endpoint: "http://127.0.0.1:11434/v1".into(),
+                protocol: "openai".into(),
                 model: "m".into(),
                 remote_allowed: false,
                 key: None,
@@ -1296,6 +1569,7 @@ mod tests {
         write_ai_settings_inner(
             WriteAiSettingsReq {
                 endpoint: "http://127.0.0.1:11434/v1".into(),
+                protocol: "openai".into(),
                 model: "m".into(),
                 remote_allowed: false,
                 key: Some(String::new()),
@@ -1310,6 +1584,7 @@ mod tests {
         write_ai_settings_inner(
             WriteAiSettingsReq {
                 endpoint: "http://127.0.0.1:11434/v1".into(),
+                protocol: "openai".into(),
                 model: "m".into(),
                 remote_allowed: false,
                 key: Some("new-key".into()),
@@ -1326,6 +1601,7 @@ mod tests {
         let err = write_ai_settings_inner(
             WriteAiSettingsReq {
                 endpoint: "http://127.0.0.1:11434/v1".into(),
+                protocol: "openai".into(),
                 model: "m".into(),
                 remote_allowed: false,
                 key: Some("k".into()),
@@ -1341,6 +1617,7 @@ mod tests {
         let err = write_ai_settings_inner(
             WriteAiSettingsReq {
                 endpoint: "not a url".into(),
+                protocol: "openai".into(),
                 model: "m".into(),
                 remote_allowed: false,
                 key: None,
@@ -1355,6 +1632,7 @@ mod tests {
         let err = write_ai_settings_inner(
             WriteAiSettingsReq {
                 endpoint: "http://example.com".into(),
+                protocol: "openai".into(),
                 model: "m".into(),
                 remote_allowed: false,
                 key: None,
@@ -1368,6 +1646,7 @@ mod tests {
         let err = write_ai_settings_inner(
             WriteAiSettingsReq {
                 endpoint: "http://127.0.0.1:11434/v1".into(),
+                protocol: "openai".into(),
                 model: "  ".into(),
                 remote_allowed: false,
                 key: None,
@@ -1383,6 +1662,7 @@ mod tests {
         let err = write_ai_settings_inner(
             WriteAiSettingsReq {
                 endpoint: "http://127.0.0.1:11434/v1".into(),
+                protocol: "openai".into(),
                 model: "m".repeat(AI_MODEL_MAX_BYTES + 1),
                 remote_allowed: false,
                 key: None,
@@ -1396,9 +1676,10 @@ mod tests {
 
     #[test]
     fn ai_error_string_table_exact() {
-        // 12 ai_chat rejections.
+        // 13 ai_chat rejections.
         assert_eq!(AI_ERR_NOT_CONFIGURED, "ai:not-configured");
         assert_eq!(AI_ERR_EMPTY_PROMPT, "ai:empty-prompt");
+        assert_eq!(AI_ERR_BAD_PROTOCOL, "ai:bad-protocol");
         assert_eq!(AI_ERR_PROMPT_TOO_LARGE, "ai:prompt-too-large");
         assert_eq!(AI_ERR_HISTORY_TOO_LARGE, "ai:history-too-large");
         assert_eq!(AI_ERR_BAD_TIMEOUT, "ai:bad-timeout");
@@ -1414,8 +1695,9 @@ mod tests {
         assert_eq!(AI_WARN_UNKNOWN_HOST, "ai:unknown-host");
         assert_eq!(AI_WARN_COMMAND_TOO_LARGE, "ai:command-too-large");
         assert_eq!(AI_WARN_INVALID_PROPOSAL, "ai:invalid-proposal");
-        // 5 write rejections.
+        // 6 write rejections.
         assert_eq!(AIS_ERR_INVALID_ENDPOINT, "ai-settings:invalid-endpoint");
+        assert_eq!(AIS_ERR_INVALID_PROTOCOL, "ai-settings:invalid-protocol");
         assert_eq!(AIS_ERR_REMOTE_DISABLED, "ai-settings:remote-disabled");
         assert_eq!(AIS_ERR_INVALID_MODEL, "ai-settings:invalid-model");
         assert_eq!(
